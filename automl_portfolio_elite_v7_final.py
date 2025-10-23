@@ -17,6 +17,9 @@ Versão: 7.0.0 - Sistema AutoML Elite Final
 =============================================================================
 """
 
+import streamlit as st
+import gspread
+from gspread_dataframe import get_as_dataframe
 import warnings
 import numpy as np
 import pandas as pd
@@ -162,14 +165,6 @@ ATIVOS_IBOVESPA = [
     'TIMS3.SA', 'TOTS3.SA', 'UGPA3.SA', 'USIM5.SA', 'VALE3.SA', 'VAMO3.SA',
     'VBBR3.SA', 'VIVA3.SA', 'WEGE3.SA', 'YDUQ3.SA'
 ]
-
-# Caminhos dos arquivos Parquet (gerados pelo coleta_diaria.py)
-DATA_PATH = './dados_financeiros/'
-ARQUIVO_HISTORICO = DATA_PATH + 'dados_historicos.parquet'
-ARQUIVO_FUNDAMENTALISTA = DATA_PATH + 'dados_fundamentalistas.parquet'
-ARQUIVO_METRICAS = DATA_PATH + 'metricas_performance.parquet'
-ARQUIVO_MACRO = DATA_PATH + 'dados_macro.parquet'
-ARQUIVO_METADATA = DATA_PATH + 'metadata.parquet'
 
 # =============================================================================
 # MAPEAMENTO DE ATIVOS POR SETOR
@@ -715,11 +710,54 @@ class EngenheiroFeatures:
             return (max_val - serie) / (max_val - min_val)
 
 # =============================================================================
-# CLASSE: COLETOR DE DADOS
+# FUNÇÃO DE LEITURA DO GOOGLE SHEETS (DEVE ESTAR ANTES DA CLASSE COLETORDADOS)
+# =============================================================================
+
+@st.cache_data(ttl="6h")
+def ler_dados_sheets(worksheet_name):
+    """Autentica no Google Sheets usando Streamlit Secrets e lê a aba como DataFrame."""
+    try:
+        # 1. Autenticação usando Streamlit Secrets
+        # Assume que 'gcp_service_account' e 'google_sheets' estão em st.secrets
+        creds = st.secrets["gcp_service_account"]
+        client = gspread.service_account_from_dict(creds)
+        
+        # 2. Abre a Planilha Mestra pelo ID do secrets
+        planilha_id = st.secrets["google_sheets"]["planilha_id"]
+        spreadsheet = client.open_by_key(planilha_id)
+        
+        # 3. Abre a aba correta
+        worksheet = spreadsheet.worksheet(worksheet_name)
+        
+        # 4. Lê como DataFrame
+        # header=0 garante que a primeira linha seja o cabeçalho
+        df = get_as_dataframe(worksheet, header=0, parse_dates=True)
+        
+        # 5. Trata o Índice (A coluna 'index' é o resultado do reset_index do script ETL)
+        if df.columns[0] == 'index':
+             df = df.set_index('index')
+             
+        # Garante que o índice (data) seja datetime, se aplicável (evita erro de reindexação)
+        if worksheet_name not in ['Fundamentalistas', 'Metricas']:
+            df.index = pd.to_datetime(df.index)
+            
+        # 6. Limpa NaNs e Infinitos
+        return df.replace([np.inf, -np.inf], np.nan).dropna(how='all', axis=0)
+
+    except Exception as e:
+        # Exibe um erro amigável no Streamlit se a leitura falhar
+        st.error(f"❌ ERRO: Falha Crítica ao ler '{worksheet_name}' do Google Sheets.")
+        st.info("Verifique se o Secret `secrets.toml` e o ID da planilha estão corretos.")
+        st.exception(e)
+        st.stop() # Interrompe a execução para evitar erros em cascata
+        return pd.DataFrame()
+
+# =============================================================================
+# CLASSE: COLETOR DE DADOS (ADAPTADA)
 # =============================================================================
 
 class ColetorDados:
-    """Coleta e processa dados de mercado com profundidade máxima"""
+    """Coleta e processa dados de mercado com profundidade máxima, lendo do Google Sheets."""
     
     def __init__(self, periodo=PERIODO_DADOS):
         self.periodo = periodo
@@ -729,268 +767,133 @@ class ColetorDados:
         self.dados_macro = {}
         self.metricas_performance = pd.DataFrame() # Initialize metric dataframe
     
+    # Este método de coleta de macrodados é desnecessário; a coleta principal é unificada no novo coletar_e_processar_dados
+    # Mantenho a função vazia apenas para não quebrar a lógica do pipeline existente que pode chamá-la.
     def coletar_dados_macroeconomicos(self):
-        """Carrega dados macroeconômicos do arquivo Parquet"""
-        print("\n📊 Carregando dados macroeconômicos do cache...")
-        
-        try:
-            if os.path.exists(ARQUIVO_MACRO):
-                df_macro = pd.read_parquet(ARQUIVO_MACRO)
-                
-                # Converter DataFrame para dicionário de Series
-                for coluna in df_macro.columns:
-                    self.dados_macro[coluna] = df_macro[coluna]
-                    print(f"  ✓ {coluna}: {len(df_macro[coluna])} dias")
-                
-                print(f"✓ Dados macroeconômicos carregados: {len(self.dados_macro)} indicadores")
-            else:
-                print(f"⚠️ Arquivo {ARQUIVO_MACRO} não encontrado. Execute coleta_diaria.py primeiro.")
-                self.dados_macro = {}
-                
-        except Exception as e:
-            print(f"❌ Erro ao carregar dados macro: {str(e)}")
-            self.dados_macro = {}
+        """Carrega dados macroeconômicos do Google Sheets."""
+        # A nova lógica de carregamento está em coletar_e_processar_dados
+        pass 
     
     def adicionar_correlacoes_macro(self, df, simbolo):
-        """Adiciona correlações com indicadores macroeconômicos"""
+        """Adiciona correlações com indicadores macroeconômicos (Lógica mantida)."""
         if not self.dados_macro or 'returns' not in df.columns:
             return df
         
         try:
-            # Ensure that 'returns' column is available and not all NaN
             if df['returns'].isnull().all():
-                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
                 return df
 
             for nome, serie_macro in self.dados_macro.items():
                 if serie_macro.empty or serie_macro.isnull().all():
                     continue
                 
-                # Alinha as datas
-                # Use reindex to align based on df's index, then align serie_macro to it
+                # ... (Lógica de correlação mantida)
                 df_returns_aligned = df['returns'].reindex(df.index)
                 
-                # Ensure both series have data after alignment and before calculating rolling corr
                 if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
                     continue
 
-                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
-                # Using inner join implicitly via reindex and subsequent operations
                 combined_df = pd.DataFrame({
                     'asset_returns': df_returns_aligned,
-                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
-                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+                    'macro_returns': serie_macro.reindex(df.index) 
+                }).dropna()
 
                 if len(combined_df) > 60:
-                    # Correlação rolling
                     corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
-                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) 
                 else:
-                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+                    df[f'corr_{nome.lower()}'] = np.nan 
         except Exception as e:
-            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") 
         
         return df
     
     def coletar_e_processar_dados(self, simbolos):
         """
-        Carrega dados processados dos arquivos Parquet e filtra pelos símbolos selecionados
-        
-        IMPORTANTE: Este método agora apenas LÊ dados pré-processados.
-        Execute coleta_diaria.py para atualizar os dados.
+        Carrega dados processados do Google Sheets (ETL) e filtra pelos símbolos selecionados.
         """
         self.ativos_sucesso = []
         
-        print(f"\n{'='*60}")
-        print(f"CARREGANDO DADOS DO CACHE PARQUET")
-        print(f"Ativos solicitados: {len(simbolos)}")
-        print(f"{'='*60}\n")
+        st.markdown(f"\n{'='*60}")
+        st.markdown(f"CARREGANDO DADOS DO GOOGLE SHEETS")
+        st.markdown(f"Ativos solicitados: {len(simbolos)}")
+        st.markdown(f"{'='*60}\n")
         
-        # Verificar se arquivos existem
-        arquivos_necessarios = [
-            ARQUIVO_HISTORICO,
-            ARQUIVO_FUNDAMENTALISTA,
-            ARQUIVO_METRICAS,
-            ARQUIVO_MACRO
+        # 1. Carregar dados macroeconômicos
+        st.write("📥 Carregando dados macroeconômicos...")
+        df_macro = ler_dados_sheets('Macro')
+        
+        if df_macro.empty:
+            st.error("❌ ERRO: Dados Macro vazios. Execute o ETL no GitHub Actions primeiro.")
+            return False
+            
+        # Converter DataFrame para dicionário de Series
+        for coluna in df_macro.columns:
+            self.dados_macro[coluna] = df_macro[coluna]
+        
+        st.success(f"  ✓ {len(self.dados_macro)} indicadores macro carregados.")
+        
+        # 2. Carregar dados históricos
+        st.write("📥 Carregando dados históricos...")
+        df_historico_completo = ler_dados_sheets('Dados_Historicos')
+        
+        if df_historico_completo.empty or 'ticker' not in df_historico_completo.columns:
+            st.error("❌ ERRO: Dados Históricos vazios ou mal formatados. Execute o ETL no GitHub Actions.")
+            return False
+            
+        # Filtrar apenas os símbolos solicitados
+        simbolos_disponiveis = df_historico_completo['ticker'].unique()
+        simbolos_validos = [s for s in simbolos if s in simbolos_disponiveis]
+        
+        if not simbolos_validos:
+            st.warning(f"❌ Nenhum dos símbolos solicitados está disponível na planilha.")
+            return False
+            
+        st.success(f"  ✓ {len(simbolos_validos)}/{len(simbolos)} símbolos encontrados na planilha")
+        
+        # Reestruturar dados históricos para formato de dicionário
+        for simbolo in simbolos_validos:
+            df_ativo = df_historico_completo[df_historico_completo['ticker'] == simbolo].copy()
+            df_ativo = df_ativo.drop(columns=['ticker'])
+            
+            # Use MIN_DIAS_HISTORICO do script original como fallback
+            MIN_DIAS_HISTORICO = 252 # Hardcoded aqui apenas para evitar erro, mas deve ser importado
+            
+            if len(df_ativo) >= MIN_DIAS_HISTORICO * 0.7:
+                self.dados_por_ativo[simbolo] = df_ativo
+                self.ativos_sucesso.append(simbolo)
+            # Sem a necessidade de log de falha no Streamlit para cada ativo
+        
+        # 3. Carregar dados fundamentalistas
+        st.write("📥 Carregando dados fundamentalistas...")
+        df_fundamentalista_completo = ler_dados_sheets('Fundamentalistas')
+        
+        # Filtrar apenas símbolos válidos
+        self.dados_fundamentalistas = df_fundamentalista_completo.loc[
+            df_fundamentalista_completo.index.isin(self.ativos_sucesso)
         ]
+        st.success(f"  ✓ {len(self.dados_fundamentalistas)} ativos com dados fundamentalistas")
         
-        arquivos_faltando = [arq for arq in arquivos_necessarios if not os.path.exists(arq)]
+        # 4. Carregar métricas de performance
+        st.write("📥 Carregando métricas de performance...")
+        df_metricas_completo = ler_dados_sheets('Metricas')
         
-        if arquivos_faltando:
-            print("❌ ERRO: Arquivos de dados não encontrados:")
-            for arq in arquivos_faltando:
-                print(f"  • {arq}")
-            print("\n💡 Solução: Execute o script de coleta primeiro:")
-            print("   python coleta_diaria.py")
+        # Filtrar apenas símbolos válidos
+        self.metricas_performance = df_metricas_completo.loc[
+            df_metricas_completo.index.isin(self.ativos_sucesso)
+        ]
+        st.success(f"  ✓ {len(self.metricas_performance)} ativos com métricas")
+        
+        # 5. Verificar se temos ativos suficientes (NUM_ATIVOS_PORTFOLIO também deve ser importado)
+        NUM_ATIVOS_PORTFOLIO = 5 # Hardcoded aqui apenas para evitar erro, mas deve ser importado
+        
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            st.error(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos carregados. Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
             return False
         
-        try:
-            # 1. Carregar dados macroeconômicos
-            self.coletar_dados_macroeconomicos()
-            
-            # 2. Carregar dados históricos
-            print("📥 Carregando dados históricos...")
-            df_historico_completo = pd.read_parquet(ARQUIVO_HISTORICO)
-            
-            # Filtrar apenas os símbolos solicitados
-            simbolos_disponiveis = df_historico_completo['ticker'].unique()
-            simbolos_validos = [s for s in simbolos if s in simbolos_disponiveis]
-            
-            if not simbolos_validos:
-                print(f"❌ Nenhum dos símbolos solicitados está disponível no cache.")
-                print(f"   Símbolos solicitados: {simbolos[:10]}...")
-                print(f"   Símbolos disponíveis: {list(simbolos_disponiveis)[:10]}...")
-                return False
-            
-            print(f"  ✓ {len(simbolos_validos)}/{len(simbolos)} símbolos encontrados no cache")
-            
-            # Reestruturar dados históricos para formato de dicionário
-            for simbolo in tqdm(simbolos_validos, desc="⚙️ Processando dados"):
-                df_ativo = df_historico_completo[df_historico_completo['ticker'] == simbolo].copy()
-                df_ativo = df_ativo.drop(columns=['ticker'])
-                
-                if len(df_ativo) >= MIN_DIAS_HISTORICO * 0.7:
-                    self.dados_por_ativo[simbolo] = df_ativo
-                    self.ativos_sucesso.append(simbolo)
-                else:
-                    print(f"  ⚠️ {simbolo}: Dados insuficientes ({len(df_ativo)} dias)")
-            
-            # 3. Carregar dados fundamentalistas
-            print("📥 Carregando dados fundamentalistas...")
-            df_fundamentalista_completo = pd.read_parquet(ARQUIVO_FUNDAMENTALISTA)
-            
-            # Filtrar apenas símbolos válidos
-            self.dados_fundamentalistas = df_fundamentalista_completo.loc[
-                df_fundamentalista_completo.index.isin(self.ativos_sucesso)
-            ]
-            print(f"  ✓ {len(self.dados_fundamentalistas)} ativos com dados fundamentalistas")
-            
-            # 4. Carregar métricas de performance
-            print("📥 Carregando métricas de performance...")
-            df_metricas_completo = pd.read_parquet(ARQUIVO_METRICAS)
-            
-            # Filtrar apenas símbolos válidos
-            self.metricas_performance = df_metricas_completo.loc[
-                df_metricas_completo.index.isin(self.ativos_sucesso)
-            ]
-            print(f"  ✓ {len(self.metricas_performance)} ativos com métricas")
-            
-            # 5. Verificar se temos ativos suficientes
-            if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
-                print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos carregados.")
-                print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos")
-                print(f"\n💡 Dicas:")
-                print(f"  • Execute coleta_diaria.py para atualizar os dados")
-                print(f"  • Selecione mais ativos ou setores diferentes")
-                print(f"  • Verifique os logs do ETL para ver quais ativos falharam\n")
-                return False
-            
-            # 6. Exibir informações sobre a última coleta
-            if os.path.exists(ARQUIVO_METADATA):
-                df_metadata = pd.read_parquet(ARQUIVO_METADATA)
-                ultima_coleta = df_metadata.iloc[-1]
-                print(f"\n📅 Última coleta: {ultima_coleta['data_coleta']}")
-                print(f"   Ativos coletados: {ultima_coleta['ativos_sucesso']}/{ultima_coleta['total_ativos_tentados']}")
-            
-            print(f"\n✓ Dados carregados com sucesso!")
-            print(f"  • {len(self.ativos_sucesso)} ativos prontos para análise")
-            print(f"  • {len(self.dados_fundamentalistas)} com dados fundamentalistas")
-            print(f"  • {len(self.metricas_performance)} com métricas de performance")
-            
-            return True
-            
-        except Exception as e:
-            print(f"❌ Erro ao carregar dados do cache: {str(e)}")
-            import traceback
-            traceback.print_exc()
-            return False
-
-# A coleta agora é feita pelo coleta_diaria.py
-# def coletar_dados_ativos(lista_ativos, periodo='max'):
-#     """
-#     Coleta dados históricos de múltiplos ativos com tratamento robusto de erros
-#     """
-#     dados_coletados = {}
-#     ativos_com_erro = []
-    
-#     progress_bar = st.progress(0)
-#     status_text = st.empty()
-    
-#     total = len(lista_ativos)
-    
-#     for idx, ticker in enumerate(tqdm(lista_ativos, desc="📥 Coletando dados")):
-#         try:
-#             status_text.text(f"Coletando {ticker} ({idx+1}/{total})...")
-#             progress_bar.progress((idx + 1) / total)
-            
-#             # Add retry logic with exponential backoff
-#             max_retries = 3
-#             retry_delay = 1
-            
-#             for attempt in range(max_retries):
-#                 try:
-#                     # Download with extended timeout
-#                     df = yf.download(
-#                         ticker, 
-#                         period=periodo, 
-#                         progress=False,
-#                         timeout=10,
-#                         # Add headers to avoid rate limiting
-#                         headers={'User-Agent': 'Mozilla/5.0'}
-#                     )
-                    
-#                     if df.empty or len(df) < MIN_DIAS_HISTORICO:
-#                         if attempt < max_retries - 1:
-#                             time.sleep(retry_delay)
-#                             retry_delay *= 2
-#                             continue
-#                         else:
-#                             ativos_com_erro.append((ticker, "Sem dados históricos suficientes"))
-#                             break
-                    
-#                     # Successful download
-#                     dados_coletados[ticker] = df
-#                     break
-                    
-#                 except Exception as e:
-#                     if attempt < max_retries - 1:
-#                         time.sleep(retry_delay)
-#                         retry_delay *= 2
-#                     else:
-#                         ativos_com_erro.append((ticker, str(e)))
-                        
-#         except Exception as e:
-#             ativos_com_erro.append((ticker, str(e)))
-#             continue
-    
-#     progress_bar.empty()
-#     status_text.empty()
-    
-#     # Display collection summary
-#     if ativos_com_erro:
-#         with st.expander(f"⚠️ Ativos com problemas ({len(ativos_com_erro)}):"):
-#             for ticker, erro in ativos_com_erro[:10]:  # Show first 10
-#                 st.text(f"  • {ticker}: {erro}")
-#             if len(ativos_com_erro) > 10:
-#                 st.text(f"  ... e mais {len(ativos_com_erro) - 10} ativos")
-    
-#     st.success(f"✓ Total coletado: {len(dados_coletados)}")
-    
-#     # Validate minimum assets collected
-#     if len(dados_coletados) < NUM_ATIVOS_PORTFOLIO:
-#         st.error("""
-#         ❌ ERRO: Apenas {len(dados_coletados)} ativos coletados.
-#             Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos
+        st.success(f"\n✓ Dados carregados com sucesso! {len(self.ativos_sucesso)} ativos prontos.")
         
-#         💡 Dicas:
-#           • Verifique sua conexão com a internet
-#           • Tente selecionar mais ativos ou setores diferentes
-#           • Alguns ativos podem estar sem dados recentes
-#           • Aguarde alguns minutos e tente novamente (possível rate limiting)
-#         """.format(len=len, NUM_ATIVOS_PORTFOLIO=NUM_ATIVOS_PORTFOLIO))
-#         return None
-    
-#     return dados_coletados
+        return True
 
 # =============================================================================
 # CLASSE: MODELAGEM DE VOLATILIDADE GARCH
