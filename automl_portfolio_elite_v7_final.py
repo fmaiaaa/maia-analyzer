@@ -1890,7 +1890,7 @@ class ConstrutorPortfolioAutoML:
             
             # Ensure there are enough data points after feature engineering and target creation
             if len(df_treino) < MIN_DIAS_HISTORICO: # Ensure enough data points after feature engineering
-                self.previsoes_ml[ativo] = {
+                self.predicoes_ml[ativo] = {
                     'predicted_proba_up': 0.5,
                     'auc_roc_score': np.nan,
                     'model_name': 'Dados Insuficientes'
@@ -1902,7 +1902,7 @@ class ConstrutorPortfolioAutoML:
             
             # Ensure y has at least two classes for classification
             if len(np.unique(y)) < 2:
-                self.previsoes_ml[ativo] = {
+                self.predicoes_ml[ativo] = {
                     'predicted_proba_up': 0.5,
                     'auc_roc_score': np.nan,
                     'model_name': 'Classe Única'
@@ -1914,7 +1914,7 @@ class ConstrutorPortfolioAutoML:
                 modelos, auc_scores = EnsembleML.treinar_ensemble(X, y, otimizar_optuna=otimizar)
                 
                 if not modelos: # If no models were trained successfully
-                    self.previsoes_ml[ativo] = {
+                    self.predicoes_ml[ativo] = {
                         'predicted_proba_up': 0.5,
                         'auc_roc_score': np.nan,
                         'model_name': 'Erro no Treino'
@@ -1988,7 +1988,7 @@ class ConstrutorPortfolioAutoML:
                     precision, recall, f1
                 )
                 
-                self.previsoes_ml[ativo] = {
+                self.predicoes_ml[ativo] = {
                     'predicted_proba_up': proba_final,
                     'auc_roc_score': auc_medio_cv, # Store CV score
                     'model_name': 'Ensemble Ponderado',
@@ -1999,13 +1999,13 @@ class ConstrutorPortfolioAutoML:
                 
             except Exception as e:
                 print(f"  ✗ Erro ML em {ativo}: {str(e)}")
-                self.previsoes_ml[ativo] = {
+                self.predicoess_ml[ativo] = {
                     'predicted_proba_up': 0.5,
                     'auc_roc_score': np.nan,
                     'model_name': 'Erro no Treino'
                 }
         
-        print(f"✓ Modelos ML treinados para {len(self.previsoes_ml)} ativos")
+        print(f"✓ Modelos ML treinados para {len(self.predicoes_ml)} ativos")
         print(f"✓ Modelos estatísticos treinados para {len(self.predicoes_estatisticas)} ativos\n")
     
     def pontuar_e_selecionar_ativos(self, horizonte_tempo):
