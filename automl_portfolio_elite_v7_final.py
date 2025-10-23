@@ -3620,19 +3620,22 @@ def aba_analise_individual():
     
     # Execute analysis
     @st.cache_data(ttl=timedelta(hours=6))
-    def carregar_dados_ativo_individual(ativo_selecionado):
-        """Carrega dados de um ativo individual com cache de 6 horas"""
+    # Linha 3571
+    @st.cache_data(ttl=timedelta(hours=6))
+    def carregar_historico_ativo(ativo_selecionado):
+        """Carrega dados históricos de um ativo individual com cache de 6 horas"""
         try:
             ticker = yf.Ticker(ativo_selecionado)
             hist = ticker.history(period='max')
-            
+    
             if hist.empty:
-                return None, None
-            
-            return hist, ticker
+                # Retorna apenas um DataFrame vazio, não uma tupla
+                return pd.DataFrame() 
+    
+            return hist # <--- Retorna apenas o DataFrame serializável
         except Exception as e:
-            print(f"Erro ao carregar {ativo_selecionado}: {str(e)}")
-            return None, None
+            print(f"Erro ao carregar histórico para {ativo_selecionado}: {str(e)}")
+            return pd.DataFrame() # Retorna DataFrame vazio em caso de erro
 
     with st.spinner(f"Analisando {ativo_selecionado}..."):
         try:
