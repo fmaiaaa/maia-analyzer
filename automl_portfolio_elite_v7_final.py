@@ -824,11 +824,29 @@ class ColetorDados:
         for idx, simbolo in enumerate(simbolos_b3):
             progress_bar.progress((idx + 1) / len(simbolos_b3))
             
-            hist, info = self._fetch_yf_data(simbolo, self.periodo)
-            
-            # Check if history is valid and sufficient
-            min_dias_requeridos = int(MIN_DIAS_HISTORICO * 0.7)
-            dias_retornados = len(hist)
+            try: # <--- TRY ADICIONADO PARA ISOLAR FALHAS INDIVIDUAIS
+                # 1. Fetch Data
+                hist, info = self._fetch_yf_data(simbolo, self.periodo)
+                dias_retornados = len(hist)
+                min_dias_requeridos = int(MIN_DIAS_HISTORICO * 0.7)
+        
+                # 2. Check for sufficient historical data
+                if hist.empty or dias_retornados < min_dias_requeridos:
+                    st.warning(f"⚠️ {simbolo}: Dados insuficientes. Requerido: {min_dias_requeridos} dias. Retornados: {dias_retornados} dias. Pulando.")
+                    continue
+                
+                # 3. Process historical data (Calculate initial features like returns)
+                df_ativo = hist.copy()
+                # ... O restante da lógica de processamento e armazenamento ...
+                
+                # 6. Final storage check (após o processamento bem-sucedido)
+                self.dados_por_ativo[simbolo] = df_ativo
+                self.ativos_sucesso.append(simbolo)
+                
+            except Exception as e:
+                # Se um ticker específico falhar por qualquer motivo (erros de pandas/numpy no meio), ele apenas pula para o próximo
+                st.warning(f"❌ ERRO CRÍTICO no processamento de {simbolo}: {str(e)[:100]}. Ignorando este ativo.")
+                continue # Continua para o próximo ativo no loop
     
             if hist.empty or dias_retornados < min_dias_requeridos:
                 st.warning(f"⚠️ {simbolo}: Dados históricos insuficientes. Requerido: {min_dias_requeridos} dias. Retornados: {dias_retornados} dias. Pulando.")
