@@ -2335,6 +2335,7 @@ class ConstrutorPortfolioAutoML:
         ml_lookback_days = perfil_investidor.get('ml_lookback_days', LOOKBACK_ML)
         nivel_risco = perfil_investidor.get('risk_level', 'MODERADO')
         horizonte_tempo = perfil_investidor.get('time_horizon', 'MÉDIO PRAZO')
+        simbolos_hashable = tuple(simbolos_customizados)
         
         # Etapa 1: Coleta de dados
         if not self.coletar_e_processar_dados(simbolos_customizados):
@@ -3193,7 +3194,7 @@ def aba_construtor_portfolio():
                 # Executa pipeline
                 with st.spinner(f'Criando portfólio para **PERFIL {risk_level}** ({horizon})...'):
                     success = builder.executar_pipeline(
-                        simbolos_customizados=st.session_state.ativos_para_analise,
+                        simbolos_customizados=tuple(st.session_state.ativos_para_analise),
                         perfil_investidor=st.session_state.profile,
                         otimizar_ml=otimizar_ml
                     )
