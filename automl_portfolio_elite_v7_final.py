@@ -3622,7 +3622,7 @@ def aba_analise_individual():
     @st.cache_data(ttl=timedelta(hours=6))
     # Linha 3571
     @st.cache_data(ttl=timedelta(hours=6))
-    def carregar_historico_ativo(ativo_selecionado):
+    def carregar_dados_ativo_individual(ativo_selecionado):
         """Carrega dados históricos de um ativo individual com cache de 6 horas"""
         try:
             ticker = yf.Ticker(ativo_selecionado)
