@@ -4125,6 +4125,10 @@ def aba_analise_individual():
                         st.plotly_chart(fig_var, use_container_width=True)
                 else:
                     st.warning("Dados insuficientes para realizar a clusterização e análise de similaridade.")
+        except Exception as e: # <--- O EXCEPT DEVE ESTAR ALINHADO COM O 'try' DA LINHA 3804
+            st.error(f"🚨 Erro Crítico na Análise Individual de Ativos: {e}")
+            import traceback
+            st.code(traceback.format_exc())
 
 # NEW FUNCTION FOR GOVERNANCE TAB
 def aba_governanca():
