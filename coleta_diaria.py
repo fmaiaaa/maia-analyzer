@@ -270,14 +270,20 @@ def calcular_features_fundamentalistas(info):
     return features
 
 def coletar_ativo_com_retry(ticker, periodo=PERIODO_DADOS):
-    """Coleta dados de um ativo com retry"""
-    # ... (CORPO DA FUNÇÃO MANTIDO)
+    """Coleta dados de um ativo com retry, usando intervalo SEMANAL (1wk)."""
+    # Usamos o intervalo semanal para reduzir o volume e evitar o limite de 10M de células.
+    INTERVALO_COLETA = "1wk" 
+    
+    # O mínimo de dias (252) é ajustado para semanas (aprox. 50 semanas)
+    MIN_SEMANAS_HISTORICO = 50 
+    
     for tentativa in range(MAX_RETRIES):
         try:
             ticker_obj = yf.Ticker(ticker)
-            hist = ticker_obj.history(period=periodo)
+            # AQUI: Adicionamos 'interval="1wk"'
+            hist = ticker_obj.history(period=periodo, interval=INTERVALO_COLETA)
             
-            if not hist.empty and len(hist) >= MIN_DIAS_HISTORICO:
+            if not hist.empty and len(hist) >= MIN_SEMANAS_HISTORICO:
                 return hist, ticker_obj
             else:
                 if tentativa < MAX_RETRIES - 1:
