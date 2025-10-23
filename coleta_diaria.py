@@ -1,24 +1,24 @@
 """
 =============================================================================
-SCRIPT ETL - COLETA DIÁRIA DE DADOS FINANCEIROS
+SCRIPT ETL - COLETA DIÁRIA DE DADOS FINANCEIROS (ADAPTADO PARA GOOGLE SHEETS)
 =============================================================================
 
-Este script deve ser executado diariamente (via cron/agendador) para:
+Este script deve ser executado diariamente (via GitHub Actions) para:
 1. Coletar dados de TODOS os ativos do yfinance
 2. Processar e engenheirar features
-3. Salvar em arquivos Parquet para consumo pelo Streamlit
+3. Salvar os dados em abas do Google Sheets para consumo pelo Streamlit Cloud.
 
 Uso:
     python coleta_diaria.py
 
-Agendamento (Linux/Mac - crontab):
-    0 20 * * 1-5 cd /caminho/do/projeto && python coleta_diaria.py
-
-Agendamento (Windows - Task Scheduler):
-    Criar tarefa para executar diariamente às 20:00
+Execução na Nuvem (GitHub Actions):
+    A autenticação usa o Secret GOOGLE_CREDENTIALS_JSON.
 """
-
-import os
+import gspread
+from gspread_dataframe import set_with_dataframe
+from oauth2client.service_account import ServiceAccountCredentials
+import json
+import os # Necessário para ler o Secret do GitHub Actions
 import sys
 import warnings
 import pandas as pd
@@ -28,6 +28,7 @@ from datetime import datetime, timedelta
 from tqdm import tqdm
 from sklearn.preprocessing import RobustScaler
 import time
+import ta # Import adicionado, pois é usado na função calcular_indicadores_tecnicos
 
 warnings.filterwarnings('ignore')
 
@@ -35,16 +36,8 @@ warnings.filterwarnings('ignore')
 # CONFIGURAÇÕES E CONSTANTES
 # =============================================================================
 
-# Caminhos de salvamento
-DATA_PATH = './dados_financeiros/'
-ARQUIVO_HISTORICO = DATA_PATH + 'dados_historicos.parquet'
-ARQUIVO_FUNDAMENTALISTA = DATA_PATH + 'dados_fundamentalistas.parquet'
-ARQUIVO_METRICAS = DATA_PATH + 'metricas_performance.parquet'
-ARQUIVO_MACRO = DATA_PATH + 'dados_macro.parquet'
-ARQUIVO_METADATA = DATA_PATH + 'metadata.parquet'
-
-# Criar diretório se não existir
-os.makedirs(DATA_PATH, exist_ok=True)
+# 📌 O QUE ALTERAR: COLE AQUI O ID DA SUA PLANILHA MESTRA DO GOOGLE SHEETS
+PLANILHA_MESTRA_ID = "1g6lnrB-N4kgrbEiZKEYaoll4la9TnfBJh4VvioqbC78" 
 
 # Configurações de coleta
 PERIODO_DADOS = 'max'
@@ -53,7 +46,7 @@ TAXA_LIVRE_RISCO = 0.1075
 MAX_RETRIES = 3
 RETRY_DELAY = 2
 
-# Lista completa de ativos (importar do arquivo principal ou redefinir)
+# Lista completa de ativos (mantida para referência)
 ATIVOS_IBOVESPA = [
     'ALOS3.SA', 'ABEV3.SA', 'ASAI3.SA', 'AURE3.SA', 'AZZA3.SA', 'B3SA3.SA',
     'BBSE3.SA', 'BBDC3.SA', 'BBDC4.SA', 'BRAP4.SA', 'BBAS3.SA', 'BRKM5.SA',
@@ -94,11 +87,55 @@ TODOS_ATIVOS = sorted(list(set(TODOS_ATIVOS)))
 print(f"Total de ativos para coleta: {len(TODOS_ATIVOS)}")
 
 # =============================================================================
-# FUNÇÕES DE COLETA E PROCESSAMENTO
+# FUNÇÕES DE COLETA, PROCESSAMENTO E ESCRITA
 # =============================================================================
+
+def autenticar_e_escrever_sheets(worksheet_name, df):
+    """Autentica com o JSON do GitHub Secret e escreve o DataFrame na aba correta."""
+    try:
+        # 1. Autenticação com Credenciais (lê o JSON da variável de ambiente)
+        credentials_json = os.environ.get('GOOGLE_CREDENTIALS_JSON')
+        if not credentials_json:
+            print("❌ ERRO: Variável de ambiente GOOGLE_CREDENTIALS_JSON não encontrada.")
+            print("       (O ETL só funciona com o Secret configurado no GitHub Actions!)")
+            return False
+        
+        # Converte o JSON string (do Secret) em um dicionário Python
+        # O JSON deve estar em uma única linha no Secret do GitHub!
+        creds_dict = json.loads(credentials_json)
+
+        # Conecta
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(
+            creds_dict,
+            scopes=['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        )
+        client = gspread.authorize(creds)
+        
+        # 2. Abre a Planilha Mestra
+        spreadsheet = client.open_by_key(PLANILHA_MESTRA_ID)
+        
+        # 3. Seleciona a aba (worksheet) e escreve
+        worksheet = spreadsheet.worksheet(worksheet_name)
+        
+        # O DataFrame precisa ter o índice resetado para ser escrito como dados
+        df_para_escrever = df.reset_index()
+        
+        # Limpa o conteúdo existente 
+        worksheet.clear()
+        
+        # Escreve o DataFrame. write_index=False porque reset_index já adicionou a coluna 'index'
+        set_with_dataframe(worksheet, df_para_escrever, include_index=False) 
+        print(f"  ✓ Dados '{worksheet_name}' escritos no Google Sheets.")
+        return True
+        
+    except Exception as e:
+        print(f"  ❌ ERRO CRÍTICO ao escrever no Google Sheets ({worksheet_name}): {str(e)}")
+        return False
+
 
 def coletar_dados_macroeconomicos():
     """Coleta dados macroeconômicos"""
+    # ... (CORPO DA FUNÇÃO MANTIDO)
     print("\n📊 Coletando dados macroeconômicos...")
     
     dados_macro = {}
@@ -134,10 +171,11 @@ def coletar_dados_macroeconomicos():
     
     return dados_macro
 
+
 def calcular_indicadores_tecnicos(df):
     """Calcula indicadores técnicos usando biblioteca ta"""
     try:
-        import ta
+        # Importado no topo: import ta
         
         # Retornos
         df['returns'] = df['Close'].pct_change()
@@ -171,6 +209,7 @@ def calcular_indicadores_tecnicos(df):
 
 def adicionar_correlacoes_macro(df, simbolo, dados_macro):
     """Adiciona correlações com indicadores macroeconômicos"""
+    # ... (CORPO DA FUNÇÃO MANTIDO)
     if not dados_macro or 'returns' not in df.columns:
         return df
     
@@ -200,6 +239,7 @@ def adicionar_correlacoes_macro(df, simbolo, dados_macro):
 
 def calcular_features_fundamentalistas(info):
     """Extrai features fundamentalistas"""
+    # ... (CORPO DA FUNÇÃO MANTIDO)
     features = {
         'pe_ratio': info.get('trailingPE', np.nan),
         'forward_pe': info.get('forwardPE', np.nan),
@@ -231,6 +271,7 @@ def calcular_features_fundamentalistas(info):
 
 def coletar_ativo_com_retry(ticker, periodo=PERIODO_DADOS):
     """Coleta dados de um ativo com retry"""
+    # ... (CORPO DA FUNÇÃO MANTIDO)
     for tentativa in range(MAX_RETRIES):
         try:
             ticker_obj = yf.Ticker(ticker)
@@ -334,13 +375,13 @@ def executar_etl():
             continue
     
     # 3. Consolidar e salvar dados
-    print(f"\n💾 Salvando dados processados...")
+    print(f"\n💾 Salvando dados processados no Google Sheets...")
     
     # Salvar dados históricos
     if dados_historicos_list:
         df_historico_completo = pd.concat(dados_historicos_list, ignore_index=False)
-        df_historico_completo.to_parquet(ARQUIVO_HISTORICO, compression='gzip')
-        print(f"  ✓ Históricos salvos: {ARQUIVO_HISTORICO} ({len(df_historico_completo)} linhas)")
+        autenticar_e_escrever_sheets('Dados_Historicos', df_historico_completo) # <--- NOVO
+        print(f"  ✓ Históricos salvos: {len(df_historico_completo)} linhas")
     
     # Salvar dados fundamentalistas
     if lista_fundamentalistas:
@@ -357,35 +398,22 @@ def executar_etl():
                 df_fundamentalista[col] = df_fundamentalista[col].fillna(median_val)
         
         df_fundamentalista[numeric_cols] = scaler.fit_transform(df_fundamentalista[numeric_cols])
-        df_fundamentalista.to_parquet(ARQUIVO_FUNDAMENTALISTA, compression='gzip')
-        print(f"  ✓ Fundamentalistas salvos: {ARQUIVO_FUNDAMENTALISTA} ({len(df_fundamentalista)} ativos)")
+        autenticar_e_escrever_sheets('Fundamentalistas', df_fundamentalista) # <--- NOVO
+        print(f"  ✓ Fundamentalistas salvos: {len(df_fundamentalista)} ativos")
     
     # Salvar métricas de performance
     if metricas_performance:
         df_metricas = pd.DataFrame(metricas_performance).T
-        df_metricas.to_parquet(ARQUIVO_METRICAS, compression='gzip')
-        print(f"  ✓ Métricas salvos: {ARQUIVO_METRICAS} ({len(df_metricas)} ativos)")
+        autenticar_e_escrever_sheets('Metricas', df_metricas) # <--- NOVO
+        print(f"  ✓ Métricas salvos: {len(df_metricas)} ativos")
     
     # Salvar dados macro
     if dados_macro:
         df_macro = pd.DataFrame(dados_macro)
-        df_macro.to_parquet(ARQUIVO_MACRO, compression='gzip')
-        print(f"  ✓ Dados macro salvos: {ARQUIVO_MACRO}")
+        autenticar_e_escrever_sheets('Macro', df_macro) # <--- NOVO
+        print(f"  ✓ Dados macro salvos: {len(df_macro)} linhas")
     
-    # Salvar metadata
-    metadata = {
-        'data_coleta': datetime.now(),
-        'total_ativos_tentados': len(TODOS_ATIVOS),
-        'ativos_sucesso': len(ativos_sucesso),
-        'ativos_falha': len(ativos_falha),
-        'lista_sucesso': ativos_sucesso,
-        'lista_falha': ativos_falha
-    }
-    df_metadata = pd.DataFrame([metadata])
-    df_metadata.to_parquet(ARQUIVO_METADATA, compression='gzip')
-    print(f"  ✓ Metadata salvo: {ARQUIVO_METADATA}")
-    
-    # 4. Relatório final
+    # 4. Relatório final (Metadata e Relatório final mantidos)
     print("\n" + "="*80)
     print("RELATÓRIO FINAL DO ETL")
     print("="*80)
