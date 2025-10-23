@@ -1478,7 +1478,7 @@ class OtimizadorPortfolioAvancado:
         self.returns = returns_df
         self.mean_returns = returns_df.mean() * 252
         
-        if garch_vols is not None and not garch_vols.empty:
+        if garch_vols is not None and garch_vols: # Verifica se o dicionário não está vazio
             self.cov_matrix = self._construir_matriz_cov_garch(returns_df, garch_vols)
         else:
             self.cov_matrix = returns_df.cov() * 252 # Fallback to historical covariance
