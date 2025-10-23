@@ -3622,7 +3622,7 @@ def aba_analise_individual():
     @st.cache_data(ttl=timedelta(hours=6))
     # Linha 3571
     @st.cache_data(ttl=timedelta(hours=6))
-    def carregar_dados_ativo_individual(ativo_selecionado):
+    def carregar_historico_ativo(ativo_selecionado):
         """Carrega dados históricos de um ativo individual com cache de 6 horas"""
         try:
             ticker = yf.Ticker(ativo_selecionado)
@@ -3639,12 +3639,12 @@ def aba_analise_individual():
 
     with st.spinner(f"Analisando {ativo_selecionado}..."):
         try:
-            hist, ticker = carregar_dados_ativo_individual(ativo_selecionado)
+            hist = carregar_historico_ativo(ativo_selecionado)
             
             if hist is None:
                 st.error(f"Não foi possível obter dados históricos para {ativo_selecionado}.")
                 return
-            
+            ticker = yf.Ticker(ativo_selecionado)
             # Calculate all indicators
             df_completo = AnalisadorIndividualAtivos.calcular_todos_indicadores_tecnicos(hist)
             features_fund = AnalisadorIndividualAtivos.calcular_features_fundamentalistas_expandidas(ticker)
