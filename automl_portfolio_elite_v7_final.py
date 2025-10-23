@@ -17,6 +17,9 @@ Versão: 7.0.0 - Sistema AutoML Elite Final
 =============================================================================
 """
 
+import requests
+import io
+import pandas as pd
 import streamlit as st
 from datetime import datetime, timedelta
 import warnings
@@ -139,6 +142,8 @@ WEIGHT_ML = 0.30 # Adicionado peso para ML no score total
 # Limites de peso por ativo na otimização
 PESO_MIN = 0.10
 PESO_MAX = 0.30
+
+URL_MESTRE_DIARIO = "https://drive.google.com/uc?export=download&id=1VRXSqbvQBVgaxX61GXmWlBHLpJJKTgb2"
 
 ATIVOS_IBOVESPA = [
     'ALOS3.SA', 'ABEV3.SA', 'ASAI3.SA', 'AURE3.SA', 'AZZA3.SA', 'B3SA3.SA',
@@ -706,229 +711,107 @@ class EngenheiroFeatures:
 # CLASSE: COLETOR DE DADOS (REFATORADA PARA YFINANCE)
 # =============================================================================
 
+# =============================================================================
+# CLASSE: COLETOR DE DADOS (ADAPTADA PARA ARQUIVO MESTRE NA NUVEM)
+# =============================================================================
+
 class ColetorDados:
-    """Coleta e processa dados de mercado exclusivamente via yfinance."""
+    """Lê dados processados do arquivo MESTRE diário na nuvem."""
     
     def __init__(self, periodo=PERIODO_DADOS):
-        self.periodo = periodo
+        self.periodo = periodo # Mantido por compatibilidade
         self.dados_por_ativo = {}
         self.dados_fundamentalistas = pd.DataFrame()
         self.ativos_sucesso = []
-        self.dados_macro = {}  # Mantido vazio - sem fonte macro
+        self.dados_macro = {}  
         self.metricas_performance = pd.DataFrame()
-    
+
     @st.cache_data(ttl=timedelta(hours=6))
-    def _fetch_yf_data(_self, simbolo, periodo):
-        """Busca dados históricos do yfinance com cache."""
+    def _carregar_arquivo_mestre(self):
+        """Carrega o DataFrame mestre com todo o histórico e features via URL."""
         try:
-            ticker = yf.Ticker(simbolo)
-            hist = ticker.history(period=periodo)
-            # Ensure info is fetched only if history is not empty to avoid unnecessary calls
-            if not hist.empty:
-                info = ticker.info
-            else:
-                info = {}
-            return hist, info
+            st.info(f"⏳ Baixando dados do arquivo mestre na nuvem...")
+            
+            # 1. Requisição do arquivo via URL
+            response = requests.get(URL_MESTRE_DIARIO, stream=True)
+            response.raise_for_status() # Lança um erro se o download falhar
+            
+            # 2. Leitura do Parquet na memória
+            # 'response.content' é o arquivo binário
+            df_mestre = pd.read_parquet(io.BytesIO(response.content)) 
+            
+            # O índice do DataFrame Parquet deve ser a data/coluna de data (se estiver nomeada)
+            if 'Date' in df_mestre.columns:
+                df_mestre.set_index('Date', inplace=True)
+            df_mestre.index = pd.to_datetime(df_mestre.index)
+            
+            st.success("✅ Download e carregamento concluído!")
+            return df_mestre.replace([np.inf, -np.inf], np.nan).dropna(how='all', axis=0)
+
         except Exception as e:
-            st.warning(f"⚠️ Erro ao buscar {simbolo}: {str(e)[:100]}")
-            return pd.DataFrame(), {}
-    
-    def _calcular_metricas_performance(self, df_historico, simbolo):
-        """Calcula métricas de performance a partir dos dados históricos."""
-        try:
-            # Check if 'returns' column exists and if there's enough data
-            if 'returns' not in df_historico.columns or df_historico['returns'].isnull().all() or len(df_historico) < 252:
-                return {
-                    'sharpe_ratio': np.nan,
-                    'annual_return': np.nan,
-                    'annual_volatility': np.nan,
-                    'max_drawdown': np.nan
-                }
-            
-            returns = df_historico['returns'].dropna()
-            
-            # Check if returns series is empty after dropna
-            if returns.empty:
-                return {
-                    'sharpe_ratio': np.nan,
-                    'annual_return': np.nan,
-                    'annual_volatility': np.nan,
-                    'max_drawdown': np.nan
-                }
-            
-            # Retorno anualizado
-            annual_return = returns.mean() * 252
-            
-            # Volatilidade anualizada
-            annual_volatility = returns.std() * np.sqrt(252)
-            
-            # Sharpe Ratio (assumindo taxa livre de risco = 0)
-            sharpe_ratio = annual_return / annual_volatility if annual_volatility > 0 else 0
-            
-            # Max Drawdown
-            cumulative = (1 + returns).cumprod()
-            running_max = cumulative.expanding().max()
-            drawdown = (cumulative - running_max) / running_max
-            max_drawdown = drawdown.min()
-            
-            return {
-                'sharpe_ratio': sharpe_ratio,
-                'annual_return': annual_return,
-                'annual_volatility': annual_volatility,
-                'max_drawdown': max_drawdown
-            }
-        except Exception as e:
-            st.warning(f"⚠️ Erro ao calcular métricas para {simbolo}: {str(e)[:80]}")
-            return {
-                'sharpe_ratio': np.nan,
-                'annual_return': np.nan,
-                'annual_volatility': np.nan,
-                'max_drawdown': np.nan
-            }
-    
-    def adicionar_correlacoes_macro(self, df, simbolo):
-        """Adiciona correlações com indicadores macroeconômicos (mantido para compatibilidade)."""
-        # Sem dados macro disponíveis, retorna o DataFrame sem modificações
-        return df
-    
+            st.error(f"❌ ERRO CRÍTICO: Falha ao ler o arquivo mestre diário da URL. Verifique o link e as permissões. Erro: {e}")
+            return pd.DataFrame()
+
     def coletar_e_processar_dados(self, simbolos):
-        """
-        Coleta dados exclusivamente via yfinance para os símbolos solicitados.
-        """
-        self.ativos_sucesso = []
+        """Carrega dados do arquivo mestre e os organiza por ativo."""
         
+        # 1. Carregar DataFrame Mestre
+        df_mestre = self._carregar_arquivo_mestre()
+        if df_mestre.empty:
+            return False
+
         st.markdown(f"\n{'='*60}")
-        st.markdown(f"COLETANDO DADOS VIA YFINANCE")
+        st.markdown(f"CARREGANDO DADOS DO ARQUIVO MESTRE DIÁRIO")
         st.markdown(f"Ativos solicitados: {len(simbolos)}")
         st.markdown(f"{'='*60}\n")
         
-        # 1. Informar sobre dados macro
-        st.info("ℹ️ Dados macroeconômicos não disponíveis (sem fonte configurada)")
-        self.dados_macro = {}
+        simbolos_disponiveis = df_mestre['ticker'].unique()
+        simbolos_validos = [s for s in simbolos if s in simbolos_disponiveis]
         
-        # 2. Coletar dados históricos e fundamentalistas via yfinance
-        st.write("📥 Coletando dados históricos e fundamentalistas via yfinance...")
+        if len(simbolos_validos) < NUM_ATIVOS_PORTFOLIO:
+            st.error(f"❌ ERRO: Apenas {len(simbolos_validos)} ativos encontrados no arquivo. Necessário: {NUM_ATIVOS_PORTFOLIO} mínimos.")
+            return False
+        
+        # 2. Reestruturação e Filtro
+        st.write(f"📥 Organizando {len(simbolos_validos)} ativos...")
         
         progress_bar = st.progress(0)
+        
+        # Listas para coletar dados fundamentalistas e métricas (assumindo que já estão calculadas)
         dados_fundamentalistas_list = []
         metricas_performance_list = []
-        
-        # Filter symbols to only include those with .SA extension for Brazilian market, or keep as is if global
-        # For this context, assuming .SA is standard for B3.
-        simbolos_b3 = [s for s in simbolos if s.endswith('.SA')]
-        
-        if not simbolos_b3:
-            st.warning("Nenhum símbolo com '.SA' encontrado nos ativos selecionados. Verifique a lista.")
-            return False
 
-        for idx, simbolo in enumerate(simbolos_b3):
-            progress_bar.progress((idx + 1) / len(simbolos_b3))
-            
-            try: # <--- TRY ADICIONADO PARA ISOLAR FALHAS INDIVIDUAIS
-                # 1. Fetch Data
-                hist, info = self._fetch_yf_data(simbolo, self.periodo)
-                dias_retornados = len(hist)
-                min_dias_requeridos = int(MIN_DIAS_HISTORICO * 0.7)
-        
-                # 2. Check for sufficient historical data
-                if hist.empty or dias_retornados < min_dias_requeridos:
-                    st.warning(f"⚠️ {simbolo}: Dados insuficientes. Requerido: {min_dias_requeridos} dias. Retornados: {dias_retornados} dias. Pulando.")
-                    continue
-                
-                # 3. Process historical data (Calculate initial features like returns)
-                df_ativo = hist.copy()
-                # ... O restante da lógica de processamento e armazenamento ...
-                
-                # 6. Final storage check (após o processamento bem-sucedido)
-                self.dados_por_ativo[simbolo] = df_ativo
-                self.ativos_sucesso.append(simbolo)
-                
-            except Exception as e:
-                # Se um ticker específico falhar por qualquer motivo (erros de pandas/numpy no meio), ele apenas pula para o próximo
-                st.warning(f"❌ ERRO CRÍTICO no processamento de {simbolo}: {str(e)[:100]}. Ignorando este ativo.")
-                continue # Continua para o próximo ativo no loop
-    
-            if hist.empty or dias_retornados < min_dias_requeridos:
-                st.warning(f"⚠️ {simbolo}: Dados históricos insuficientes. Requerido: {min_dias_requeridos} dias. Retornados: {dias_retornados} dias. Pulando.")
-                continue
-            
-            # Processar dados históricos
-            df_ativo = hist.copy()
-            df_ativo['returns'] = df_ativo['Close'].pct_change()
-            df_ativo['log_returns'] = np.log(df_ativo['Close'] / df_ativo['Close'].shift(1))
-            
-            # Adicionar features temporais
-            df_ativo['day_of_week'] = df_ativo.index.dayofweek
-            df_ativo['month'] = df_ativo.index.month
-            df_ativo['quarter'] = df_ativo.index.quarter
-            df_ativo['day_of_month'] = df_ativo.index.day
-            df_ativo['week_of_year'] = df_ativo.index.isocalendar().week
-            
-            self.dados_por_ativo[simbolo] = df_ativo
-            self.ativos_sucesso.append(simbolo)
-            
-            # Extrair dados fundamentalistas (ensure info is not empty)
-            if info:
-                fund_data = {
-                    'sector': info.get('sector', 'Unknown'),
-                    'industry': info.get('industry', 'Unknown'),
-                    'market_cap': info.get('marketCap', np.nan),
-                    'pe_ratio': info.get('trailingPE', np.nan),
-                    'pb_ratio': info.get('priceToBook', np.nan),
-                    'ps_ratio': info.get('priceToSalesTrailing12Months', np.nan),
-                    'peg_ratio': info.get('pegRatio', np.nan),
-                    'ev_to_ebitda': info.get('enterpriseToEbitda', np.nan),
-                    'roe': info.get('returnOnEquity', np.nan) * 100 if info.get('returnOnEquity') is not None else np.nan,
-                    'roa': info.get('returnOnAssets', np.nan) * 100 if info.get('returnOnAssets') is not None else np.nan,
-                    'roic': info.get('returnOnCapital', np.nan) * 100 if info.get('returnOnCapital') is not None else np.nan, # Potentially None from yfinance
-                    'operating_margin': info.get('operatingMargins', np.nan) * 100 if info.get('operatingMargins') is not None else np.nan,
-                    'gross_margin': info.get('grossMargins', np.nan) * 100 if info.get('grossMargins') is not None else np.nan,
-                    'div_yield': info.get('dividendYield', 0) * 100 if info.get('dividendYield') is not None else np.nan,
-                    'payout_ratio': info.get('payoutRatio', np.nan) * 100 if info.get('payoutRatio') is not None else np.nan,
-                    'five_year_avg_div_yield': info.get('fiveYearAvgDividendYield', np.nan) * 100 if info.get('fiveYearAvgDividendYield') is not None else np.nan,
-                    'revenue_growth': info.get('revenueGrowth', np.nan) * 100 if info.get('revenueGrowth') is not None else np.nan,
-                    'earnings_growth': info.get('earningsGrowth', np.nan) * 100 if info.get('earningsGrowth') is not None else np.nan,
-                    'earnings_quarterly_growth': info.get('earningsQuarterlyGrowth', np.nan) * 100 if info.get('earningsQuarterlyGrowth') is not None else np.nan,
-                    'debt_to_equity': info.get('debtToEquity', np.nan),
-                    'current_ratio': info.get('currentRatio', np.nan),
-                    'quick_ratio': info.get('quickRatio', np.nan),
-                    'free_cashflow': info.get('freeCashflow', np.nan),
-                    'beta': info.get('beta', np.nan)
-                }
-                dados_fundamentalistas_list.append({'ticker': simbolo, **fund_data})
-            else:
-                st.warning(f"⚠️ {simbolo}: Informações fundamentais não disponíveis via yfinance.")
-                # Append empty dict to maintain structure if needed, or skip. For now, skip.
-            
-            # Calcular métricas de performance
-            metricas = self._calcular_metricas_performance(df_ativo, simbolo)
-            # Ensure the ticker is valid before appending metrics
-            if simbolo in self.ativos_sucesso: # Check if the symbol was successfully processed
-                metricas_performance_list.append({'ticker': simbolo, **metricas})
-        
+        for idx, simbolo in enumerate(simbolos_validos):
+            progress_bar.progress((idx + 1) / len(simbolos_validos))
+
+            # Filtra o DataFrame mestre para o ticker atual
+            df_ativo = df_mestre[df_mestre['ticker'] == simbolo].copy()
+            df_ativo.drop(columns=['ticker'], inplace=True, errors='ignore') # Remove a coluna 'ticker' para usar no histórico
+
+            # 3. Separação de Dados
+            # A última linha contém as métricas e fundamentos mais recentes
+            df_ultimo = df_ativo.iloc[[-1]]
+
+            # Colunas que são HISTÓRICAS (preço, volume, indicadores técnicos)
+            colunas_historico = [col for col in df_ativo.columns if col not in ['sector', 'pe_ratio', 'roe', 'debt_to_equity', 'sharpe_ratio', 'annual_return', 'annual_volatility', 'max_drawdown']]
+            self.dados_por_ativo[simbolo] = df_ativo[colunas_historico]
+
+            # 4. Armazena Métricas de Performance (deve ser a última linha calculada pelo ETL)
+            metricas_data = df_ultimo[['sharpe_ratio', 'annual_return', 'annual_volatility', 'max_drawdown']].iloc[0].to_dict()
+            metricas_performance_list.append({'ticker': simbolo, **metricas_data})
+
+            # 5. Armazena Fundamentos (deve ser a última linha calculada pelo ETL)
+            fund_data = df_ultimo[['sector', 'pe_ratio', 'roe', 'debt_to_equity']].iloc[0].to_dict()
+            dados_fundamentalistas_list.append({'ticker': simbolo, **fund_data})
+
         progress_bar.empty()
         
-        # Criar DataFrames de fundamentalistas e métricas
-        if dados_fundamentalistas_list:
-            self.dados_fundamentalistas = pd.DataFrame(dados_fundamentalistas_list).set_index('ticker')
-            st.success(f"  ✓ {len(self.dados_fundamentalistas)} ativos com dados fundamentalistas")
-        else:
-            st.warning("Nenhum dado fundamentalista foi coletado.")
-            self.dados_fundamentalistas = pd.DataFrame() # Ensure it's an empty DataFrame
-
-        if metricas_performance_list:
-            self.metricas_performance = pd.DataFrame(metricas_performance_list).set_index('ticker')
-            st.success(f"  ✓ {len(self.metricas_performance)} ativos com métricas calculadas")
-        else:
-            st.warning("Nenhuma métrica de performance foi calculada.")
-            self.metricas_performance = pd.DataFrame() # Ensure it's an empty DataFrame
+        # 6. Criação dos DataFrames finais
+        self.dados_fundamentalistas = pd.DataFrame(dados_fundamentalistas_list).set_index('ticker')
+        self.metricas_performance = pd.DataFrame(metricas_performance_list).set_index('ticker')
+        self.ativos_sucesso = list(self.dados_por_ativo.keys())
         
-        # Verificar se temos ativos suficientes (after filtering for valid data)
-        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
-            st.error(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos foram processados. Necessário: {NUM_ATIVOS_PORTFOLIO} mínimos.")
-            return False
-        
-        st.success(f"\n✓ Dados coletados com sucesso! {len(self.ativos_sucesso)} ativos prontos.")
+        st.success(f"✓ {len(self.ativos_sucesso)} ativos carregados e prontos para análise.")
         
         return True
 
