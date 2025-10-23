@@ -121,8 +121,8 @@ pip install yfinance plotly streamlit scikit-learn scipy xgboost lightgbm catboo
 
 # Updated data collection period to maximum available and adjusted other constants
 # Configurações Globais
-PERIODO_DADOS = 'max'  # Changed from '2y' to 'max' for maximum historical depth
-MIN_DIAS_HISTORICO = 252  # Reduced minimum to accommodate max period
+PERIODO_DADOS = '1y'  # Changed from '2y' to 'max' for maximum historical depth
+MIN_DIAS_HISTORICO = 126  # Reduced minimum to accommodate max period
 NUM_ATIVOS_PORTFOLIO = 5
 TAXA_LIVRE_RISCO = 0.1075 # Updated risk-free rate
 LOOKBACK_ML = 30  # Extended prediction horizon to 30 days
