@@ -711,9 +711,41 @@ class EngenheiroFeatures:
 # CLASSE: COLETOR DE DADOS (REFATORADA PARA YFINANCE)
 # =============================================================================
 
+@st.cache_data(ttl=timedelta(hours=6))
+def carregar_arquivo_mestre_cache():
+    """Carrega o DataFrame mestre da nuvem com cache seguro."""
+    try:
+        # Importações necessárias (para garantir que funcionem fora da classe)
+        import requests
+        import io
+        import pandas as pd
+        
+        st.info(f"⏳ Baixando dados do arquivo mestre na nuvem...")
+        
+        # 1. Requisição do arquivo via URL
+        # URL_MESTRE_DIARIO precisa ser acessível globalmente ou passada aqui
+        response = requests.get(URL_MESTRE_DIARIO, stream=True) 
+        response.raise_for_status() # Lança um erro se o download falhar
+        
+        # 2. Leitura do Parquet na memória
+        df_mestre = pd.read_parquet(io.BytesIO(response.content)) 
+        
+        # O índice do DataFrame Parquet deve ser a data/coluna de data (se estiver nomeada)
+        if 'Date' in df_mestre.columns:
+            df_mestre.set_index('Date', inplace=True)
+        df_mestre.index = pd.to_datetime(df_mestre.index)
+        
+        st.success("✅ Download e carregamento concluído!")
+        return df_mestre.replace([np.inf, -np.inf], np.nan).dropna(how='all', axis=0)
+
+    except Exception as e:
+        st.error(f"❌ ERRO CRÍTICO: Falha ao ler o arquivo mestre diário da URL. Erro: {e}")
+        return pd.DataFrame()
+        
 # =============================================================================
 # CLASSE: COLETOR DE DADOS (ADAPTADA PARA ARQUIVO MESTRE NA NUVEM)
 # =============================================================================
+
 
 class ColetorDados:
     """Lê dados processados do arquivo MESTRE diário na nuvem."""
@@ -727,36 +759,13 @@ class ColetorDados:
         self.metricas_performance = pd.DataFrame()
 
     @st.cache_data(ttl=timedelta(hours=6))
-    def _carregar_arquivo_mestre(self):
-        """Carrega o DataFrame mestre com todo o histórico e features via URL."""
-        try:
-            st.info(f"⏳ Baixando dados do arquivo mestre na nuvem...")
-            
-            # 1. Requisição do arquivo via URL
-            response = requests.get(URL_MESTRE_DIARIO, stream=True)
-            response.raise_for_status() # Lança um erro se o download falhar
-            
-            # 2. Leitura do Parquet na memória
-            # 'response.content' é o arquivo binário
-            df_mestre = pd.read_parquet(io.BytesIO(response.content)) 
-            
-            # O índice do DataFrame Parquet deve ser a data/coluna de data (se estiver nomeada)
-            if 'Date' in df_mestre.columns:
-                df_mestre.set_index('Date', inplace=True)
-            df_mestre.index = pd.to_datetime(df_mestre.index)
-            
-            st.success("✅ Download e carregamento concluído!")
-            return df_mestre.replace([np.inf, -np.inf], np.nan).dropna(how='all', axis=0)
 
-        except Exception as e:
-            st.error(f"❌ ERRO CRÍTICO: Falha ao ler o arquivo mestre diário da URL. Verifique o link e as permissões. Erro: {e}")
-            return pd.DataFrame()
 
     def coletar_e_processar_dados(self, simbolos):
         """Carrega dados do arquivo mestre e os organiza por ativo."""
         
         # 1. Carregar DataFrame Mestre
-        df_mestre = self._carregar_arquivo_mestre()
+        df_mestre = carregar_arquivo_mestre_cache()
         if df_mestre.empty:
             return False
 
