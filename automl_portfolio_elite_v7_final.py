@@ -139,6 +139,8 @@ NUM_ATIVOS_PORTFOLIO = 5
 TAXA_LIVRE_RISCO = 0.1075 # Updated risk-free rate
 LOOKBACK_ML = 30  # Extended prediction horizon to 30 days
 
+URL_HISTORICO_GIT = 'https://raw.githubusercontent.com/SEU_USUARIO/SEU_REPOSITORIO/main/historico.parquet'
+
 # Ponderações padrão para os scores
 WEIGHT_PERFORMANCE = 0.40
 WEIGHT_FUNDAMENTAL = 0.30
@@ -709,6 +711,7 @@ class EngenheiroFeatures:
         else:
             return (max_val - serie) / (max_val - min_val)
 
+
 # =============================================================================
 # FUNÇÃO DE LEITURA DO GOOGLE SHEETS (DEVE ESTAR ANTES DA CLASSE COLETORDADOS)
 # =============================================================================
@@ -751,6 +754,22 @@ def ler_dados_sheets(worksheet_name):
         st.info("Verifique se o Secret `secrets.toml` e o ID da planilha estão corretos.")
         st.exception(e)
         st.stop() # Interrompe a execução para evitar erros em cascata
+        return pd.DataFrame()
+
+# =============================================================================
+# FUNÇÃO DE LEITURA DO HISTÓRICO VIA GITHUB (GIT LFS)
+# =============================================================================
+
+@st.cache_data(ttl="6h")
+def carregar_historico_git():
+    """Carrega dados históricos diretamente do arquivo Parquet no GitHub."""
+    try:
+        # Usa a URL bruta para baixar o arquivo rastreado pelo Git LFS
+        df = pd.read_parquet(URL_HISTORICO_GIT)
+        df.index = pd.to_datetime(df.index)
+        return df
+    except Exception as e:
+        st.error(f"❌ ERRO ao carregar dados históricos do GitHub: {e}")
         return pd.DataFrame()
 
 # =============================================================================
@@ -820,8 +839,8 @@ class ColetorDados:
         st.markdown(f"Ativos solicitados: {len(simbolos)}")
         st.markdown(f"{'='*60}\n")
         
-        # 1. Carregar dados macroeconômicos
-        st.write("📥 Carregando dados macroeconômicos...")
+        # 1. Carregar dados macroeconômicos (VIA SHEETS)
+        st.write("📥 Carregando dados macroeconômicos (via Sheets)...")
         df_macro = ler_dados_sheets('Macro')
         
         if df_macro.empty:
@@ -834,12 +853,12 @@ class ColetorDados:
         
         st.success(f"  ✓ {len(self.dados_macro)} indicadores macro carregados.")
         
-        # 2. Carregar dados históricos
-        st.write("📥 Carregando dados históricos...")
-        df_historico_completo = ler_dados_sheets('Dados_Historicos')
+        # 2. Carregar dados históricos (VIA GITHUB LFS)
+        st.write("📥 Carregando dados históricos (via GitHub Parquet)...")
+        df_historico_completo = carregar_historico_git() # <--- ALTERADO AQUI
         
         if df_historico_completo.empty or 'ticker' not in df_historico_completo.columns:
-            st.error("❌ ERRO: Dados Históricos vazios ou mal formatados. Execute o ETL no GitHub Actions.")
+            st.error("❌ ERRO: Dados Históricos vazios. O arquivo Parquet não foi encontrado ou está vazio.")
             return False
             
         # Filtrar apenas os símbolos solicitados
@@ -864,7 +883,7 @@ class ColetorDados:
                 self.dados_por_ativo[simbolo] = df_ativo
                 self.ativos_sucesso.append(simbolo)
         
-        # 3. Carregar dados fundamentalistas
+        # 3. Carregar dados fundamentalistas (VIA SHEETS)
         st.write("📥 Carregando dados fundamentalistas...")
         df_fundamentalista_completo = ler_dados_sheets('Fundamentalistas')
         
@@ -874,7 +893,7 @@ class ColetorDados:
         ]
         st.success(f"  ✓ {len(self.dados_fundamentalistas)} ativos com dados fundamentalistas")
         
-        # 4. Carregar métricas de performance
+        # 4. Carregar métricas de performance (VIA SHEETS)
         st.write("📥 Carregando métricas de performance...")
         df_metricas_completo = ler_dados_sheets('Metricas')
         
