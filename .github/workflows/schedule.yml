@@ -1,0 +1,34 @@
+# .github/workflows/schedule.yml (ou main.yml, se o GitHub usar esse nome padrão)
+name: ETL Diário (Coleta de Dados)
+
+on:
+  # Executa de segunda a sexta-feira, às 20:00 (UTC).
+  # Ajuste '20' para o horário UTC desejado.
+  schedule:
+    - cron: '0 20 * * 1-5' 
+  # Permite execução manual para testes
+  workflow_dispatch:
+
+jobs:
+  run-etl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10' # Versão Python recomendada
+
+      - name: Install dependencies
+        # Certifique-se de que gspread, gspread-dataframe, etc., estão no requirements.txt
+        run: pip install -r requirements.txt
+
+      - name: Run ETL Script
+        # Expõe o Secret para a variável de ambiente GOOGLE_CREDENTIALS_JSON
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+        run: python coleta_diaria.py
+
+      - name: Finalize
+        run: echo "ETL concluído. Verifique o Google Sheets."
