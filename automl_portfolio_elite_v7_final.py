@@ -858,9 +858,9 @@ class ColetorDados:
             df_ativo = df_ativo.drop(columns=['ticker'])
             
             # Usando a constante MIN_DIAS_HISTORICO da seção GLOBAL do seu script
-            MIN_DIAS_HISTORICO_REF = 252 
+            MIN_DIAS_HISTORICO = 252 
             
-            if len(df_ativo) >= MIN_DIAS_HISTORICO_REF * 0.7:
+            if len(df_ativo) >= MIN_DIAS_HISTORICO * 0.7:
                 self.dados_por_ativo[simbolo] = df_ativo
                 self.ativos_sucesso.append(simbolo)
         
@@ -885,10 +885,10 @@ class ColetorDados:
         st.success(f"  ✓ {len(self.metricas_performance)} ativos com métricas")
         
         # 5. Verificar se temos ativos suficientes
-        NUM_ATIVOS_PORTFOLIO_REF = 5 
+        NUM_ATIVOS_PORTFOLIO = 5 
         
-        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO_REF:
-            st.error(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos carregados. Necessário: {NUM_ATIVOS_PORTFOLIO_REF} ativos mínimos.")
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            st.error(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos carregados. Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
             return False
         
         st.success(f"\n✓ Dados carregados com sucesso! {len(self.ativos_sucesso)} ativos prontos.")
