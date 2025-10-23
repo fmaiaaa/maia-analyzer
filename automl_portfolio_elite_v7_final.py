@@ -734,6 +734,7 @@ def ler_dados_sheets(worksheet_name):
         df = get_as_dataframe(worksheet, header=0, parse_dates=True)
         
         # 5. Trata o Índice (A coluna 'index' é o resultado do reset_index do script ETL)
+        # Verifica a primeira coluna, que deve ser o índice ('index' para data, 'Ticker' para fundamentos/métricas)
         if df.columns[0] == 'index':
              df = df.set_index('index')
              
@@ -767,19 +768,19 @@ class ColetorDados:
         self.dados_macro = {}
         self.metricas_performance = pd.DataFrame() # Initialize metric dataframe
     
-    # Este método de coleta de macrodados é desnecessário; a coleta principal é unificada no novo coletar_e_processar_dados
-    # Mantenho a função vazia apenas para não quebrar a lógica do pipeline existente que pode chamá-la.
+    # O método 'coletar_dados_macroeconomicos' original (que lia Parquet) é desnecessário. 
+    # Mantemos uma versão vazia para compatibilidade, mas a lógica de carga está em coletar_e_processar_dados.
     def coletar_dados_macroeconomicos(self):
         """Carrega dados macroeconômicos do Google Sheets."""
-        # A nova lógica de carregamento está em coletar_e_processar_dados
         pass 
     
     def adicionar_correlacoes_macro(self, df, simbolo):
-        """Adiciona correlações com indicadores macroeconômicos (Lógica mantida)."""
+        """Adiciona correlações com indicadores macroeconômicos (Lógica mantida do original)."""
         if not self.dados_macro or 'returns' not in df.columns:
             return df
         
         try:
+            # ... (Lógica de correlação mantida)
             if df['returns'].isnull().all():
                 return df
 
@@ -787,7 +788,6 @@ class ColetorDados:
                 if serie_macro.empty or serie_macro.isnull().all():
                     continue
                 
-                # ... (Lógica de correlação mantida)
                 df_returns_aligned = df['returns'].reindex(df.index)
                 
                 if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
@@ -814,6 +814,7 @@ class ColetorDados:
         """
         self.ativos_sucesso = []
         
+        # NOTE: Mensagens no Streamlit (st.markdown/st.write/st.success) substituem o 'print' em ambiente local
         st.markdown(f"\n{'='*60}")
         st.markdown(f"CARREGANDO DADOS DO GOOGLE SHEETS")
         st.markdown(f"Ativos solicitados: {len(simbolos)}")
@@ -856,13 +857,12 @@ class ColetorDados:
             df_ativo = df_historico_completo[df_historico_completo['ticker'] == simbolo].copy()
             df_ativo = df_ativo.drop(columns=['ticker'])
             
-            # Use MIN_DIAS_HISTORICO do script original como fallback
-            MIN_DIAS_HISTORICO = 252 # Hardcoded aqui apenas para evitar erro, mas deve ser importado
+            # Usando a constante MIN_DIAS_HISTORICO da seção GLOBAL do seu script
+            MIN_DIAS_HISTORICO_REF = 252 
             
-            if len(df_ativo) >= MIN_DIAS_HISTORICO * 0.7:
+            if len(df_ativo) >= MIN_DIAS_HISTORICO_REF * 0.7:
                 self.dados_por_ativo[simbolo] = df_ativo
                 self.ativos_sucesso.append(simbolo)
-            # Sem a necessidade de log de falha no Streamlit para cada ativo
         
         # 3. Carregar dados fundamentalistas
         st.write("📥 Carregando dados fundamentalistas...")
@@ -884,17 +884,16 @@ class ColetorDados:
         ]
         st.success(f"  ✓ {len(self.metricas_performance)} ativos com métricas")
         
-        # 5. Verificar se temos ativos suficientes (NUM_ATIVOS_PORTFOLIO também deve ser importado)
-        NUM_ATIVOS_PORTFOLIO = 5 # Hardcoded aqui apenas para evitar erro, mas deve ser importado
+        # 5. Verificar se temos ativos suficientes
+        NUM_ATIVOS_PORTFOLIO_REF = 5 
         
-        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
-            st.error(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos carregados. Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO_REF:
+            st.error(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos carregados. Necessário: {NUM_ATIVOS_PORTFOLIO_REF} ativos mínimos.")
             return False
         
         st.success(f"\n✓ Dados carregados com sucesso! {len(self.ativos_sucesso)} ativos prontos.")
         
         return True
-
 # =============================================================================
 # CLASSE: MODELAGEM DE VOLATILIDADE GARCH
 # =============================================================================
