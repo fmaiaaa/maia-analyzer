@@ -40,7 +40,7 @@ warnings.filterwarnings('ignore')
 PLANILHA_MESTRA_ID = "1g6lnrB-N4kgrbEiZKEYaoll4la9TnfBJh4VvioqbC78" 
 
 # Configurações de coleta
-PERIODO_DADOS = 'max'
+PERIODO_DADOS = '5y'
 MIN_DIAS_HISTORICO = 252
 TAXA_LIVRE_RISCO = 0.1075
 MAX_RETRIES = 3
