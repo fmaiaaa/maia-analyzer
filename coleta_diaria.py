@@ -327,18 +327,28 @@ def executar_etl():
             # Processa dados técnicos
             df = calcular_indicadores_tecnicos(hist)
             df = adicionar_correlacoes_macro(df, ticker, dados_macro)
-            df = df.dropna()
             
-            # Validação após limpeza
-            min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
-            if len(df) < min_dias_flexivel: // <--- AQUI! O DF ESTÁ VAZIO OU COM POUCOS DIAS
+            # --- CORREÇÃO DE VALIDAÇÃO INÍCIO ---
+            # 1. Remove linhas onde preço/volume estão faltando (base essencial)
+            df_limpo = df.dropna(subset=['Close', 'Volume']).copy()
+            
+            # 2. Define um mínimo flexível (usando 100 dias como base)
+            MIN_DIAS_FLEXIVEL_ETL = 100 
+            
+            if len(df_limpo) < MIN_DIAS_FLEXIVEL_ETL:
                 ativos_falha.append(ticker)
                 continue
             
+            # 3. Remove colunas de features que não foram preenchidas por falta de histórico
+            # Remove colunas que tenham mais de 30 NaNs (thresh=len(df) - 30)
+            df_limpo = df_limpo.dropna(axis=1, thresh=len(df_limpo) - 30)
+
+            # --- CORREÇÃO DE VALIDAÇÃO FIM ---
+            
             # Adiciona coluna de ticker para identificação
-            df['ticker'] = ticker
-            dados_historicos_list.append(df)
-            ativos_sucesso.append(ticker) // <--- ESTA LINHA NUNCA FOI ATINGIDA
+            df_limpo['ticker'] = ticker
+            dados_historicos_list.append(df_limpo)
+            ativos_sucesso.append(ticker) # <--- SUCESSO REGISTRADO AQUI
             
             # Coleta dados fundamentalistas
             try:
@@ -360,13 +370,14 @@ def executar_etl():
                 lista_fundamentalistas.append(features_fund)
             
             # Calcula métricas de performance
-            if 'returns' in df.columns and 'drawdown' in df.columns:
-                returns = df['returns']
+            # Usa df_limpo para cálculo de métricas
+            if 'returns' in df_limpo.columns and 'drawdown' in df_limpo.columns:
+                returns = df_limpo['returns']
                 metricas_performance[ticker] = {
                     'retorno_anual': returns.mean() * 252,
                     'volatilidade_anual': returns.std() * np.sqrt(252),
                     'sharpe': (returns.mean() * 252 - TAXA_LIVRE_RISCO) / (returns.std() * np.sqrt(252)) if returns.std() > 0 else 0,
-                    'max_drawdown': df['drawdown'].min()
+                    'max_drawdown': df_limpo['drawdown'].min()
                 }
             
         except Exception as e:
@@ -380,7 +391,7 @@ def executar_etl():
     # Salvar dados históricos
     if dados_historicos_list:
         df_historico_completo = pd.concat(dados_historicos_list, ignore_index=False)
-        autenticar_e_escrever_sheets('Dados_Historicos', df_historico_completo) # <--- NOVO
+        autenticar_e_escrever_sheets('Dados_Historicos', df_historico_completo) 
         print(f"  ✓ Históricos salvos: {len(df_historico_completo)} linhas")
     
     # Salvar dados fundamentalistas
@@ -398,19 +409,19 @@ def executar_etl():
                 df_fundamentalista[col] = df_fundamentalista[col].fillna(median_val)
         
         df_fundamentalista[numeric_cols] = scaler.fit_transform(df_fundamentalista[numeric_cols])
-        autenticar_e_escrever_sheets('Fundamentalistas', df_fundamentalista) # <--- NOVO
+        autenticar_e_escrever_sheets('Fundamentalistas', df_fundamentalista) 
         print(f"  ✓ Fundamentalistas salvos: {len(df_fundamentalista)} ativos")
     
     # Salvar métricas de performance
     if metricas_performance:
         df_metricas = pd.DataFrame(metricas_performance).T
-        autenticar_e_escrever_sheets('Metricas', df_metricas) # <--- NOVO
+        autenticar_e_escrever_sheets('Metricas', df_metricas) 
         print(f"  ✓ Métricas salvos: {len(df_metricas)} ativos")
     
     # Salvar dados macro
     if dados_macro:
         df_macro = pd.DataFrame(dados_macro)
-        autenticar_e_escrever_sheets('Macro', df_macro) # <--- NOVO
+        autenticar_e_escrever_sheets('Macro', df_macro) 
         print(f"  ✓ Dados macro salvos: {len(df_macro)} linhas")
     
     # 4. Relatório final (Metadata e Relatório final mantidos)
