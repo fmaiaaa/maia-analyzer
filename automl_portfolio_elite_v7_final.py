@@ -827,8 +827,11 @@ class ColetorDados:
             hist, info = self._fetch_yf_data(simbolo, self.periodo)
             
             # Check if history is valid and sufficient
-            if hist.empty or len(hist) < MIN_DIAS_HISTORICO * 0.7:
-                st.warning(f"⚠️ {simbolo}: Dados históricos insuficientes ou indisponíveis (mínimo {int(MIN_DIAS_HISTORICO * 0.7)} dias). Pulando.")
+            min_dias_requeridos = int(MIN_DIAS_HISTORICO * 0.7)
+            dias_retornados = len(hist)
+    
+            if hist.empty or dias_retornados < min_dias_requeridos:
+                st.warning(f"⚠️ {simbolo}: Dados históricos insuficientes. Requerido: {min_dias_requeridos} dias. Retornados: {dias_retornados} dias. Pulando.")
                 continue
             
             # Processar dados históricos
