@@ -139,7 +139,7 @@ NUM_ATIVOS_PORTFOLIO = 5
 TAXA_LIVRE_RISCO = 0.1075 # Updated risk-free rate
 LOOKBACK_ML = 30  # Extended prediction horizon to 30 days
 
-URL_HISTORICO_GIT = 'https://raw.githubusercontent.com/SEU_USUARIO/SEU_REPOSITORIO/main/historico.parquet'
+URL_HISTORICO_GIT = 'https://raw.githubusercontent.com/fmaiaaa/maia-analyzer/main/historico.parquet'
 
 # Ponderações padrão para os scores
 WEIGHT_PERFORMANCE = 0.40
