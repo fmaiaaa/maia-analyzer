@@ -29,6 +29,7 @@ from tqdm import tqdm
 from sklearn.preprocessing import RobustScaler
 import time
 import ta # Import adicionado, pois é usado na função calcular_indicadores_tecnicos
+import subprocess
 
 warnings.filterwarnings('ignore')
 
@@ -38,9 +39,10 @@ warnings.filterwarnings('ignore')
 
 # 📌 O QUE ALTERAR: COLE AQUI O ID DA SUA PLANILHA MESTRA DO GOOGLE SHEETS
 PLANILHA_MESTRA_ID = "1g6lnrB-N4kgrbEiZKEYaoll4la9TnfBJh4VvioqbC78" 
+ARQUIVO_HISTORICO_LOCAL = './historico.parquet'
 
 # Configurações de coleta
-PERIODO_DADOS = '5y'
+PERIODO_DADOS = 'max'
 MIN_DIAS_HISTORICO = 252
 TAXA_LIVRE_RISCO = 0.1075
 MAX_RETRIES = 3
@@ -86,6 +88,35 @@ TODOS_ATIVOS = sorted(list(set(TODOS_ATIVOS)))
 
 print(f"Total de ativos para coleta: {len(TODOS_ATIVOS)}")
 
+# =============================================================================
+# FUNÇÃO PARA FAZER COMMIT E PUSH DO ARQUIVO HISTÓRICO GRANDE (GIT LFS)
+# =============================================================================
+
+def push_to_github(commit_message):
+    """Commita o arquivo historico.parquet e faz push para o GitHub Actions."""
+    try:
+        # Configura as credenciais Git (usa o bot padrão do Actions)
+        subprocess.check_call(['git', 'config', 'user.name', 'GitHub Actions Bot'])
+        subprocess.check_call(['git', 'config', 'user.email', 'actions-bot@users.noreply.github.com'])
+        
+        # Adiciona o arquivo de dados local e o arquivo .gitattributes (para LFS)
+        subprocess.check_call(['git', 'add', './historico.parquet']) 
+        subprocess.check_call(['git', 'add', '.gitattributes'])
+        
+        # Faz commit
+        subprocess.check_call(['git', 'commit', '-m', commit_message])
+        
+        # Faz push (usa o token GITHUB_TOKEN padrão do Actions com permissão de escrita)
+        subprocess.check_call(['git', 'push']) 
+        print("\n✓ Push do arquivo historico.parquet para o GitHub concluído.")
+        return True
+    except subprocess.CalledProcessError as e:
+        print(f"\n❌ ERRO no Git Push. O arquivo pode ser muito grande ou as permissões estão erradas: {e}")
+        return False
+    except Exception as e:
+        print(f"\n❌ ERRO inesperado no Git Push: {e}")
+        return False
+        
 # =============================================================================
 # FUNÇÕES DE COLETA, PROCESSAMENTO E ESCRITA
 # =============================================================================
@@ -392,13 +423,22 @@ def executar_etl():
             continue
     
     # 3. Consolidar e salvar dados
-    print(f"\n💾 Salvando dados processados no Google Sheets...")
+    print(f"\n💾 Iniciando Salvamento de Dados Híbrido...")
     
-    # Salvar dados históricos
+    # Variável local para o nome do arquivo, que será rastreado pelo Git LFS
+    ARQUIVO_HISTORICO_LOCAL = './historico.parquet' 
+
+    # --- 3.1. SALVAR DADOS HISTÓRICOS (VIA GIT LFS - VOLTA PARA PARQUET LOCAL) ---
     if dados_historicos_list:
         df_historico_completo = pd.concat(dados_historicos_list, ignore_index=False)
-        autenticar_e_escrever_sheets('Dados_Historicos', df_historico_completo) 
-        print(f"  ✓ Históricos salvos: {len(df_historico_completo)} linhas")
+        
+        # Salva o arquivo localmente (para ser committado pelo Git LFS)
+        df_historico_completo.to_parquet(ARQUIVO_HISTORICO_LOCAL, compression='gzip') 
+        print(f"  ✓ Históricos salvos LOCALMENTE: {len(df_historico_completo)} linhas")
+    else:
+        print("  ⚠️ Aviso: Nenhuma data histórica para salvar localmente.")
+    
+    # --- 3.2. SALVAR DADOS LEVES (VIA GOOGLE SHEETS) ---
     
     # Salvar dados fundamentalistas
     if lista_fundamentalistas:
@@ -417,18 +457,36 @@ def executar_etl():
         df_fundamentalista[numeric_cols] = scaler.fit_transform(df_fundamentalista[numeric_cols])
         autenticar_e_escrever_sheets('Fundamentalistas', df_fundamentalista) 
         print(f"  ✓ Fundamentalistas salvos: {len(df_fundamentalista)} ativos")
+    else:
+        print("  ⚠️ Aviso: Nenhum dado fundamentalista para salvar.")
     
     # Salvar métricas de performance
     if metricas_performance:
         df_metricas = pd.DataFrame(metricas_performance).T
         autenticar_e_escrever_sheets('Metricas', df_metricas) 
         print(f"  ✓ Métricas salvos: {len(df_metricas)} ativos")
+    else:
+        print("  ⚠️ Aviso: Nenhuma métrica de performance para salvar.")
     
     # Salvar dados macro
     if dados_macro:
         df_macro = pd.DataFrame(dados_macro)
         autenticar_e_escrever_sheets('Macro', df_macro) 
         print(f"  ✓ Dados macro salvos: {len(df_macro)} linhas")
+    else:
+        print("  ⚠️ Aviso: Nenhum dado macro para salvar.")
+    
+    # --- 3.3. COMMIT E PUSH FINAL DO ARQUIVO HISTÓRICO ---
+    
+    if dados_historicos_list:
+        print("\n📦 Fazendo commit e push do arquivo historico.parquet...")
+        # A função push_to_github executa comandos git para enviar o arquivo grande
+        push_to_github(f"ETL Automático: Atualização de dados históricos - {datetime.now().strftime('%Y-%m-%d')}")
+    
+    # 4. Relatório final 
+    print("\n" + "="*80)
+    print("RELATÓRIO FINAL DO ETL")
+    print("="*80)
     
     # 4. Relatório final (Metadata e Relatório final mantidos)
     print("\n" + "="*80)
