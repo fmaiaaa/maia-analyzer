@@ -331,14 +331,14 @@ def executar_etl():
             
             # Validação após limpeza
             min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
-            if len(df) < min_dias_flexivel:
+            if len(df) < min_dias_flexivel: // <--- AQUI! O DF ESTÁ VAZIO OU COM POUCOS DIAS
                 ativos_falha.append(ticker)
                 continue
             
             # Adiciona coluna de ticker para identificação
             df['ticker'] = ticker
             dados_historicos_list.append(df)
-            ativos_sucesso.append(ticker)
+            ativos_sucesso.append(ticker) // <--- ESTA LINHA NUNCA FOI ATINGIDA
             
             # Coleta dados fundamentalistas
             try:
