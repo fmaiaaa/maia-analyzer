@@ -4132,7 +4132,7 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.markdown("**Versão**: 7.0.0 Elite Final")
     st.sidebar.markdown("**Sistema**: Quantitative AutoML")
-    st.sidebar.markdown("[Repositório](https://github.com/seu-usuario/seu-repositorio)") # Placeholder for link
+    st.sidebar.markdown("[Repositório](https://github.com/fmaiaaa/maia-analyzer)") # Placeholder for link
     
     # Main title
     st.markdown('<h1 class="main-header">Sistema AutoML Elite - Otimização Quantitativa de Portfólio</h1>', unsafe_allow_html=True)
