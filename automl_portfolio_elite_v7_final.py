@@ -720,8 +720,12 @@ class EngenheiroFeatures:
 # CLASSE: COLETOR DE DADOS
 # =============================================================================
 
+# =============================================================================
+# CLASSE: COLETOR DE DADOS (MODIFICADO PARA GCS)
+# =============================================================================
+
 class ColetorDados:
-    """Coleta e processa dados de mercado com profundidade máxima"""
+    """Coleta e processa dados de mercado do GCS"""
     
     def __init__(self, periodo=PERIODO_DADOS):
         self.periodo = periodo
@@ -729,218 +733,164 @@ class ColetorDados:
         self.dados_fundamentalistas = pd.DataFrame()
         self.ativos_sucesso = []
         self.dados_macro = {}
-        self.metricas_performance = pd.DataFrame() # Initialize metric dataframe
+        self.metricas_performance = pd.DataFrame()
+        self.df_master = None  # Armazena o dataframe master do GCS
     
-    def coletar_dados_macroeconomicos(self):
-        """Coleta dados macroeconômicos para features externas"""
-        print("\n📊 Coletando dados macroeconômicos...")
+    def carregar_dados_gcs(self):
+        """Carrega dados consolidados do Google Cloud Storage"""
+        print("\n📊 Carregando dados do GCS...")
+        print(f"Bucket: {GCS_BUCKET_NAME}")
+        print(f"Arquivo: {GCS_MASTER_FILE_PATH}")
         
         try:
-            # Índices de referência
-            indices = {
-                'IBOV': '^BVSP',  # Ibovespa
-                'SP500': '^GSPC',  # S&P 500
-                'VIX': '^VIX',  # Volatility Index
-                'USD_BRL': 'BRL=X',  # Dólar
-                'GOLD': 'GC=F',  # Ouro
-                'OIL': 'CL=F'  # Petróleo WTI
-            }
+            # Inicializa cliente GCS
+            storage_client = storage.Client()
+            bucket = storage_client.bucket(GCS_BUCKET_NAME)
+            blob = bucket.blob(GCS_MASTER_FILE_PATH)
             
-            for nome, simbolo in indices.items():
-                try:
-                    ticker = yf.Ticker(simbolo)
-                    hist = ticker.history(period=self.periodo)
-                    
-                    if not hist.empty:
-                        self.dados_macro[nome] = hist['Close'].pct_change()
-                        print(f"  ✓ {nome}: {len(hist)} dias")
-                    else:
-                        print(f"  ⚠️ {nome}: Sem dados históricos")
-                        self.dados_macro[nome] = pd.Series()
-                except Exception as e:
-                    print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
-                    self.dados_macro[nome] = pd.Series()
+            # Download do arquivo CSV
+            csv_data = blob.download_as_text()
             
-            print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+            # Carrega em DataFrame
+            self.df_master = pd.read_csv(io.StringIO(csv_data))
+            
+            # Converte coluna Date para datetime
+            self.df_master['Date'] = pd.to_datetime(self.df_master['Date'])
+            
+            print(f"✓ Dados carregados: {len(self.df_master)} linhas")
+            print(f"✓ Ativos únicos: {self.df_master['ticker'].nunique()}")
+            print(f"✓ Período: {self.df_master['Date'].min()} até {self.df_master['Date'].max()}")
+            
+            return True
             
         except Exception as e:
-            print(f"❌ Erro ao coletar dados macro: {str(e)}")
+            print(f"❌ Erro ao carregar dados do GCS: {str(e)}")
+            st.error(f"Erro ao conectar ao GCS: {str(e)}")
+            return False
     
-    def adicionar_correlacoes_macro(self, df, simbolo):
-        """Adiciona correlações com indicadores macroeconômicos"""
-        if not self.dados_macro or 'returns' not in df.columns:
-            return df
+    def filtrar_ativos_por_simbolos(self, simbolos):
+        """Filtra dados do master DataFrame por lista de símbolos"""
+        if self.df_master is None:
+            print("❌ Dados master não carregados. Execute carregar_dados_gcs() primeiro.")
+            return False
         
-        try:
-            # Ensure that 'returns' column is available and not all NaN
-            if df['returns'].isnull().all():
-                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
-                return df
-
-            for nome, serie_macro in self.dados_macro.items():
-                if serie_macro.empty or serie_macro.isnull().all():
-                    continue
-                
-                # Alinha as datas
-                # Use reindex to align based on df's index, then align serie_macro to it
-                df_returns_aligned = df['returns'].reindex(df.index)
-                
-                # Ensure both series have data after alignment and before calculating rolling corr
-                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
-                    continue
-
-                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
-                # Using inner join implicitly via reindex and subsequent operations
-                combined_df = pd.DataFrame({
-                    'asset_returns': df_returns_aligned,
-                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
-                }).dropna() # Drop rows where either asset or macro returns are missing for this period
-
-                if len(combined_df) > 60:
-                    # Correlação rolling
-                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
-                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
-                else:
-                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
-        except Exception as e:
-            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
         
-        return df
-    
-    def coletar_e_processar_dados(self, simbolos):
-        """Coleta e processa dados de mercado com engenharia de features máxima"""
         self.ativos_sucesso = []
         lista_fundamentalistas = []
         
-        self.coletar_dados_macroeconomicos()
-        
-        print(f"\n{'='*60}")
-        print(f"INICIANDO COLETA DE DADOS - {len(simbolos)} ativos")
-        print(f"Período: {self.periodo} (MÁXIMO DISPONÍVEL)")
-        print(f"Mínimo de dias: {MIN_DIAS_HISTORICO}")
-        print(f"{'='*60}\n")
-        
-        erros_detalhados = []
-        
-        # Use the enhanced data collection function
-        dados_brutos = coletar_dados_ativos(simbolos, periodo=self.periodo)
-        
-        if dados_brutos is None: # Indicates failure to collect enough assets
-            return False
-
-        self.dados_por_ativo = dados_brutos
-        self.ativos_sucesso = list(dados_brutos.keys())
-        
-        # Proceed with feature engineering and fundamental data collection for successfully downloaded assets
-        for simbolo in tqdm(self.ativos_sucesso, desc="⚙️ Processando dados"):
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
             try:
-                df = EngenheiroFeatures.calcular_indicadores_tecnicos(self.dados_por_ativo[simbolo])
+                # Filtra dados do ativo
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
                 
-                df = self.adicionar_correlacoes_macro(df, simbolo)
-                
-                df = df.dropna()
-                
-                # Validação após limpeza - mais flexível
-                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
-                if len(df) < min_dias_flexivel:
-                    erros_detalhados.append(f"{simbolo}: Após limpeza: {len(df)} dias (mínimo: {min_dias_flexivel})")
-                    # Remove from success list if data becomes insufficient after processing
-                    if simbolo in self.ativos_sucesso:
-                        self.ativos_sucesso.remove(simbolo)
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset")
                     continue
                 
-                # Sucesso - armazena dados processados
-                self.dados_por_ativo[simbolo] = df
+                # Define Date como índice
+                df_ativo = df_ativo.set_index('Date').sort_index()
                 
-                # Fundamental data collection
-                try:
-                    ticker = yf.Ticker(simbolo)
-                    info = ticker.info
-                    features_fund = EngenheiroFeatures.calcular_features_fundamentalistas(info)
+                # Remove coluna ticker (já está no dicionário)
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Valida quantidade mínima de dados
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_ativo) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_ativo)} dias (mínimo: {min_dias_flexivel})")
+                    continue
+                
+                # Remove linhas com muitos NaNs (mais de 50% das colunas)
+                threshold = len(df_ativo.columns) * 0.5
+                df_ativo = df_ativo.dropna(thresh=threshold)
+                
+                # Armazena dados processados
+                self.dados_por_ativo[simbolo] = df_ativo
+                self.ativos_sucesso.append(simbolo)
+                
+                # Extrai dados fundamentalistas (colunas que começam com 'fund_')
+                fund_cols = [col for col in df_ativo.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Pega a última linha (dados mais recentes)
+                    features_fund = df_ativo[fund_cols].iloc[-1].to_dict()
+                    # Remove prefixo 'fund_' dos nomes das colunas
+                    features_fund = {k.replace('fund_', ''): v for k, v in features_fund.items()}
                     features_fund['Ticker'] = simbolo
+                    
+                    # Adiciona setor e indústria se disponíveis
+                    if 'sector' in df_ativo.columns:
+                        features_fund['sector'] = df_ativo['sector'].iloc[-1]
+                    if 'industry' in df_ativo.columns:
+                        features_fund['industry'] = df_ativo['industry'].iloc[-1]
+                    
                     lista_fundamentalistas.append(features_fund)
-                except Exception as fund_e:
-                    print(f"  ⚠️ {simbolo}: Erro ao coletar dados fundamentalistas - {str(fund_e)[:50]}")
-                    # Add a row with NaNs if fundamental data fails but historical data is good
+                else:
+                    # Cria entrada vazia se não houver dados fundamentalistas
                     features_fund = {'Ticker': simbolo}
-                    # Add all expected fundamental columns with NaN values
-                    expected_fund_cols = [
-                        'pe_ratio', 'forward_pe', 'pb_ratio', 'ps_ratio', 'peg_ratio', 'ev_ebitda',
-                        'div_yield', 'payout_ratio', 'roe', 'roa', 'roic', 'profit_margin',
-                        'operating_margin', 'gross_margin', 'debt_to_equity', 'current_ratio',
-                        'quick_ratio', 'revenue_growth', 'earnings_growth', 'market_cap',
-                        'enterprise_value', 'beta', 'sector', 'industry'
-                    ]
-                    for col in expected_fund_cols:
-                        features_fund[col] = np.nan
                     lista_fundamentalistas.append(features_fund)
-
-                print(f"  ✓ {simbolo}: {len(df)} dias coletados e processados")
+                
+                print(f"  ✓ {simbolo}: {len(df_ativo)} dias carregados")
                 
             except Exception as e:
-                erros_detalhados.append(f"{simbolo}: Erro no processamento - {str(e)[:50]}")
-                if simbolo in self.ativos_sucesso:
-                    self.ativos_sucesso.remove(simbolo)
+                print(f"  ❌ {simbolo}: Erro - {str(e)}")
                 continue
         
-        # Log detailed errors from processing stage
-        if erros_detalhados:
-            print(f"\n⚠️ Ativos com problemas durante processamento ({len(erros_detalhados)}):")
-            for erro in erros_detalhados[:10]:
-                print(f"  • {erro}")
-            if len(erros_detalhados) > 10:
-                print(f"  ... e mais {len(erros_detalhados) - 10} ativos")
-        
-        # Final validation on number of assets after processing
+        # Validação final
         if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
-            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos.")
             print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos")
-            print(f"\n💡 Dicas:")
-            print(f"  • Verifique sua conexão com a internet")
-            print(f"  • Tente selecionar mais ativos ou setores diferentes")
-            print(f"  • Alguns ativos podem estar sem dados recentes ou ter inconsistências")
-            print(f"  • Verifique os logs de erro detalhados acima\n")
             return False
         
-        self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
-        self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+        # Processa dados fundamentalistas
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Normaliza dados numéricos
+            scaler = RobustScaler()
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            if len(numeric_cols) > 0:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
         
-        scaler = RobustScaler()
-        numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
-        
-        # Impute median ONLY for numeric columns, then scale
-        for col in numeric_cols:
-            if self.dados_fundamentalistas[col].isnull().any():
-                median_val = self.dados_fundamentalistas[col].median()
-                self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
-        
-        # Apply scaling AFTER imputation
-        self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(self.dados_fundamentalistas[numeric_cols])
-
         # Calcula métricas de performance
         metricas = {}
         for simbolo in self.ativos_sucesso:
-            if 'returns' in self.dados_por_ativo[simbolo] and 'drawdown' in self.dados_por_ativo[simbolo]:
+            if 'returns' in self.dados_por_ativo[simbolo]:
                 returns = self.dados_por_ativo[simbolo]['returns']
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan]))
+                
                 metricas[simbolo] = {
                     'retorno_anual': returns.mean() * 252,
                     'volatilidade_anual': returns.std() * np.sqrt(252),
                     'sharpe': (returns.mean() * 252 - TAXA_LIVRE_RISCO) / (returns.std() * np.sqrt(252)) if returns.std() > 0 else 0,
-                    'max_drawdown': self.dados_por_ativo[simbolo]['drawdown'].min() # Use the calculated drawdown
+                    'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
                 }
-            elif 'returns' in self.dados_por_ativo[simbolo]: # Fallback if drawdown is not calculated
-                returns = self.dados_por_ativo[simbolo]['returns']
-                metricas[simbolo] = {
-                    'retorno_anual': returns.mean() * 252,
-                    'volatilidade_anual': returns.std() * np.sqrt(252),
-                    'sharpe': (returns.mean() * 252 - TAXA_LIVRE_RISCO) / (returns.std() * np.sqrt(252)) if returns.std() > 0 else 0,
-                    'max_drawdown': np.nan # Indicate missing drawdown
-                }
-
+        
         self.metricas_performance = pd.DataFrame(metricas).T
         
+        print(f"\n✓ Total de ativos processados: {len(self.ativos_sucesso)}")
         return True
-
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Método principal - carrega do GCS e filtra ativos"""
+        # Carrega dados do GCS se ainda não carregado
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False
+        
+        # Filtra ativos solicitados
+        return self.filtrar_ativos_por_simbolos(simbolos)
 # Function to collect data (enhanced version)
 # =============================================================================
 # FUNÇÃO DE COLETA DE DADOS (LENDO ARQUIVO ÚNICO DO GCS) - ATUALIZADA
