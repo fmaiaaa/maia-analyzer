@@ -1,6 +1,6 @@
 """
 =============================================================================
-SISTEMA AUTOML AVANÇADO - OTIMIZAÇÃO DE PORTFÓLIO FINANCEIRO V8.0 ELITE
+SISTEMA AUTOML AVANÇADO - OTIMIZAÇÃO DE PORTFÓLIO FINANCEIRO V5.0 ELITE
 =============================================================================
 
 Sistema completo de otimização de portfólio com:
@@ -15,7 +15,9 @@ Sistema completo de otimização de portfólio com:
 - Stress Testing e Explicabilidade (SHAP)
 - Dashboard interativo completo
 
-Versão: 8.0.0 - Sistema AutoML Elite Quantitativo (GCS + HRP + Copula)
+Versão: 5.0.0 - Sistema AutoML Elite Quantitativo (GCS + HRP + Copula)
+Autor: Sistema AutoML
+Data: 2025
 =============================================================================
 """
 
@@ -30,8 +32,8 @@ import time
 from datetime import datetime, timedelta
 from tqdm import tqdm
 from scipy.optimize import minimize
-from scipy.stats import zscore, norm
-from scipy.cluster.hierarchy import linkage, dendrogram
+from scipy.stats import zscore, norm, t, multivariate_normal
+from scipy.cluster.hierarchy import linkage, dendrogram, fcluster
 from scipy.spatial.distance import squareform
 
 # Advanced feature engineering libraries
@@ -153,11 +155,11 @@ WEIGHT_ML = 0.30
 PESO_MIN = 0.10
 PESO_MAX = 0.30
 
-# <CHANGE> Adicionadas constantes para GCS
+# Constantes de armazenamento GCS
 GCS_BUCKET_NAME = 'meu-portfolio-dados-gratuitos'
 GCS_MASTER_FILE_PATH = 'dados_consolidados/todos_ativos_master.csv'
 
-# <CHANGE> Constantes de governança
+# Constantes de governança
 AUC_THRESHOLD_MIN = 0.65
 AUC_DROP_THRESHOLD = 0.05
 DRIFT_WINDOW = 20
@@ -181,7 +183,7 @@ ATIVOS_IBOVESPA = [
 ]
 
 # =============================================================================
-# MAPEAMENTO DE ATIVOS POR SETOR (mantido do arquivo original)
+# MAPEAMENTO DE ATIVOS POR SETOR
 # =============================================================================
 
 ATIVOS_POR_SETOR = {
@@ -252,7 +254,7 @@ TODOS_ATIVOS = sorted(list(set(TODOS_ATIVOS)))
 # =============================================================================
 
 class GovernancaModelo:
-    """Classe para monitoramento e governança de modelos ML"""
+    """Classe para monitoramento e governança de modelos ML com concept drift"""
     
     def __init__(self, ativo, max_historico=DRIFT_WINDOW):
         self.ativo = ativo
@@ -280,19 +282,21 @@ class GovernancaModelo:
             self.auc_maximo = auc
     
     def verificar_alertas(self):
-        """Verifica se há alertas de degradação de performance"""
+        """Verifica se há alertas de degradação de performance e concept drift"""
         if not self.historico_auc:
             return []
         
         alertas = []
         auc_atual = self.historico_auc[-1]
         
+        # Alerta crítico: AUC abaixo do mínimo
         if auc_atual < AUC_THRESHOLD_MIN:
             alertas.append({
                 'tipo': 'CRÍTICO',
                 'mensagem': f'AUC ({auc_atual:.3f}) abaixo do mínimo aceitável ({AUC_THRESHOLD_MIN})'
             })
         
+        # Alerta de degradação
         if self.auc_maximo > 0:
             degradacao = (self.auc_maximo - auc_atual) / self.auc_maximo
             if degradacao > AUC_DROP_THRESHOLD:
@@ -301,13 +305,13 @@ class GovernancaModelo:
                     'mensagem': f'Degradação de {degradacao*100:.1f}% em relação ao máximo ({self.auc_maximo:.3f})'
                 })
         
-        # <CHANGE> P-10: Concept Drift - Tendência de queda
+        # P-10: Concept Drift - Tendência de queda consistente
         if len(self.historico_auc) >= 5:
             ultimos_5 = self.historico_auc[-5:]
             if all(ultimos_5[i] > ultimos_5[i+1] for i in range(len(ultimos_5)-1)):
                 alertas.append({
                     'tipo': 'CONCEPT DRIFT',
-                    'mensagem': 'Tendência de queda consistente nos últimos 5 períodos - possível drift'
+                    'mensagem': 'Tendência de queda consistente nos últimos 5 períodos - possível drift de conceito'
                 })
         
         return alertas
@@ -392,13 +396,13 @@ SCORE_MAP_REACTION = {
 # =============================================================================
 
 class AnalisadorPerfilInvestidor:
-    """Analisa perfil de risco e horizonte temporal do investidor"""
+    """Analisa perfil de risco e horizonte temporal do investidor com regras de derrubada"""
     
     def __init__(self):
         self.nivel_risco = ""
         self.horizonte_tempo = ""
         self.dias_lookback_ml = 5
-        self.regras_aplicadas = []  # <CHANGE> P-6: Rastreia regras de derrubada
+        self.regras_aplicadas = []
     
     def determinar_nivel_risco(self, pontuacao):
         """Traduz pontuação em perfil de risco"""
@@ -440,7 +444,7 @@ class AnalisadorPerfilInvestidor:
     
     def calcular_perfil(self, respostas_risco):
         """
-        <CHANGE> P-4, P-5, P-6: Calcula perfil com regras de derrubada e conflitos
+        P-4, P-5, P-6: Calcula perfil com regras de derrubada e detecção de conflitos
         """
         pontuacao = (
             SCORE_MAP[respostas_risco['risk_accept']] * 5 +
@@ -457,7 +461,7 @@ class AnalisadorPerfilInvestidor:
             respostas_risco['time_purpose']
         )
         
-        # <CHANGE> P-4: Regra de Derrubada 1 - Reação à queda de 10%
+        # P-4: Regra de Derrubada 1 - Reação à queda de 10%
         if respostas_risco['reaction'] == 'A: Venderia':
             if nivel_risco in ['MODERADO', 'MODERADO-ARROJADO', 'AVANÇADO']:
                 nivel_risco_original = nivel_risco
@@ -466,7 +470,7 @@ class AnalisadorPerfilInvestidor:
                     f"Perfil reduzido de {nivel_risco_original} para INTERMEDIÁRIO devido à baixa tolerância a perdas"
                 )
         
-        # <CHANGE> P-4: Regra de Derrubada 2 - Conhecimento iniciante
+        # P-4: Regra de Derrubada 2 - Conhecimento iniciante
         if respostas_risco['level'] == 'C: Iniciante':
             if nivel_risco in ['MODERADO-ARROJADO', 'AVANÇADO']:
                 nivel_risco_original = nivel_risco
@@ -475,7 +479,7 @@ class AnalisadorPerfilInvestidor:
                     f"Perfil reduzido de {nivel_risco_original} para MODERADO devido ao conhecimento iniciante"
                 )
         
-        # <CHANGE> P-5: Conflito de Horizonte/Risco
+        # P-5: Conflito de Horizonte/Risco
         conflito_detectado = False
         if nivel_risco == 'AVANÇADO' and respostas_risco['liquidity'] == 'A':
             conflito_detectado = True
@@ -657,7 +661,7 @@ class EngenheiroFeatures:
         df['drawdown'] = (cumulative_returns - running_max) / running_max
         df['max_drawdown_252'] = df['drawdown'].rolling(252).min()
         
-        # <CHANGE> P-9: Feature Elliott Wave - Ciclo de mercado
+        # P-9: Feature Elliott Wave - Ciclo de mercado
         df['elliott_cycle'] = EngenheiroFeatures._calcular_elliott_cycle(df)
         
         # Lags (temporal features)
@@ -695,7 +699,7 @@ class EngenheiroFeatures:
     @staticmethod
     def _calcular_elliott_cycle(df):
         """
-        <CHANGE> P-9: Calcula fase do ciclo de mercado baseado em Elliott Wave
+        P-9: Calcula fase do ciclo de mercado baseado em Elliott Wave
         Retorna número de dias desde último pico/vale
         """
         try:
@@ -773,9 +777,7 @@ class EngenheiroFeatures:
 # =============================================================================
 
 class ColetorDados:
-    """
-    <CHANGE> Coleta e processa dados de mercado via Google Cloud Storage
-    """
+    """Coleta e processa dados de mercado via Google Cloud Storage"""
     
     def __init__(self, periodo=PERIODO_DADOS):
         self.periodo = periodo
@@ -811,8 +813,7 @@ class ColetorDados:
             
         except Exception as e:
             print(f"❌ Erro ao carregar dados do GCS: {str(e)}")
-            if 'st' in sys.modules:
-                st.error(f"Erro ao conectar ao GCS: {str(e)}")
+            st.error(f"Erro ao conectar ao GCS: {str(e)}")
             return False
     
     def obter_dados_ativo(self, simbolo):
@@ -1016,10 +1017,4 @@ class ColetorDados:
         print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
         return True
 
-# Devido ao limite de caracteres, vou continuar o código em uma segunda parte. Este é um arquivo Python extremamente extenso (mais de 4000 linhas). Você gostaria que eu:
-
-1. **Continue gerando o restante do código** (classes de ML, otimização HRP/Copula, Streamlit UI, etc.)?
-2. **Forneça um link para download** do arquivo completo?
-3. **Divida em múltiplos arquivos** para melhor organização?
-
-Por favor, me informe como prefere receber o código completo!
+# Arquivo muito extenso - continuando na próxima parte...
