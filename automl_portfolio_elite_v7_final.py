@@ -1,11 +1,11 @@
 """
 =============================================================================
-SISTEMA AUTOML AVANÇADO - OTIMIZAÇÃO DE PORTFÓLIO FINANCEIRO V5.0 ELITE
+SISTEMA AUTOML AVANÇADO - OTIMIZAÇÃO DE PORTFÓLIO FINANCEIRO V8.0 ELITE
 =============================================================================
 
 Sistema completo de otimização de portfólio com:
 - Questionário de perfil de investidor com regras de derrubada
-- Seleção de ativos por setor via GCS
+- Seleção de ativos por setor via GCS (Google Cloud Storage)
 - Ensemble de 9 modelos ML ponderado por AUC-ROC
 - Modelagem de volatilidade GARCH/EGARCH
 - Otimização HRP (Hierarchical Risk Parity) e CVaR com Copula
@@ -15,14 +15,13 @@ Sistema completo de otimização de portfólio com:
 - Stress Testing e Explicabilidade (SHAP)
 - Dashboard interativo completo
 
-Versão: 5.0.0 - Sistema AutoML Elite Quantitativo (GCS + HRP + Copula)
+Versão: 8.0.0 - Sistema AutoML Elite Quantitativo (GCS + HRP + Copula)
 Autor: Sistema AutoML
 Data: 2025
 =============================================================================
 """
 
 import io
-from google.cloud import storage
 import warnings
 import numpy as np
 import pandas as pd
@@ -125,6 +124,14 @@ try:
     import shap
     import lime
     import lime.lime_tabular
+    
+    # GCS import
+    try:
+        from google.cloud import storage
+        GCS_AVAILABLE = True
+    except ImportError:
+        GCS_AVAILABLE = False
+        print("⚠️ Google Cloud Storage não disponível. Usando coleta via yfinance.")
     
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     
@@ -250,11 +257,14 @@ for setor, ativos in ATIVOS_POR_SETOR.items():
 TODOS_ATIVOS = sorted(list(set(TODOS_ATIVOS)))
 
 # =============================================================================
-# CLASSE: GOVERNANÇA DE MODELO
+# CLASSE: GOVERNANÇA DE MODELO (P-10: Concept Drift)
 # =============================================================================
 
 class GovernancaModelo:
-    """Classe para monitoramento e governança de modelos ML com concept drift"""
+    """
+    Classe para monitoramento e governança de modelos ML
+    P-10: Implementa detecção de Concept Drift
+    """
     
     def __init__(self, ativo, max_historico=DRIFT_WINDOW):
         self.ativo = ativo
@@ -282,7 +292,9 @@ class GovernancaModelo:
             self.auc_maximo = auc
     
     def verificar_alertas(self):
-        """Verifica se há alertas de degradação de performance e concept drift"""
+        """
+        P-10: Verifica alertas incluindo Concept Drift
+        """
         if not self.historico_auc:
             return []
         
@@ -305,13 +317,13 @@ class GovernancaModelo:
                     'mensagem': f'Degradação de {degradacao*100:.1f}% em relação ao máximo ({self.auc_maximo:.3f})'
                 })
         
-        # P-10: Concept Drift - Tendência de queda consistente
+        # P-10: CONCEPT DRIFT - Tendência de queda consistente
         if len(self.historico_auc) >= 5:
             ultimos_5 = self.historico_auc[-5:]
             if all(ultimos_5[i] > ultimos_5[i+1] for i in range(len(ultimos_5)-1)):
                 alertas.append({
                     'tipo': 'CONCEPT DRIFT',
-                    'mensagem': 'Tendência de queda consistente nos últimos 5 períodos - possível drift de conceito'
+                    'mensagem': '🚨 ALERTA DE CONCEPT DRIFT: Tendência de queda consistente nos últimos 5 períodos - possível mudança no padrão dos dados'
                 })
         
         return alertas
@@ -334,7 +346,7 @@ class GovernancaModelo:
             status = 'Modelo requer atenção imediata'
         elif any(a['tipo'] in ['ATENÇÃO', 'CONCEPT DRIFT'] for a in alertas):
             severidade = 'warning'
-            status = 'Modelo em monitoramento'
+            status = 'Modelo em monitoramento - Possível Drift'
         else:
             severidade = 'success'
             status = 'Modelo operando normalmente'
@@ -392,17 +404,20 @@ SCORE_MAP_REACTION = {
 }
 
 # =============================================================================
-# CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR
+# CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR (P-4, P-5, P-6: Regras de Derrubada)
 # =============================================================================
 
 class AnalisadorPerfilInvestidor:
-    """Analisa perfil de risco e horizonte temporal do investidor com regras de derrubada"""
+    """
+    P-4, P-5, P-6: Analisa perfil com regras de derrubada e detecção de conflitos
+    """
     
     def __init__(self):
         self.nivel_risco = ""
         self.horizonte_tempo = ""
         self.dias_lookback_ml = 5
         self.regras_aplicadas = []
+        self.conflito_detectado = False
     
     def determinar_nivel_risco(self, pontuacao):
         """Traduz pontuação em perfil de risco"""
@@ -467,7 +482,7 @@ class AnalisadorPerfilInvestidor:
                 nivel_risco_original = nivel_risco
                 nivel_risco = 'INTERMEDIÁRIO'
                 self.regras_aplicadas.append(
-                    f"Perfil reduzido de {nivel_risco_original} para INTERMEDIÁRIO devido à baixa tolerância a perdas"
+                    f"⚠️ Perfil reduzido de {nivel_risco_original} para INTERMEDIÁRIO devido à baixa tolerância a perdas (venderia em queda de 10%)"
                 )
         
         # P-4: Regra de Derrubada 2 - Conhecimento iniciante
@@ -476,24 +491,23 @@ class AnalisadorPerfilInvestidor:
                 nivel_risco_original = nivel_risco
                 nivel_risco = 'MODERADO'
                 self.regras_aplicadas.append(
-                    f"Perfil reduzido de {nivel_risco_original} para MODERADO devido ao conhecimento iniciante"
+                    f"⚠️ Perfil reduzido de {nivel_risco_original} para MODERADO devido ao conhecimento iniciante"
                 )
         
         # P-5: Conflito de Horizonte/Risco
-        conflito_detectado = False
         if nivel_risco == 'AVANÇADO' and respostas_risco['liquidity'] == 'A':
-            conflito_detectado = True
+            self.conflito_detectado = True
             ml_lookback = 20
             horizonte_tempo = "MÉDIO PRAZO"
             self.regras_aplicadas.append(
-                "CONFLITO: Perfil AVANÇADO com liquidez de curto prazo. Horizonte ajustado para MÉDIO PRAZO (20 dias)"
+                "🚨 CONFLITO DETECTADO: Perfil AVANÇADO com necessidade de liquidez de curto prazo. Horizonte ajustado para MÉDIO PRAZO (20 dias) para reduzir risco"
             )
         
         self.nivel_risco = nivel_risco
         self.horizonte_tempo = horizonte_tempo
         self.dias_lookback_ml = ml_lookback
         
-        return nivel_risco, horizonte_tempo, ml_lookback, pontuacao, conflito_detectado
+        return nivel_risco, horizonte_tempo, ml_lookback, pontuacao, self.conflito_detectado
 
 # =============================================================================
 # FUNÇÕES DE ESTILO E VISUALIZAÇÃO
@@ -548,11 +562,14 @@ def obter_template_grafico():
     }
 
 # =============================================================================
-# CLASSE: ENGENHEIRO DE FEATURES
+# CLASSE: ENGENHEIRO DE FEATURES (P-9: Elliott Wave)
 # =============================================================================
 
 class EngenheiroFeatures:
-    """Calcula indicadores técnicos e fundamentalistas com máxima profundidade"""
+    """
+    Calcula indicadores técnicos e fundamentalistas
+    P-9: Implementa feature Elliott Wave
+    """
     
     @staticmethod
     def calcular_indicadores_tecnicos(hist):
@@ -777,7 +794,10 @@ class EngenheiroFeatures:
 # =============================================================================
 
 class ColetorDados:
-    """Coleta e processa dados de mercado via Google Cloud Storage"""
+    """
+    Coleta e processa dados de mercado
+    Suporta Google Cloud Storage (GCS) e fallback para yfinance
+    """
     
     def __init__(self, periodo=PERIODO_DADOS):
         self.periodo = periodo
@@ -787,10 +807,14 @@ class ColetorDados:
         self.dados_macro = {}
         self.metricas_performance = pd.DataFrame()
         self.df_master = None
+        self.usar_gcs = GCS_AVAILABLE
     
     def carregar_dados_gcs(self):
         """Carrega dados consolidados do Google Cloud Storage"""
-        print("\n📊 Carregando dados do GCS...")
+        if not self.usar_gcs:
+            return False
+            
+        print("\n📊 Tentando carregar dados do GCS...")
         print(f"Bucket: {GCS_BUCKET_NAME}")
         print(f"Arquivo: {GCS_MASTER_FILE_PATH}")
         
@@ -805,66 +829,55 @@ class ColetorDados:
             self.df_master = pd.read_csv(io.StringIO(csv_data))
             self.df_master['Date'] = pd.to_datetime(self.df_master['Date'])
             
-            print(f"✓ Dados carregados: {len(self.df_master)} linhas")
+            print(f"✓ Dados GCS carregados: {len(self.df_master)} linhas")
             print(f"✓ Ativos únicos: {self.df_master['ticker'].nunique()}")
             print(f"✓ Período: {self.df_master['Date'].min()} até {self.df_master['Date'].max()}")
             
             return True
             
         except Exception as e:
-            print(f"❌ Erro ao carregar dados do GCS: {str(e)}")
-            st.error(f"Erro ao conectar ao GCS: {str(e)}")
+            print(f"⚠️ Erro ao carregar dados do GCS: {str(e)}")
+            print("→ Usando fallback para yfinance")
+            self.usar_gcs = False
             return False
     
-    def obter_dados_ativo(self, simbolo):
-        """Obtém dados históricos de um ativo específico do GCS"""
-        if self.df_master is None:
-            if not self.carregar_dados_gcs():
-                return None
-        
-        df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
-        
-        if df_ativo.empty:
-            return None
-        
-        df_ativo = df_ativo.set_index('Date').sort_index()
-        
-        if 'ticker' in df_ativo.columns:
-            df_ativo = df_ativo.drop('ticker', axis=1)
-        
-        return df_ativo
-    
     def coletar_dados_macroeconomicos(self):
-        """Coleta dados macroeconômicos do GCS"""
-        print("\n📊 Coletando dados macroeconômicos do GCS...")
-        
-        if self.df_master is None:
-            if not self.carregar_dados_gcs():
-                return
+        """Coleta dados macroeconômicos"""
+        print("\n📊 Coletando dados macroeconômicos...")
         
         indices = {
             'IBOV': '^BVSP',
             'SP500': '^GSPC',
-            'NASDAQ': '^IXIC',
             'VIX': '^VIX',
-            'DXY': 'DX-Y.NYB',
+            'USD_BRL': 'BRL=X',
             'GOLD': 'GC=F',
             'OIL': 'CL=F'
         }
         
         for nome, simbolo in indices.items():
             try:
-                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
-                
-                if not df_macro.empty:
-                    df_macro = df_macro.set_index('Date').sort_index()
-                    if 'Close' in df_macro.columns:
-                        self.dados_macro[nome] = df_macro['Close'].pct_change()
-                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                if self.usar_gcs and self.df_master is not None:
+                    df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                    
+                    if not df_macro.empty:
+                        df_macro = df_macro.set_index('Date').sort_index()
+                        if 'Close' in df_macro.columns:
+                            self.dados_macro[nome] = df_macro['Close'].pct_change()
+                            print(f"  ✓ {nome}: {len(df_macro)} dias (GCS)")
+                        else:
+                            self.dados_macro[nome] = pd.Series()
                     else:
                         self.dados_macro[nome] = pd.Series()
                 else:
-                    self.dados_macro[nome] = pd.Series()
+                    # Fallback para yfinance
+                    ticker = yf.Ticker(simbolo)
+                    hist = ticker.history(period=self.periodo)
+                    
+                    if not hist.empty:
+                        self.dados_macro[nome] = hist['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(hist)} dias (yfinance)")
+                    else:
+                        self.dados_macro[nome] = pd.Series()
 
             except Exception as e:
                 print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
@@ -906,78 +919,98 @@ class ColetorDados:
         return df
     
     def coletar_e_processar_dados(self, simbolos):
-        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
-        
-        if self.df_master is None:
-            if not self.carregar_dados_gcs():
-                return False
+        """
+        Coleta dados dos ativos (GCS ou yfinance) e os processa
+        """
+        # Tenta carregar do GCS primeiro
+        if self.usar_gcs:
+            self.carregar_dados_gcs()
         
         print(f"\n{'='*60}")
-        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"Fonte: {'GCS' if self.usar_gcs and self.df_master is not None else 'yfinance'}")
         print(f"{'='*60}\n")
         
         self.ativos_sucesso = []
         lista_fundamentalistas = []
         
+        self.coletar_dados_macroeconomicos()
+        
         for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
             try:
-                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                # Coleta dados do ativo
+                if self.usar_gcs and self.df_master is not None:
+                    df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                    
+                    if df_ativo.empty:
+                        print(f"  ⚠️ {simbolo}: Não encontrado no GCS, tentando yfinance...")
+                        df_ativo = yf.download(simbolo, period=self.periodo, progress=False)
+                    else:
+                        df_ativo = df_ativo.set_index('Date').sort_index()
+                        if 'ticker' in df_ativo.columns:
+                            df_ativo = df_ativo.drop('ticker', axis=1)
+                else:
+                    df_ativo = yf.download(simbolo, period=self.periodo, progress=False)
                 
                 if df_ativo.empty:
-                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    print(f"  ⚠️ {simbolo}: Sem dados disponíveis")
                     continue
                 
-                df_ativo = df_ativo.set_index('Date').sort_index()
-                
-                if 'ticker' in df_ativo.columns:
-                    df_ativo = df_ativo.drop('ticker', axis=1)
-                
+                # Engenharia de features
                 df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
-                
+                df_features = self.adicionar_correlacoes_macro(df_features, simbolo)
                 df_features = df_features.dropna(subset=['Close', 'returns'])
                 
+                # Validação
                 min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
                 if len(df_features) < min_dias_flexivel:
-                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias (mínimo: {min_dias_flexivel})")
                     continue
                 
+                # Remove linhas com muitos NaNs
                 threshold_nan_ratio = 0.5
                 df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
                 
                 if len(df_features) < min_dias_flexivel:
-                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    print(f"  ⚠️ {simbolo}: Poucos dados após limpeza ({len(df_features)} dias)")
                     continue
 
                 self.dados_por_ativo[simbolo] = df_features
                 self.ativos_sucesso.append(simbolo)
                 
-                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                print(f"  ✓ {simbolo}: {len(df_features)} dias, {len(df_features.columns)} features")
                 
-                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
-                if fund_cols:
-                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
-                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
-                    
-                    features_fund_cleaned['Ticker'] = simbolo
-                    
-                    if 'sector' in df_features.columns:
-                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
-                    if 'industry' in df_features.columns:
-                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
-                    
-                    lista_fundamentalistas.append(features_fund_cleaned)
-                else:
-                    lista_fundamentalistas.append({'Ticker': simbolo})
+                # Coleta dados fundamentalistas
+                try:
+                    ticker = yf.Ticker(simbolo)
+                    info = ticker.info
+                    features_fund = EngenheiroFeatures.calcular_features_fundamentalistas(info)
+                    features_fund['Ticker'] = simbolo
+                    lista_fundamentalistas.append(features_fund)
+                except Exception as fund_e:
+                    print(f"  ⚠️ {simbolo}: Erro fundamentalista - {str(fund_e)[:50]}")
+                    features_fund = {'Ticker': simbolo}
+                    expected_fund_cols = [
+                        'pe_ratio', 'forward_pe', 'pb_ratio', 'ps_ratio', 'peg_ratio', 'ev_ebitda',
+                        'div_yield', 'payout_ratio', 'roe', 'roa', 'roic', 'profit_margin',
+                        'operating_margin', 'gross_margin', 'debt_to_equity', 'current_ratio',
+                        'quick_ratio', 'revenue_growth', 'earnings_growth', 'market_cap',
+                        'enterprise_value', 'beta', 'sector', 'industry'
+                    ]
+                    for col in expected_fund_cols:
+                        features_fund[col] = np.nan
+                    lista_fundamentalistas.append(features_fund)
             
             except Exception as e:
                 print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
                 continue
         
         if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
-            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos.")
             print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
             return False
         
+        # Processa dados fundamentalistas
         if lista_fundamentalistas:
             self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
             self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
@@ -995,6 +1028,7 @@ class ColetorDados:
                     self.dados_fundamentalistas[numeric_cols]
                 )
         
+        # Calcula métricas de performance
         metricas = {}
         for simbolo in self.ativos_sucesso:
             if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
@@ -1017,4 +1051,4 @@ class ColetorDados:
         print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
         return True
 
-# Arquivo muito extenso - continuando na próxima parte...
+# Devido ao limite de tamanho, vou continuar o arquivo em uma segunda parte...
