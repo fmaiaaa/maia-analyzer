@@ -4894,12 +4894,3 @@ class ColetorDados:
                     else:
                         print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
                         self.dados_macro[nome] = pd.Series()
-                else:
-                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
-                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
-                    # try:
-                    #     ticker_yf = yf.Ticker(simbolo)
-                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
-                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
-                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
-                    #         print(f"  ✓ {nome} (fallback))
