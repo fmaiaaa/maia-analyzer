@@ -942,93 +942,118 @@ class ColetorDados:
         return True
 
 # Function to collect data (enhanced version)
-def coletar_dados_ativos(lista_ativos, periodo='max'):
+# =============================================================================
+# FUNÇÃO DE COLETA DE DADOS (LENDO ARQUIVO ÚNICO DO GCS) - ATUALIZADA
+# =============================================================================
+
+def coletar_dados_ativos(lista_ativos, periodo=None): 
     """
-    Coleta dados históricos de múltiplos ativos com tratamento robusto de erros
-    
+    Coleta dados históricos lendo um ÚNICO arquivo mestre do GCS e 
+    extrai a série temporal de cada ativo solicitado.
+    Substitui a lógica de yfinance.download.
     """
     dados_coletados = {}
     ativos_com_erro = []
     
-    progress_bar = st.progress(0)
-    status_text = st.empty()
+    # Adaptação para Streamlit progress bar
+    try:
+        import streamlit as st
+    except ImportError:
+        st = None
+
+    # Limpar elementos Streamlit da coleta antiga
+    progress_bar = st.progress(0) if st else None
+    status_text = st.empty() if st else None
+
+    # ----------------------------------------------------
+    # PASSO 1: BAIXAR O ARQUIVO MESTRE DO GCS
+    # ----------------------------------------------------
+    try:
+        if st:
+            status_text.text(f"Baixando arquivo mestre do GCS: {GCS_MASTER_FILE_PATH}...")
+        
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(GCS_BUCKET_NAME)
+        blob = bucket.blob(GCS_MASTER_FILE_PATH)
+
+        if not blob.exists():
+            raise FileNotFoundError(f"Arquivo mestre não encontrado: {GCS_MASTER_FILE_PATH}")
+
+        # Baixa o blob para um buffer de memória
+        downloaded_file = blob.download_as_text()
+        
+        # Lê o CSV. Assumimos que a Data está no índice.
+        df_master = pd.read_csv(
+            io.StringIO(downloaded_file), 
+            index_col=0, 
+            parse_dates=True,
+        )
+        df_master.index.name = 'Date'
+        
+        if df_master.empty:
+            raise ValueError("O arquivo mestre lido está vazio.")
+
+    except Exception as e:
+        if st:
+            status_text.empty()
+            if progress_bar: progress_bar.empty()
+            st.error(f"❌ ERRO CRÍTICO ao carregar o arquivo mestre do GCS: {e}")
+        else:
+            print(f"❌ ERRO CRÍTICO ao carregar o arquivo mestre do GCS: {e}")
+        return None 
+    
+    # ----------------------------------------------------
+    # PASSO 2: EXTRAIR DADOS INDIVIDUAIS
+    # ----------------------------------------------------
     
     total = len(lista_ativos)
     
-    for idx, ticker in enumerate(tqdm(lista_ativos, desc="📥 Coletando dados")):
-        try:
-            status_text.text(f"Coletando {ticker} ({idx+1}/{total})...")
-            progress_bar.progress((idx + 1) / total)
-            
-            # Add retry logic with exponential backoff
-            max_retries = 3
-            retry_delay = 1
-            
-            for attempt in range(max_retries):
-                try:
-                    # Download with extended timeout
-                    df = yf.download(
-                        ticker, 
-                        period=periodo, 
-                        progress=False,
-                        timeout=10,
-                        # Add headers to avoid rate limiting
-                        headers={'User-Agent': 'Mozilla/5.0'}
-                    )
-                    
-                    if df.empty or len(df) < MIN_DIAS_HISTORICO:
-                        if attempt < max_retries - 1:
-                            time.sleep(retry_delay)
-                            retry_delay *= 2
-                            continue
-                        else:
-                            ativos_com_erro.append((ticker, "Sem dados históricos suficientes"))
-                            break
-                    
-                    # Successful download
-                    dados_coletados[ticker] = df
-                    break
-                    
-                except Exception as e:
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-                    else:
-                        ativos_com_erro.append((ticker, str(e)))
-                        
-        except Exception as e:
-            ativos_com_erro.append((ticker, str(e)))
-            continue
-    
-    progress_bar.empty()
-    status_text.empty()
-    
-    # Display collection summary
-    if ativos_com_erro:
-        with st.expander(f"⚠️ Ativos com problemas ({len(ativos_com_erro)}):"):
-            for ticker, erro in ativos_com_erro[:10]:  # Show first 10
-                st.text(f"  • {ticker}: {erro}")
-            if len(ativos_com_erro) > 10:
-                st.text(f"  ... e mais {len(ativos_com_erro) - 10} ativos")
-    
-    st.success(f"✓ Total coletado: {len(dados_coletados)}")
-    
-    # Validate minimum assets collected
-    if len(dados_coletados) < NUM_ATIVOS_PORTFOLIO:
-        st.error("""
-        ❌ ERRO: Apenas {len(dados_coletados)} ativos coletados.
-            Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos
+    for idx, ticker in enumerate(tqdm(lista_ativos, desc="⚙️ Extraindo dados de ativos")):
         
-        💡 Dicas:
-          • Verifique sua conexão com a internet
-          • Tente selecionar mais ativos ou setores diferentes
-          • Alguns ativos podem estar sem dados recentes
-          • Aguarde alguns minutos e tente novamente (possível rate limiting)
-        """.format(len=len, NUM_ATIVOS_PORTFOLIO=NUM_ATIVOS_PORTFOLIO))
+        if st:
+            status_text.text(f"Extraindo {ticker} ({idx+1}/{total}) do arquivo mestre...")
+            if progress_bar: progress_bar.progress((idx + 1) / total)
+
+        try:
+            # 1. Tenta encontrar colunas exatas (ex: 'PETR4.SA - Close') ou parciais
+            cols_ticker = [col for col in df_master.columns if ticker in str(col)]
+            
+            # 2. Verifica se há colunas suficientes (OHLCV = 5)
+            if len(cols_ticker) < 5:
+                raise KeyError(f"Apenas {len(cols_ticker)} colunas encontradas para {ticker}.")
+            
+            # 3. Extrai e copia os dados
+            df_asset = df_master[cols_ticker].copy()
+            
+            # 4. Renomeia as colunas para o formato padrão do seu sistema
+            # Esta linha assume que as colunas extraídas estão na ordem correta (Open, High, Low, Close, Volume)
+            df_asset.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
+            
+            # 5. Validação (use MIN_DIAS_HISTORICO do seu código)
+            if df_asset.empty or len(df_asset.dropna()) < MIN_DIAS_HISTORICO: 
+                 ativos_com_erro.append((ticker, f"Dados insuficientes ({len(df_asset.dropna())} dias válidos)."))
+                 continue
+                 
+            dados_coletados[ticker] = df_asset.dropna()
+            
+        except KeyError as e:
+            ativos_com_erro.append((ticker, f"Colunas não encontradas/inválidas no arquivo mestre: {e}"))
+            continue
+        except Exception as e:
+            ativos_com_erro.append((ticker, f"Erro genérico ao extrair dados para {ticker}: {e}"))
+            continue
+
+    # Limpar elementos Streamlit
+    if st:
+        if progress_bar: progress_bar.empty()
+        status_text.empty()
+    
+    # Validação final de ativos mínimos
+    if len(dados_coletados) < NUM_ATIVOS_PORTFOLIO:
+        # Se for insuficiente, retorna None e a lógica de erro do ColetorDados será ativada
         return None
     
     return dados_coletados
-
 # =============================================================================
 # CLASSE: MODELAGEM DE VOLATILIDADE GARCH
 # =============================================================================
