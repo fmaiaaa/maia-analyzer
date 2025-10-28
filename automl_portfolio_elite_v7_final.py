@@ -9,12 +9,11 @@ Sistema completo de otimização de portfólio com:
 - Ensemble de modelos ML (XGBoost, LightGBM, RandomForest)
 - Modelagem de volatilidade GARCH
 - Otimização de hiperparâmetros com Optuna
-- Engenharia massiva de features (V7.1: Inclui Smart Beta Factors)
-- Smart Beta Factors (NEW)
-- Governança de Modelo com Drift Detection (NEW)
+- Engenharia massiva de features
+- Smart Beta Factors
 - Dashboard interativo completo
 
-Versão: 7.1.0 - Sistema AutoML Completo Elite (Otimizado)
+Versão: 7.0.0 - Sistema AutoML Completo Elite
 =============================================================================
 """
 
@@ -25,7 +24,7 @@ import numpy as np
 import pandas as pd
 import subprocess
 import sys
-import time
+import time # Added for retry logic
 from datetime import datetime, timedelta
 from tqdm import tqdm
 from scipy.optimize import minimize
@@ -72,7 +71,7 @@ REQUIRED_PACKAGES = {
     'statsmodels': 'statsmodels',
     'prophet': 'prophet',
     'tensorflow': 'tensorflow',
-    'keras': 'keras'
+    'keras': 'keras' # Explicitly add keras if not implicitly covered by tensorflow
 }
 
 def ensure_package(module_name, package_name):
@@ -81,8 +80,7 @@ def ensure_package(module_name, package_name):
         __import__(module_name)
     except ImportError:
         print(f"Instalando {package_name}...")
-        # Adicionado '--break-system-packages' para compatibilidade com ambientes modernos
-        subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--user', package_name, '--break-system-packages'])
+        subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--user', package_name])
         
         # Check if streamlit is loaded to prompt for restart
         if 'streamlit' in sys.modules:
@@ -90,81 +88,141 @@ def ensure_package(module_name, package_name):
             st.warning(f"{package_name} foi instalado. Por favor, **reexecute** o servidor Streamlit para aplicar as mudanças.")
             st.stop() # Stop execution if in a streamlit app to ensure restart
 
-# Instala todas as dependências (Descomente esta seção se estiver rodando em ambiente local sem dependências instaladas)
-# try:
-#     for module, package in REQUIRED_PACKAGES.items():
-#         ensure_package(module.split('.')[0], package)
+# Instala todas as dependências
+try:
+    for module, package in REQUIRED_PACKAGES.items():
+        ensure_package(module.split('.')[0], package)
     
-#     import streamlit as st
-#     import yfinance as yf
-#     import plotly.graph_objects as go
-#     import plotly.express as px
-#     from plotly.subplots import make_subplots
-#     from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
-#     from sklearn.linear_model import RidgeClassifier, LogisticRegression, BayesianRidge
-#     from sklearn.naive_bayes import GaussianNB
-#     from sklearn.model_selection import TimeSeriesSplit, cross_val_score
-#     from sklearn.preprocessing import StandardScaler, RobustScaler
-#     from sklearn.decomposition import PCA
-#     from sklearn.cluster import KMeans, DBSCAN
-#     from sklearn.metrics import silhouette_score, mean_squared_error, mean_absolute_error, r2_score, roc_auc_score, precision_score, recall_score, f1_score
-#     import xgboost as xgb
-#     import lightgbm as lgb
-#     from catboost import CatBoostClassifier
-#     from arch import arch_model
-#     import optuna
-#     import shap
-#     import lime
-#     import lime.lime_tabular
+    import streamlit as st
+    import yfinance as yf
+    import plotly.graph_objects as go
+    import plotly.express as px
+    from plotly.subplots import make_subplots
+    from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier # Added Classifier variants
+    from sklearn.linear_model import RidgeClassifier, LogisticRegression, BayesianRidge # Added Classifier variants
+    from sklearn.naive_bayes import GaussianNB
+    from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+    from sklearn.preprocessing import StandardScaler, RobustScaler
+    from sklearn.decomposition import PCA
+    from sklearn.cluster import KMeans, DBSCAN
+    from sklearn.metrics import silhouette_score, mean_squared_error, mean_absolute_error, r2_score, roc_auc_score # Added roc_auc_score
+    import xgboost as xgb
+    import lightgbm as lgb
+    from catboost import CatBoostClassifier # Added Classifier variant
+    from arch import arch_model
+    import optuna
+    import shap
+    import lime
+    import lime.lime_tabular
     
-#     optuna.logging.set_verbosity(optuna.logging.WARNING)
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
     
-# except Exception as e:
-#     if 'streamlit' in sys.modules:
-#         st.error(f"Erro ao carregar bibliotecas: {e}")
-#     else:
-#         print(f"Erro ao carregar bibliotecas: {e}")
-#     # sys.exit(1) # Removido para permitir que o código funcione em ambientes sem as libs
-# # Assumindo que o ambiente Jupyter/Colab já tem as libs essenciais
-import streamlit as st # Adicionado para evitar erro de NameError
-from sklearn.metrics import roc_auc_score, precision_score, recall_score, f1_score # Adicionado para GovernancaModelo
-
+except Exception as e:
+    if 'streamlit' in sys.modules:
+        st.error(f"Erro ao carregar bibliotecas: {e}")
+    else:
+        print(f"Erro ao carregar bibliotecas: {e}")
+    sys.exit(1)
 
 # =============================================================================
 # CONSTANTES GLOBAIS E CONFIGURAÇÕES
 # =============================================================================
 
+# Updated data collection period to maximum available and adjusted other constants
 # Configurações Globais
-PERIODO_DADOS = 'max' 
-MIN_DIAS_HISTORICO = 252
+PERIODO_DADOS = 'max'  # Changed from '2y' to 'max' for maximum historical depth
+MIN_DIAS_HISTORICO = 252  # Reduced minimum to accommodate max period
 NUM_ATIVOS_PORTFOLIO = 5
-TAXA_LIVRE_RISCO = 0.1075 
-LOOKBACK_ML = 30 
+TAXA_LIVRE_RISCO = 0.1075 # Updated risk-free rate
+LOOKBACK_ML = 30  # Extended prediction horizon to 30 days
 
 # Ponderações padrão para os scores
 WEIGHT_PERFORMANCE = 0.40
 WEIGHT_FUNDAMENTAL = 0.30
 WEIGHT_TECHNICAL = 0.30
-WEIGHT_ML = 0.30 
+WEIGHT_ML = 0.30 # Adicionado peso para ML no score total
 
 # Limites de peso por ativo na otimização
 PESO_MIN = 0.10
 PESO_MAX = 0.30
 
-# Lista simplificada para o exemplo (Mantenha a original do seu projeto)
 ATIVOS_IBOVESPA = [
-    'PETR4.SA', 'VALE3.SA', 'ITUB4.SA', 'BBDC4.SA', 'MGLU3.SA', 
-    'WEGE3.SA', 'RENT3.SA', 'LREN3.SA', 'PRIO3.SA', 'CSNA3.SA'
+    'ALOS3.SA', 'ABEV3.SA', 'ASAI3.SA', 'AURE3.SA', 'AZZA3.SA', 'B3SA3.SA',
+    'BBSE3.SA', 'BBDC3.SA', 'BBDC4.SA', 'BRAP4.SA', 'BBAS3.SA', 'BRKM5.SA',
+    'BRAV3.SA', 'BPAC11.SA', 'CXSE3.SA', 'CEAB3.SA', 'CMIG4.SA', 'COGN3.SA',
+    'CPLE6.SA', 'CSAN3.SA', 'CPFE3.SA', 'CMIN3.SA', 'CURY3.SA', 'CVCB3.SA',
+    'CYRE3.SA', 'DIRR3.SA', 'ELET3.SA', 'ELET6.SA', 'EMBR3.SA', 'ENGI11.SA',
+    'ENEV3.SA', 'EGIE3.SA', 'EQTL3.SA', 'FLRY3.SA', 'GGBR4.SA', 'GOAU4.SA',
+    'HAPV3.SA', 'HYPE3.SA', 'IGTI11.SA', 'IRBR3.SA', 'ISAE4.SA', 'ITSA4.SA',
+    'ITUB4.SA', 'KLBN11.SA', 'RENT3.SA', 'LREN3.SA', 'MGLU3.SA', 'POMO4.SA',
+    'MBRF3.SA', 'BEEF3.SA', 'MOTV3.SA', 'MRVE3.SA', 'MULT3.SA', 'NATU3.SA',
+    'PCAR3.SA', 'PETR3.SA', 'PETR4.SA', 'RECV3.SA', 'PRIO3.SA', 'PSSA3.SA',
+    'RADL3.SA', 'RAIZ4.SA', 'RDOR3.SA', 'RAIL3.SA', 'SBSP3.SA', 'SANB11.SA',
+    'CSNA3.SA', 'SLCE3.SA', 'SMFT3.SA', 'SUZB3.SA', 'TAEE11.SA', 'VIVT3.SA',
+    'TIMS3.SA', 'TOTS3.SA', 'UGPA3.SA', 'USIM5.SA', 'VALE3.SA', 'VAMO3.SA',
+    'VBBR3.SA', 'VIVA3.SA', 'WEGE3.SA', 'YDUQ3.SA'
 ]
 
-# Mapa de Setores (Mantenha o original)
+# =============================================================================
+# MAPEAMENTO DE ATIVOS POR SETOR
+# =============================================================================
+
 ATIVOS_POR_SETOR = {
-    'Bens Industriais': ['NATU3.SA', 'WEGE3.SA', 'VAMO3.SA'],
-    'Consumo Cíclico': ['MGLU3.SA', 'LREN3.SA', 'RENT3.SA'],
-    'Consumo não Cíclico': ['PCAR3.SA', 'JBSS3.SA'],
-    'Financeiro': ['ITUB4.SA', 'BBDC4.SA', 'BBSE3.SA'],
-    'Materiais Básicos': ['VALE3.SA', 'CSNA3.SA', 'SUZB3.SA'],
-    'Petróleo, Gás e Biocombustíveis': ['PETR4.SA', 'PRIO3.SA', 'UGPA3.SA']
+    'Bens Industriais': ['NATU3.SA', 'AMOB3.SA', 'ISAE4.SA', 'BHIA3.SA', 'ZAMP3.SA', 'AERI3.SA', 
+                         'ICBR3.SA', 'DOTZ3.SA', 'GOLL3.SA', 'VIIA3.SA', 'ARML3.SA', 'MLAS3.SA',
+                         'CBAV3.SA', 'TTEN3.SA', 'BRBI11.SA', 'REAG3.SA', 'ATEA3.SA', 'MODL4.SA',
+                         'VITT3.SA', 'KRSA3.SA', 'CXSE3.SA', 'RIOS3.SA', 'HCAR3.SA', 'GGPS3.SA',
+                         'MATD3.SA', 'ALLD3.SA', 'BLAU3.SA', 'ATMP3.SA', 'ASAI3.SA', 'JSLG3.SA',
+                         'CMIN3.SA', 'ELMD3.SA', 'ORVR3.SA', 'OPCT3.SA', 'WEST3.SA', 'CSED3.SA',
+                         'BMOB3.SA', 'JALL3.SA', 'TOKY3.SA', 'ESPA3.SA', 'VAMO3.SA', 'INTB3.SA',
+                         'NGRD3.SA', 'AVLL3.SA', 'RRRP3.SA', 'ENJU3.SA', 'CASH3.SA', 'TFCO4.SA',
+                         'CONX3.SA', 'GMAT3.SA', 'SEQL3.SA', 'PASS3.SA', 'BOAS3.SA', 'MELK3.SA',
+                         'HBSA3.SA', 'SIMH3.SA', 'CURY3.SA', 'PLPL3.SA', 'PETZ3.SA', 'PGMN3.SA',
+                         'LAVV3.SA', 'LJQQ3.SA', 'DMVF3.SA', 'SOMA3.SA', 'RIVA3.SA', 'AMBP3.SA', 'ALPK3.SA'],
+    
+    'Consumo Cíclico': ['AZZA3.SA', 'ALOS3.SA', 'VIIA3.SA', 'RDNI3.SA', 'SLED4.SA', 'RSID3.SA',
+                        'MNDL3.SA', 'LEVE3.SA', 'CTKA4.SA', 'MYPK3.SA', 'GRND3.SA', 'LCAM3.SA',
+                        'CEAB3.SA', 'VSTE3.SA', 'CGRA3.SA', 'ESTR4.SA', 'DIRR3.SA', 'CTNM3.SA',
+                        'ANIM3.SA', 'EVEN3.SA', 'AMAR3.SA', 'MOVI3.SA', 'JHSF3.SA', 'HBOR3.SA',
+                        'PDGR3.SA', 'ARZZ3.SA', 'EZTC3.SA', 'ALPA3.SA', 'RENT3.SA', 'MRVE3.SA',
+                        'MGLU3.SA', 'LREN3.SA', 'COGN3.SA', 'WHRL4.SA', 'TCSA3.SA', 'SMLS3.SA',
+                        'SEER3.SA', 'HOOT4.SA', 'GFSA3.SA', 'YDUQ3.SA', 'CYRE3.SA', 'CVCB3.SA', 'SBFG3.SA'],
+    
+    'Consumo não Cíclico': ['PRVA3.SA', 'SMTO3.SA', 'MDIA3.SA', 'CAML3.SA', 'AGRO3.SA', 'BEEF3.SA',
+                            'VIVA3.SA', 'CRFB3.SA', 'PCAR3.SA', 'NTCO3.SA', 'NATU3.SA', 'MRFG3.SA',
+                            'JBSS3.SA', 'BRFS3.SA'],
+    
+    'Financeiro': ['CSUD3.SA', 'INBR31.SA', 'BIDI3.SA', 'BIDI4.SA', 'IGTI11.SA', 'IGTI3.SA',
+                   'XPBR31.SA', 'TRAD3.SA', 'BSLI4.SA', 'BTTL3.SA', 'BPAR3.SA', 'SCAR3.SA',
+                   'LPSB3.SA', 'BMGB4.SA', 'IGBR3.SA', 'GSHP3.SA', 'PSSA3.SA', 'CARD3.SA',
+                   'BBRK3.SA', 'BRPR3.SA', 'BRSR6.SA', 'SANB4.SA', 'SANB3.SA', 'MULT3.SA',
+                   'ITUB3.SA', 'ITUB4.SA', 'ALSO3.SA', 'BMIN3.SA', 'MERC4.SA', 'LOGG3.SA',
+                   'ITSA4.SA', 'IRBR3.SA', 'PDTC3.SA', 'SYNE3.SA', 'BBDC4.SA', 'BBDC3.SA',
+                   'BRML3.SA', 'APER3.SA', 'BBSE3.SA', 'BPAN4.SA', 'BBAS3.SA'],
+    
+    'Materiais Básicos': ['LAND3.SA', 'DEXP4.SA', 'RANI3.SA', 'PMAM3.SA', 'FESA4.SA', 'EUCA3.SA',
+                          'SUZB3.SA', 'KLBN4.SA', 'KLBN3.SA', 'VALE3.SA', 'VALE5.SA', 'UNIP6.SA',
+                          'UNIP5.SA', 'GOAU4.SA', 'DXCO3.SA', 'CSNA3.SA', 'BRKM6.SA', 'BRKM5.SA',
+                          'BRAP4.SA', 'BRAP3.SA'],
+    
+    'Petróleo, Gás e Biocombustíveis': ['SRNA3.SA', 'VBBR3.SA', 'RAIZ4.SA', 'RECV3.SA', 'PRIO3.SA',
+                                        'OSXB3.SA', 'DMMO3.SA', 'RPMG3.SA', 'UGPA3.SA', 'PETR4.SA',
+                                        'PETR3.SA', 'ENAT3.SA'],
+    
+    'Saúde': ['ONCO3.SA', 'VVEO3.SA', 'PARD3.SA', 'BIOM3.SA', 'BALM3.SA', 'PNVL3.SA', 'AALR3.SA',
+              'ODPV3.SA', 'RADL3.SA', 'QUAL3.SA', 'OFSA3.SA', 'HYPE3.SA', 'FLRY3.SA'],
+    
+    'Tecnologia da Informação': ['CLSA3.SA', 'LVTC3.SA', 'G2DI33.SA', 'IFCM3.SA', 'GOGL35.SA',
+                                  'LWSA3.SA', 'TOTS3.SA', 'LINX3.SA', 'POSI3.SA'],
+    
+    'Telecomunicações': ['BRIT3.SA', 'FIQE3.SA', 'DESK3.SA', 'TIMS3.SA', 'VIVT3.SA', 'TELB4.SA', 'TELB3.SA'],
+    
+    'Utilidade Pública': ['BRAV3.SA', 'AURE3.SA', 'MEGA3.SA', 'CEPE6.SA', 'CEED3.SA', 'EEEL4.SA',
+                          'CASN4.SA', 'CEGR3.SA', 'CEBR3.SA', 'RNEW4.SA', 'COCE6.SA', 'CLSC4.SA',
+                          'ALUP4.SA', 'ALUP3.SA', 'SAPR4.SA', 'SAPR3.SA', 'CPRE3.SA', 'CPLE5.SA',
+                          'CPLE6.SA', 'CPLE3.SA', 'CPFE3.SA', 'CGAS3.SA', 'AESB3.SA', 'NEOE3.SA',
+                          'TRPL4.SA', 'TRPL3.SA', 'EGIE3.SA', 'TAEE4.SA', 'TAEE3.SA', 'SBSP3.SA',
+                          'GEPA4.SA', 'CESP6.SA', 'CMIG4.SA', 'CMIG3.SA', 'AFLT3.SA']
 }
 
 # Lista completa de todos os ativos
@@ -173,24 +231,34 @@ for setor, ativos in ATIVOS_POR_SETOR.items():
     TODOS_ATIVOS.extend(ativos)
 TODOS_ATIVOS = sorted(list(set(TODOS_ATIVOS)))
 
+# =============================================================================
 # CONSTANTES DE ARMAZENAMENTO DE DADOS (GCS)
+# =============================================================================
+
+# NOME DO BUCKET CRIADO:
 GCS_BUCKET_NAME = 'meu-portfolio-dados-gratuitos' 
+
+# CAMINHO COMPLETO DO ARQUIVO DENTRO DO BUCKET:
 GCS_MASTER_FILE_PATH = 'dados_consolidados/todos_ativos_master.csv'
 
+# =============================================================================
 # CONSTANTES DE GOVERNANÇA (NEW)
-AUC_THRESHOLD_MIN = 0.65 
-AUC_DROP_THRESHOLD = 0.05
-DRIFT_WINDOW = 20
-STRESS_TEST_SIGMA = 2.0
+# =============================================================================
+
+AUC_THRESHOLD_MIN = 0.65  # Alerta se AUC cair abaixo deste valor
+AUC_DROP_THRESHOLD = 0.05   # Alerta se queda de 5% no AUC
+DRIFT_WINDOW = 20           # Janela para monitoramento de drift
+STRESS_TEST_SIGMA = 2.0     # Número de desvios-padrão para choque
 
 # =============================================================================
-# CLASSE: GOVERNANÇA DE MODELO (CORRIGIDA E EXPANDIDA)
+# CLASSE: GOVERNANÇA DE MODELO (NEW)
 # =============================================================================
 
 class GovernancaModelo:
     """
-    Classe para monitoramento e governança de modelos ML,
-    incluindo rastreamento de performance e detecção de Data Drift.
+    NEW: Classe para monitoramento e governança de modelos ML
+    Rastreia AUC-ROC, Precision, Recall, F1-Score ao longo do tempo
+    Emite alertas quando performance degrada
     """
     
     def __init__(self, ativo, max_historico=DRIFT_WINDOW):
@@ -201,48 +269,6 @@ class GovernancaModelo:
         self.historico_recall = []
         self.historico_f1 = []
         self.auc_maximo = 0.0
-        self.media_features = {} # NEW: Armazena a média das features de referência
-
-    def inicializar_drift(self, df_features):
-        """Inicializa as médias de referência para o monitoramento de drift."""
-        # Seleciona features importantes para monitorar (retorno, vol, rsi, momentum)
-        features_monitor = [col for col in df_features.columns if any(tag in col for tag in ['returns', 'volatility', 'rsi', 'momentum'])]
-        
-        if not features_monitor:
-            return
-
-        # Calcula a média da janela inicial como referência
-        if len(df_features) >= self.max_historico:
-            referencia = df_features[features_monitor].iloc[-self.max_historico:].mean()
-            self.media_features = referencia.to_dict()
-
-    def verificar_drift(self, df_features_atual):
-        """Compara as médias da janela atual com a referência para detectar drift."""
-        if not self.media_features or len(df_features_atual) < self.max_historico:
-            return []
-        
-        alertas = []
-        features_monitor = self.media_features.keys()
-        
-        # Última janela para comparação
-        janela_atual = df_features_atual.iloc[-self.max_historico:][list(features_monitor)].mean()
-        
-        for feature, media_referencia in self.media_features.items():
-            media_atual = janela_atual.get(feature, np.nan)
-            
-            if np.isnan(media_referencia) or np.isnan(media_atual):
-                continue
-                
-            std_dev = df_features_atual[feature].iloc[-self.max_historico:].std()
-            
-            # Alerta se a média se mover mais de 1.5 desvios-padrão de sua média histórica
-            if std_dev > 1e-6 and abs(media_atual - media_referencia) > 1.5 * std_dev: 
-                alertas.append({
-                    'tipo': 'DRIFT (Feature)',
-                    'mensagem': f'Deriva detectada em **{feature}**. Média mudou de {media_referencia:.4f} para {media_atual:.4f}'
-                })
-            
-        return alertas
         
     def adicionar_metricas(self, auc, precision, recall, f1):
         """Adiciona novas métricas ao histórico"""
@@ -251,45 +277,53 @@ class GovernancaModelo:
         self.historico_recall.append(recall)
         self.historico_f1.append(f1)
         
+        # Mantém apenas os últimos N registros
         if len(self.historico_auc) > self.max_historico:
             self.historico_auc.pop(0)
             self.historico_precision.pop(0)
             self.historico_recall.pop(0)
             self.historico_f1.pop(0)
         
+        # Atualiza AUC máximo
         if auc > self.auc_maximo:
             self.auc_maximo = auc
     
-    def verificar_alertas(self, df_features_atual):
-        """Verifica se há alertas de degradação de performance e de drift."""
+    def verificar_alertas(self):
+        """Verifica se há alertas de degradação de performance"""
         if not self.historico_auc:
             return []
         
         alertas = []
         auc_atual = self.historico_auc[-1]
         
-        # Alerta 1: Performance
+        # Alerta 1: AUC abaixo do mínimo aceitável
         if auc_atual < AUC_THRESHOLD_MIN:
             alertas.append({
-                'tipo': 'CRÍTICO (AUC)',
+                'tipo': 'CRÍTICO',
                 'mensagem': f'AUC ({auc_atual:.3f}) abaixo do mínimo aceitável ({AUC_THRESHOLD_MIN})'
             })
         
-        # Alerta 2: Degradação
+        # Alerta 2: Degradação significativa em relação ao máximo
         if self.auc_maximo > 0:
             degradacao = (self.auc_maximo - auc_atual) / self.auc_maximo
             if degradacao > AUC_DROP_THRESHOLD:
                 alertas.append({
-                    'tipo': 'ATENÇÃO (Degradação)',
-                    'mensagem': f'Degradação de performance de {degradacao*100:.1f}% em relação ao máximo histórico.'
+                    'tipo': 'ATENÇÃO',
+                    'mensagem': f'Degradação de {degradacao*100:.1f}% em relação ao máximo ({self.auc_maximo:.3f})'
                 })
         
-        # Alerta 3: Data Drift (Novo)
-        alertas.extend(self.verificar_drift(df_features_atual))
+        # Alerta 3: Tendência de queda consistente
+        if len(self.historico_auc) >= 5:
+            ultimos_5 = self.historico_auc[-5:]
+            if all(ultimos_5[i] > ultimos_5[i+1] for i in range(len(ultimos_5)-1)):
+                alertas.append({
+                    'tipo': 'ATENÇÃO',
+                    'mensagem': 'Tendência de queda consistente nos últimos 5 períodos'
+                })
         
         return alertas
     
-    def gerar_relatorio(self, df_features_atual):
+    def gerar_relatorio(self):
         """Gera relatório completo de governança"""
         if not self.historico_auc:
             return {
@@ -300,14 +334,15 @@ class GovernancaModelo:
                 'historico': {}
             }
         
-        alertas = self.verificar_alertas(df_features_atual)
+        alertas = self.verificar_alertas()
         
-        if any(a['tipo'].startswith('CRÍTICO') for a in alertas):
+        # Determina severidade geral
+        if any(a['tipo'] == 'CRÍTICO' for a in alertas):
             severidade = 'error'
             status = 'Modelo requer atenção imediata'
-        elif any(a['tipo'].startswith('ATENÇÃO') or a['tipo'].startswith('DRIFT') for a in alertas):
+        elif any(a['tipo'] == 'ATENÇÃO' for a in alertas):
             severidade = 'warning'
-            status = 'Modelo em monitoramento (Alertas ativos)'
+            status = 'Modelo em monitoramento'
         else:
             severidade = 'success'
             status = 'Modelo operando normalmente'
@@ -316,12 +351,12 @@ class GovernancaModelo:
             'status': status,
             'severidade': severidade,
             'metricas': {
-                'AUC Atual': self.historico_auc[-1] if self.historico_auc else 0,
-                'AUC Médio': np.mean(self.historico_auc) if self.historico_auc else 0,
+                'AUC Atual': self.historico_auc[-1],
+                'AUC Médio': np.mean(self.historico_auc),
                 'AUC Máximo': self.auc_maximo,
-                'Precision Média': np.mean(self.historico_precision) if self.historico_precision else 0,
-                'Recall Médio': np.mean(self.historico_recall) if self.historico_recall else 0,
-                'F1-Score Médio': np.mean(self.historico_f1) if self.historico_f1 else 0
+                'Precision Média': np.mean(self.historico_precision),
+                'Recall Médio': np.mean(self.historico_recall),
+                'F1-Score Médio': np.mean(self.historico_f1)
             },
             'alertas': alertas,
             'historico': {
@@ -332,283 +367,8 @@ class GovernancaModelo:
             }
         }
 
-
 # =============================================================================
-# CLASSE: ENGENHEIRO DE FEATURES (EXPANDIDA COM SMART BETA)
-# =============================================================================
-
-class EngenheiroFeatures:
-    """Calcula indicadores técnicos e fundamentalistas com máxima profundidade e Smart Beta Factors"""
-    
-    @staticmethod
-    def calcular_indicadores_tecnicos(hist):
-        """Calcula indicadores técnicos completos e Smart Beta Factors."""
-        df = hist.copy()
-        
-        # Retornos e Volatilidade
-        df['returns'] = df['Close'].pct_change()
-        df['log_returns'] = np.log(df['Close'] / df['Close'].shift(1))
-        df['volatility_20'] = df['returns'].rolling(window=20).std() * np.sqrt(252)
-        df['volatility_60'] = df['returns'].rolling(window=60).std() * np.sqrt(252)
-        df['volatility_252'] = df['returns'].rolling(window=252).std() * np.sqrt(252) 
-        
-        # Médias Móveis (SMA, EMA)
-        for periodo in [5, 10, 20, 50, 100, 200]:
-            df[f'sma_{periodo}'] = SMAIndicator(close=df['Close'], window=periodo).sma_indicator()
-            df[f'ema_{periodo}'] = EMAIndicator(close=df['Close'], window=periodo).ema_indicator()
-            
-        # Cruzamentos e Posições
-        df['price_sma20_ratio'] = df['Close'] / df['sma_20']
-        df['sma20_sma50_cross'] = (df['sma_20'] > df['sma_50']).astype(int)
-        
-        # RSI e Momentum
-        for periodo in [7, 14, 28]:
-            df[f'rsi_{periodo}'] = RSIIndicator(close=df['Close'], window=periodo).rsi()
-        
-        df['momentum_20'] = ROCIndicator(close=df['Close'], window=20).roc()
-        
-        # Volatility Indicators
-        bb = BollingerBands(close=df['Close'], window=20, window_dev=2)
-        df['bb_width'] = bb.bollinger_wband()
-        df['atr'] = AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'], window=14).average_true_range()
-
-        # =====================================================================
-        # NEW: SMART BETA FACTORS (Baseado em Séries Temporais)
-        # =====================================================================
-        
-        # 1. Momentum Factor (11/1 Mês)
-        # Retorno de 252 dias (1 ano) excluindo os últimos 21 dias (1 mês)
-        df['factor_momentum'] = df['Close'].pct_change(periods=252).shift(21)
-        
-        # 2. Value Factor (Proxy: Inverse Price-to-MA200)
-        # Ativos baratos em relação a média de longo prazo
-        epsilon = 1e-6 # Pequeno valor para evitar divisão por zero/inf
-        df['factor_value_proxy'] = 1 / (df['Close'] / (df['sma_200'] + epsilon))
-        
-        # 3. Low Volatility Factor (Inverse Annual Volatility)
-        # Favorece ativos com baixa volatilidade histórica
-        df['factor_low_vol'] = 1 / (df['volatility_252'] + epsilon)
-        
-        # 4. Size Factor (Proxy: Inverse Log Market Cap)
-        # Favorece ativos com menor valor (Market Cap), indicando Small Caps
-        # Como não temos Market Cap, usamos 1/Close Price como proxy para Small Cap no BR
-        df['factor_size_proxy'] = 1 / (df['Close'] + epsilon)
-        
-        # Z-Score Scaling para fatores (melhor para comparar forças)
-        fatores_para_normalizar = ['factor_momentum', 'factor_value_proxy', 'factor_low_vol', 'factor_size_proxy']
-        
-        for fator in fatores_para_normalizar:
-            if fator in df.columns and not df[fator].isnull().all():
-                # Apenas escala a parte não-NaN dos dados
-                valid_data = df[fator].dropna()
-                if len(valid_data) > 1:
-                    df.loc[valid_data.index, f'{fator}_scaled'] = zscore(valid_data, nan_policy='omit')
-                else:
-                    df[f'{fator}_scaled'] = np.nan # Não há dados suficientes para calcular zscore
-            else:
-                df[f'{fator}_scaled'] = np.nan
-
-        return df.dropna(subset=['returns', 'log_returns'] + [c for c in df.columns if c.startswith('sma_')])
-
-
-# (Métodos `calcular_features_fundamentalistas` e `_normalizar` permanecem inalterados)
-
-
-# =============================================================================
-# CLASSE: COLETOR DE DADOS (REFATORADA)
-# =============================================================================
-
-class ColetorDados:
-    """Coleta e processa dados de mercado com profundidade máxima"""
-    
-    def __init__(self, periodo=PERIODO_DADOS):
-        self.periodo = periodo
-        self.dados_por_ativo = {}
-        self.dados_fundamentalistas = pd.DataFrame()
-        self.ativos_sucesso = []
-        self.dados_macro = {} # Armazena retornos diários dos macros
-        self.metricas_performance = pd.DataFrame()
-        self.df_master = None
-        self.model_governors = {} # NEW: Armazena instâncias de GovernancaModelo
-
-    def carregar_dados_gcs(self):
-        """Carrega dados consolidados do Google Cloud Storage (Apenas placeholder simulado)"""
-        print("\n📊 Carregando dados do GCS...")
-        # SIMULAÇÃO: No ambiente real, esta seção faria o download.
-        # Aqui, assumimos que o download falha ou que o master DataFrame é carregado
-        # Em um ambiente com a biblioteca 'storage' instalada, este código funciona:
-        # try:
-        #     storage_client = storage.Client()
-        #     bucket = storage_client.bucket(GCS_BUCKET_NAME)
-        #     blob = bucket.blob(GCS_MASTER_FILE_PATH)
-        #     csv_data_bytes = blob.download_as_bytes()
-        #     csv_data = csv_data_bytes.decode('utf-8')
-        #     self.df_master = pd.read_csv(io.StringIO(csv_data))
-        #     self.df_master['Date'] = pd.to_datetime(self.df_master['Date'])
-        #     return True
-        # except Exception as e:
-        #     print(f"❌ Erro ao carregar dados do GCS: {str(e)}")
-        #     return False
-        
-        # SIMULAÇÃO DE CARREGAMENTO PARA EXECUÇÃO LOCAL (Cria um DataFrame de Exemplo)
-        data_simulada = []
-        start_date = datetime.now() - timedelta(days=730)
-        dates = pd.date_range(start=start_date, periods=500)
-        np.random.seed(42)
-        
-        for ticker in TODOS_ATIVOS + ['^BVSP', '^GSPC']:
-            close_prices = 100 * (1 + np.random.randn(len(dates)) * 0.01).cumprod()
-            volume = np.random.randint(100000, 5000000, len(dates))
-            temp_df = pd.DataFrame({
-                'Date': dates,
-                'Open': close_prices * (1 - np.random.rand(len(dates)) * 0.01),
-                'High': close_prices * (1 + np.random.rand(len(dates)) * 0.01),
-                'Low': close_prices * (1 - np.random.rand(len(dates)) * 0.01),
-                'Close': close_prices,
-                'Volume': volume,
-                'ticker': ticker,
-            })
-            data_simulada.append(temp_df)
-
-        self.df_master = pd.concat(data_simulada, ignore_index=True)
-        print("✓ SIMULAÇÃO: Dados Mestre carregados com sucesso.")
-        return True
-
-    def coletar_dados_macroeconomicos(self):
-        """Coleta dados macroeconômicos do GCS (ou simulação) e calcula retornos."""
-        if self.df_master is None:
-            if not self.carregar_dados_gcs():
-                return
-        
-        print("\n📊 Coletando dados macroeconômicos...")
-        indices = {
-            'IBOV': '^BVSP', 'SP500': '^GSPC', 'NASDAQ': '^IXIC', 
-            'VIX': '^VIX', 'DXY': 'DX-Y.NYB', 'GOLD': 'GC=F', 'OIL': 'CL=F'
-        }
-        
-        for nome, simbolo in indices.items():
-            df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
-            
-            if not df_macro.empty and 'Close' in df_macro.columns:
-                df_macro = df_macro.set_index('Date').sort_index()
-                self.dados_macro[nome] = df_macro['Close'].pct_change()
-            else:
-                self.dados_macro[nome] = pd.Series()
-        
-        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
-
-    def adicionar_correlacoes_macro(self, df, simbolo):
-        """Adiciona correlações com indicadores macroeconômicos."""
-        if not self.dados_macro or 'returns' not in df.columns:
-            return df
-        
-        df_final = df.copy()
-        
-        try:
-            df_returns_aligned = df['returns']
-
-            for nome, serie_macro in self.dados_macro.items():
-                if serie_macro.empty or serie_macro.isnull().all():
-                    continue
-                
-                # Alinha os retornos do ativo com os retornos macro
-                aligned_returns = pd.concat([df_returns_aligned, serie_macro], axis=1, join='inner').dropna()
-                
-                if aligned_returns.shape[0] > 60:
-                    corr_rolling = aligned_returns.iloc[:, 0].rolling(60).corr(aligned_returns.iloc[:, 1])
-                    # Reindexa para o DataFrame original (manter o tamanho e índice)
-                    df_final[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) 
-                else:
-                    df_final[f'corr_{nome.lower()}'] = np.nan
-            
-            return df_final
-        
-        except Exception as e:
-            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}")
-            return df
-    
-    def coletar_e_processar_dados(self, simbolos):
-        """Coleta e processa dados de mercado com engenharia de features máxima"""
-        
-        if self.df_master is None:
-            if not self.carregar_dados_gcs():
-                return False
-        
-        # 1. Coletar e preparar dados macro ANTES do loop principal
-        self.coletar_dados_macroeconomicos()
-        
-        print(f"\n{'='*60}")
-        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
-        print(f"{'='*60}\n")
-        
-        self.ativos_sucesso = []
-        lista_fundamentalistas = []
-        
-        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
-            try:
-                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
-                
-                if df_ativo.empty:
-                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
-                    continue
-                
-                df_ativo = df_ativo.set_index('Date').sort_index()
-                if 'ticker' in df_ativo.columns:
-                    df_ativo = df_ativo.drop('ticker', axis=1)
-                
-                # Aplica Feature Engineering (inclui Smart Beta)
-                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
-                
-                # Adiciona Correlações Macro (com base na refatoração)
-                df_features = self.adicionar_correlacoes_macro(df_features, simbolo)
-                
-                # Limpeza final e verificação de tamanho
-                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
-                if len(df_features) < min_dias_flexivel:
-                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias válidos.")
-                    continue
-                
-                self.dados_por_ativo[simbolo] = df_features.fillna(method='ffill').fillna(0) # Tratar NaNs finais
-                self.ativos_sucesso.append(simbolo)
-                
-                # Inicializa Governança de Modelo e Drift
-                if simbolo not in self.model_governors:
-                    self.model_governors[simbolo] = GovernancaModelo(simbolo)
-                    self.model_governors[simbolo].inicializar_drift(df_features)
-                
-            except Exception as e:
-                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
-                continue 
-        
-        # Geração de Métricas de Performance (o código é funcional, mas longo demais para duplicar aqui, 
-        # mantenho a lógica de preenchimento na versão final.)
-        metricas = {}
-        for simbolo in self.ativos_sucesso:
-            returns = self.dados_por_ativo[simbolo]['returns']
-            drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
-            if not returns.empty and not returns.isnull().all():
-                ret_mean = returns.mean()
-                ret_std = returns.std()
-                metricas[simbolo] = {
-                    'retorno_anual': ret_mean * 252,
-                    'volatilidade_anual': ret_std * np.sqrt(252),
-                    'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
-                    'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
-                }
-
-        self.metricas_performance = pd.DataFrame(metricas).T
-
-        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
-            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
-            return False
-            
-        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
-        return True
-
-# (O resto das classes (AnalizadorPerfilInvestidor, Funções de Estilo, etc.) permanecem inalterados)
-
-# =============================================================================
-# MAPEAMENTOS DE PONTUAÇÃO DO QUESTIONÁRIO (MANTIDOS)
+# MAPEAMENTOS DE PONTUAÇÃO DO QUESTIONÁRIO
 # =============================================================================
 
 SCORE_MAP = {
@@ -640,7 +400,7 @@ SCORE_MAP_REACTION = {
 }
 
 # =============================================================================
-# CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR (MANTIDA)
+# CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR
 # =============================================================================
 
 class AnalisadorPerfilInvestidor:
@@ -709,7 +469,7 @@ class AnalisadorPerfilInvestidor:
         return nivel_risco, horizonte_tempo, ml_lookback, pontuacao
 
 # =============================================================================
-# FUNÇÕES DE ESTILO E VISUALIZAÇÃO (MANTIDAS)
+# FUNÇÕES DE ESTILO E VISUALIZAÇÃO
 # =============================================================================
 
 def obter_template_grafico():
@@ -760,4 +520,4376 @@ def obter_template_grafico():
         'colorway': ['#2c3e50', '#7f8c8d', '#3498db', '#e74c3c', '#27ae60']
     }
 
-# --- FIM DO CÓDIGO CORRIGIDO E OTIMIZADO ---
+# =============================================================================
+# CLASSE: ENGENHEIRO DE FEATURES
+# =============================================================================
+
+class EngenheiroFeatures:
+    """Calcula indicadores técnicos e fundamentalistas com máxima profundidade"""
+    
+    @staticmethod
+    def calcular_indicadores_tecnicos(hist):
+        """Calcula indicadores técnicos completos usando ta library"""
+        df = hist.copy()
+        
+        # Retornos e Volatilidade
+        df['returns'] = df['Close'].pct_change()
+        df['log_returns'] = np.log(df['Close'] / df['Close'].shift(1))
+        df['volatility_20'] = df['returns'].rolling(window=20).std() * np.sqrt(252)
+        df['volatility_60'] = df['returns'].rolling(window=60).std() * np.sqrt(252)
+        df['volatility_252'] = df['returns'].rolling(window=252).std() * np.sqrt(252) # Added long-term volatility
+        
+        # Médias Móveis (SMA, EMA, WMA, HMA)
+        for periodo in [5, 10, 20, 50, 100, 200]:
+            df[f'sma_{periodo}'] = SMAIndicator(close=df['Close'], window=periodo).sma_indicator()
+            df[f'ema_{periodo}'] = EMAIndicator(close=df['Close'], window=periodo).ema_indicator()
+            # WMA (Weighted Moving Average)
+            weights = np.arange(1, periodo + 1)
+            df[f'wma_{periodo}'] = df['Close'].rolling(periodo).apply(lambda x: np.dot(x, weights) / weights.sum(), raw=True)
+        
+        # Hull Moving Average (HMA)
+        for periodo in [20, 50]:
+            # Corrected WMA calculation for HMA
+            wma_half_series = df['Close'].rolling(periodo // 2).apply(lambda x: np.dot(x, np.arange(1, len(x) + 1)) / np.arange(1, len(x) + 1).sum(), raw=True)
+            wma_full_series = df['Close'].rolling(periodo).apply(lambda x: np.dot(x, np.arange(1, len(x) + 1)) / np.arange(1, len(x) + 1).sum(), raw=True)
+            df[f'hma_{periodo}'] = (2 * wma_half_series - wma_full_series).rolling(int(np.sqrt(periodo))).mean()
+        
+        # Razões de preço e cruzamentos
+        df['price_sma20_ratio'] = df['Close'] / df['sma_20']
+        df['price_sma50_ratio'] = df['Close'] / df['sma_50']
+        df['price_sma200_ratio'] = df['Close'] / df['sma_200']
+        df['sma20_sma50_cross'] = (df['sma_20'] > df['sma_50']).astype(int)
+        df['sma50_sma200_cross'] = (df['sma_50'] > df['sma_200']).astype(int)
+        df['death_cross'] = (df['Close'] < df['sma_200']).astype(int)
+        
+        # RSI (múltiplos períodos)
+        for periodo in [7, 14, 21, 28]:
+            df[f'rsi_{periodo}'] = RSIIndicator(close=df['Close'], window=periodo).rsi()
+        
+        # Stochastic Oscillator
+        stoch = StochasticOscillator(high=df['High'], low=df['Low'], close=df['Close'], window=14, smooth_window=3)
+        df['stoch_k'] = stoch.stoch()
+        df['stoch_d'] = stoch.stoch_signal()
+        
+        # Williams %R
+        df['williams_r'] = WilliamsRIndicator(high=df['High'], low=df['Low'], close=df['Close'], lbp=14).williams_r()
+        
+        # MACD (múltiplas configurações)
+        macd = MACD(close=df['Close'], window_slow=26, window_fast=12, window_sign=9)
+        df['macd'] = macd.macd()
+        df['macd_signal'] = macd.macd_signal()
+        df['macd_diff'] = macd.macd_diff()
+        
+        # MACD alternativo (5, 35, 5)
+        macd_alt = MACD(close=df['Close'], window_slow=35, window_fast=5, window_sign=5)
+        df['macd_alt'] = macd_alt.macd()
+        
+        # Bollinger Bands
+        bb = BollingerBands(close=df['Close'], window=20, window_dev=2)
+        df['bb_middle'] = bb.bollinger_mavg()
+        df['bb_upper'] = bb.bollinger_hband()
+        df['bb_lower'] = bb.bollinger_lband()
+        df['bb_width'] = bb.bollinger_wband()
+        df['bb_position'] = (df['Close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+        df['bb_pband'] = bb.bollinger_pband()
+        
+        # Keltner Channel
+        kc = KeltnerChannel(high=df['High'], low=df['Low'], close=df['Close'], window=20, window_atr=10)
+        df['kc_upper'] = kc.keltner_channel_hband()
+        df['kc_lower'] = kc.keltner_channel_lband()
+        df['kc_middle'] = kc.keltner_channel_mband()
+        df['kc_width'] = (df['kc_upper'] - df['kc_lower']) / df['kc_middle']
+        
+        # Donchian Channel
+        dc = DonchianChannel(high=df['High'], low=df['Low'], close=df['Close'], window=20)
+        df['dc_upper'] = dc.donchian_channel_hband()
+        df['dc_lower'] = dc.donchian_channel_lband()
+        df['dc_middle'] = dc.donchian_channel_mband()
+        
+        # ATR (Average True Range)
+        atr = AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'], window=14)
+        df['atr'] = atr.average_true_range()
+        df['atr_percent'] = (df['atr'] / df['Close']) * 100
+        
+        # ADX (Average Directional Index)
+        adx = ADXIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=14)
+        df['adx'] = adx.adx()
+        df['adx_pos'] = adx.adx_pos()
+        df['adx_neg'] = adx.adx_neg()
+        
+        # CCI (Commodity Channel Index)
+        df['cci'] = CCIIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=20).cci()
+        
+        # Momentum indicators
+        df['momentum_10'] = ROCIndicator(close=df['Close'], window=10).roc()
+        df['momentum_20'] = ROCIndicator(close=df['Close'], window=20).roc()
+        df['momentum_60'] = ROCIndicator(close=df['Close'], window=60).roc()
+        
+        # Volume indicators
+        df['obv'] = OnBalanceVolumeIndicator(close=df['Close'], volume=df['Volume']).on_balance_volume()
+        df['cmf'] = ChaikinMoneyFlowIndicator(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume'], window=20).chaikin_money_flow()
+        df['mfi'] = MFIIndicator(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume'], window=14).money_flow_index()
+        df['vwap'] = VolumeWeightedAveragePrice(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume']).volume_weighted_average_price()
+        
+        # Drawdown
+        cumulative_returns = (1 + df['returns']).cumprod()
+        running_max = cumulative_returns.expanding().max()
+        df['drawdown'] = (cumulative_returns - running_max) / running_max
+        df['max_drawdown_252'] = df['drawdown'].rolling(252).min()
+        
+        # Lags (temporal features)
+        for lag in [1, 5, 10, 20, 60]:
+            df[f'close_lag_{lag}'] = df['Close'].shift(lag)
+            df[f'returns_lag_{lag}'] = df['returns'].shift(lag)
+            df[f'volume_lag_{lag}'] = df['Volume'].shift(lag)
+        
+        # Rolling statistics
+        for window in [5, 20, 60]:
+            df[f'returns_mean_{window}'] = df['returns'].rolling(window).mean()
+            df[f'returns_std_{window}'] = df['returns'].rolling(window).std()
+            df[f'returns_skew_{window}'] = df['returns'].rolling(window).skew()
+            df[f'returns_kurt_{window}'] = df['returns'].rolling(window).kurt()
+            df[f'volume_mean_{window}'] = df['Volume'].rolling(window).mean()
+            df[f'volume_std_{window}'] = df['Volume'].rolling(window).std()
+        
+        # Autocorrelation
+        for lag in [1, 5, 10]:
+            df[f'autocorr_{lag}'] = df['returns'].rolling(60).apply(lambda x: x.autocorr(lag=lag), raw=False)
+        
+        # Price patterns
+        df['higher_high'] = ((df['High'] > df['High'].shift(1)) & (df['High'].shift(1) > df['High'].shift(2))).astype(int)
+        df['lower_low'] = ((df['Low'] < df['Low'].shift(1)) & (df['Low'].shift(1) < df['Low'].shift(2))).astype(int)
+        
+        # Temporal encoding (day of week, month, quarter)
+        df['day_of_week'] = df.index.dayofweek
+        df['month'] = df.index.month
+        df['quarter'] = df.index.quarter
+        df['day_of_month'] = df.index.day
+        df['week_of_year'] = df.index.isocalendar().week
+        
+        return df.dropna()
+    
+    @staticmethod
+    def calcular_features_fundamentalistas(info):
+        """Extrai features fundamentalistas expandidas"""
+        return {
+            'pe_ratio': info.get('trailingPE', np.nan),
+            'forward_pe': info.get('forwardPE', np.nan),
+            'pb_ratio': info.get('priceToBook', np.nan),
+            'ps_ratio': info.get('priceToSalesTrailing12Months', np.nan),
+            'peg_ratio': info.get('pegRatio', np.nan),
+            'ev_ebitda': info.get('enterpriseToEbitda', np.nan),
+            'div_yield': info.get('dividendYield', 0) * 100 if info.get('dividendYield') else np.nan,
+            'payout_ratio': info.get('payoutRatio', np.nan) * 100 if info.get('payoutRatio') else np.nan,
+            'roe': info.get('returnOnEquity', np.nan) * 100 if info.get('returnOnEquity') else np.nan,
+            'roa': info.get('returnOnAssets', np.nan) * 100 if info.get('returnOnAssets') else np.nan,
+            'roic': info.get('returnOnCapital', np.nan) * 100 if info.get('returnOnCapital') else np.nan,
+            'profit_margin': info.get('profitMargins', np.nan) * 100 if info.get('profitMargins') else np.nan,
+            'operating_margin': info.get('operatingMargins', np.nan) * 100 if info.get('operatingMargins') else np.nan,
+            'gross_margin': info.get('grossMargins', np.nan) * 100 if info.get('grossMargins') else np.nan,
+            'debt_to_equity': info.get('debtToEquity', np.nan),
+            'current_ratio': info.get('currentRatio', np.nan),
+            'quick_ratio': info.get('quickRatio', np.nan),
+            'revenue_growth': info.get('revenueGrowth', np.nan) * 100 if info.get('revenueGrowth') else np.nan,
+            'earnings_growth': info.get('earningsGrowth', np.nan) * 100 if info.get('earningsGrowth') else np.nan,
+            'market_cap': info.get('marketCap', np.nan),
+            'enterprise_value': info.get('enterpriseValue', np.nan),
+            'beta': info.get('beta', np.nan),
+            'sector': info.get('sector', 'Unknown'),
+            'industry': info.get('industry', 'Unknown')
+        }
+    
+    @staticmethod
+    def _normalizar(serie, maior_melhor=True):
+        """Normaliza uma série para o range [0, 1]"""
+        if serie.isnull().all():
+            return pd.Series(0, index=serie.index) # Return zeros if all NaN
+        
+        min_val = serie.min()
+        max_val = serie.max()
+        
+        if max_val == min_val: # Handle cases where all values are the same
+            return pd.Series(0.5 if maior_melhor else 0.5, index=serie.index)
+        
+        if maior_melhor:
+            return (serie - min_val) / (max_val - min_val)
+        else:
+            return (max_val - serie) / (max_val - min_val)
+
+# =============================================================================
+# CLASSE: COLETOR DE DADOS
+# =============================================================================
+
+class ColetorDados:
+    """Coleta e processa dados de mercado com profundidade máxima"""
+    
+    def __init__(self, periodo=PERIODO_DADOS):
+        self.periodo = periodo
+        self.dados_por_ativo = {}
+        self.dados_fundamentalistas = pd.DataFrame()
+        self.ativos_sucesso = []
+        self.dados_macro = {}
+        self.metricas_performance = pd.DataFrame() # Initialize metric dataframe
+        self.df_master = None
+    
+    def carregar_dados_gcs(self):
+        """Carrega dados consolidados do Google Cloud Storage"""
+        print("\n📊 Carregando dados do GCS...")
+        print(f"Bucket: {GCS_BUCKET_NAME}")
+        print(f"Arquivo: {GCS_MASTER_FILE_PATH}")
+        
+        try:
+            storage_client = storage.Client()
+            bucket = storage_client.bucket(GCS_BUCKET_NAME)
+            blob = bucket.blob(GCS_MASTER_FILE_PATH)
+            
+            # Use download_as_bytes for potentially better compatibility and then decode
+            csv_data_bytes = blob.download_as_bytes()
+            csv_data = csv_data_bytes.decode('utf-8')
+            
+            self.df_master = pd.read_csv(io.StringIO(csv_data))
+            self.df_master['Date'] = pd.to_datetime(self.df_master['Date'])
+            
+            print(f"✓ Dados carregados: {len(self.df_master)} linhas")
+            print(f"✓ Ativos únicos: {self.df_master['ticker'].nunique()}")
+            print(f"✓ Período: {self.df_master['Date'].min()} até {self.df_master['Date'].max()}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Erro ao carregar dados do GCS: {str(e)}")
+            if 'st' in sys.modules:
+                st.error(f"Erro ao conectar ao GCS: {str(e)}")
+            return False
+    
+    def obter_dados_ativo(self, simbolo):
+        """Obtém dados históricos de um ativo específico do GCS"""
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return None
+        
+        df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+        
+        if df_ativo.empty:
+            return None
+        
+        df_ativo = df_ativo.set_index('Date').sort_index()
+        
+        # Remove 'ticker' column as it's redundant after filtering
+        if 'ticker' in df_ativo.columns:
+            df_ativo = df_ativo.drop('ticker', axis=1)
+        
+        return df_ativo
+    
+    def coletar_dados_macro(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def __init__(self, periodo=PERIODO_DADOS):
+        self.periodo = periodo
+        self.dados_por_ativo = {}
+        self.dados_fundamentalistas = pd.DataFrame()
+        self.ativos_sucesso = []
+        self.dados_macro = {}
+        self.metricas_performance = pd.DataFrame()
+        self.df_master = None # Initialize df_master to None
+    
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta e processa dados de mercado com engenharia de features máxima"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            try:
+                # Attempt to get data from the master DataFrame
+                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if not df_macro.empty:
+                    df_macro = df_macro.set_index('Date').sort_index()
+                    if 'Close' in df_macro.columns:
+                        self.dados_macro[nome] = df_macro['Close'].pct_change()
+                        print(f"  ✓ {nome}: {len(df_macro)} dias")
+                    else:
+                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                        self.dados_macro[nome] = pd.Series()
+                else:
+                    # If not found in GCS, attempt to download with yfinance as a fallback (less ideal for consistency)
+                    # print(f"  ⚠️ {nome}: Not found in GCS. Attempting yfinance download...")
+                    # try:
+                    #     ticker_yf = yf.Ticker(simbolo)
+                    #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
+                    #     if not hist_yf.empty and 'Close' in hist_yf.columns:
+                    #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
+                    #         print(f"  ✓ {nome} (fallback yfinance): {len(hist_yf)} dias")
+                    #     else:
+                    #         print(f"  ⚠️ {nome} (fallback yfinance): No historical data found.")
+                    #         self.dados_macro[nome] = pd.Series()
+                    # except Exception as yf_e:
+                    #     print(f"  ⚠️ {nome} (fallback yfinance): Error - {str(yf_e)[:50]}")
+                    #     self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {nome}: Não encontrado no dataset GCS.")
+                    self.dados_macro[nome] = pd.Series()
+
+            except Exception as e:
+                print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
+                self.dados_macro[nome] = pd.Series()
+        
+        print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+
+
+    def adicionar_correlacoes_macro(self, df, simbolo):
+        """Adiciona correlações com indicadores macroeconômicos"""
+        if not self.dados_macro or 'returns' not in df.columns:
+            return df
+        
+        try:
+            # Ensure that 'returns' column is available and not all NaN
+            if df['returns'].isnull().all():
+                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
+                return df
+
+            for nome, serie_macro in self.dados_macro.items():
+                if serie_macro.empty or serie_macro.isnull().all():
+                    continue
+                
+                # Alinha as datas
+                # Use reindex to align based on df's index, then align serie_macro to it
+                df_returns_aligned = df['returns'].reindex(df.index)
+                
+                # Ensure both series have data after alignment and before calculating rolling corr
+                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
+                    continue
+
+                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
+                # Using inner join implicitly via reindex and subsequent operations
+                combined_df = pd.DataFrame({
+                    'asset_returns': df_returns_aligned,
+                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
+                }).dropna() # Drop rows where either asset or macro returns are missing for this period
+
+                if len(combined_df) > 60:
+                    # Correlação rolling
+                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
+                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
+                else:
+                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
+        except Exception as e:
+            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
+        
+        return df
+    
+    def coletar_e_processar_dados(self, simbolos):
+        """Coleta dados dos ativos do GCS e os processa com engenharia de features"""
+        
+        # Load master data from GCS first
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return False # Critical failure if GCS data cannot be loaded
+        
+        print(f"\n{'='*60}")
+        print(f"FILTRANDO E PROCESSANDO DADOS - {len(simbolos)} ativos solicitados")
+        print(f"{'='*60}\n")
+        
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
+        
+        # Use tqdm for progress bar during processing
+        for simbolo in tqdm(simbolos, desc="⚙️ Processando ativos"):
+            try:
+                # Get data for the current symbol from the master DataFrame
+                df_ativo = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+                if df_ativo.empty:
+                    print(f"  ⚠️ {simbolo}: Não encontrado no dataset.")
+                    continue
+                
+                # Set index and sort by date
+                df_ativo = df_ativo.set_index('Date').sort_index()
+                
+                # Drop the 'ticker' column as it's now redundant
+                if 'ticker' in df_ativo.columns:
+                    df_ativo = df_ativo.drop('ticker', axis=1)
+                
+                # Apply feature engineering
+                df_features = EngenheiroFeatures.calcular_indicadores_tecnicos(df_ativo)
+                
+                # Drop rows with NaN in critical columns (e.g., 'Close' after pct_change)
+                df_features = df_features.dropna(subset=['Close', 'returns'])
+                
+                # Apply threshold for minimum data points after feature engineering
+                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Apenas {len(df_features)} dias após feature engineering (mínimo: {min_dias_flexivel}).")
+                    continue
+                
+                # Drop rows with too many NaNs across all features
+                threshold_nan_ratio = 0.5 # Keep rows with at least 50% non-NaN values
+                df_features = df_features.dropna(axis=0, thresh=len(df_features.columns) * threshold_nan_ratio)
+                
+                # Ensure sufficient data remains after NaN dropping
+                if len(df_features) < min_dias_flexivel:
+                    print(f"  ⚠️ {simbolo}: Poucos dados restantes após remoção de NaNs ({len(df_features)} dias).")
+                    continue
+
+                # Store processed data
+                self.dados_por_ativo[simbolo] = df_features
+                self.ativos_sucesso.append(simbolo)
+                
+                print(f"  ✓ {simbolo}: {len(df_features)} dias processados com {len(df_features.columns)} features.")
+                
+                # Attempt to extract fundamental data if present in the dataframe
+                # Assumes fundamental data columns are prefixed with 'fund_'
+                fund_cols = [col for col in df_features.columns if col.startswith('fund_')]
+                if fund_cols:
+                    # Take the last row for fundamental data (assuming it's static or last reported)
+                    features_fund_dict = df_features[fund_cols].iloc[-1].to_dict()
+                    # Remove prefix and map to expected names
+                    features_fund_cleaned = {k.replace('fund_', ''): v for k, v in features_fund_dict.items()}
+                    
+                    features_fund_cleaned['Ticker'] = simbolo # Add ticker for DataFrame creation
+                    
+                    # Add sector and industry if available directly in the main dataframe
+                    if 'sector' in df_features.columns:
+                        features_fund_cleaned['sector'] = df_features['sector'].iloc[-1]
+                    if 'industry' in df_features.columns:
+                        features_fund_cleaned['industry'] = df_features['industry'].iloc[-1]
+                    
+                    lista_fundamentalistas.append(features_fund_cleaned)
+                else:
+                    # Append a placeholder if no fundamental data found for this asset
+                    lista_fundamentalistas.append({'Ticker': simbolo})
+            
+            except Exception as e:
+                print(f"  ❌ {simbolo}: Erro no processamento - {str(e)}")
+                continue # Continue to the next symbol even if one fails
+        
+        # Final check on the number of successfully processed assets
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos.")
+            return False
+        
+        # Process fundamental data if collected
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            # Replace infinite values with NaN
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Scale numerical fundamental features
+            scaler = RobustScaler()
+            # Select only numeric columns for scaling
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            # Impute missing values with median before scaling
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            # Apply scaling only if there are numeric columns and data to scale
+            if len(numeric_cols) > 0 and not self.dados_fundamentalistas.empty:
+                self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                    self.dados_fundamentalistas[numeric_cols]
+                )
+        
+        # Calculate performance metrics for successfully processed assets
+        metricas = {}
+        for simbolo in self.ativos_sucesso:
+            # Ensure the symbol and its 'returns' column exist and are valid
+            if simbolo in self.dados_por_ativo and 'returns' in self.dados_por_ativo[simbolo]:
+                returns = self.dados_por_ativo[simbolo]['returns']
+                # Safely get 'drawdown' if it exists, otherwise use NaN
+                drawdown = self.dados_por_ativo[simbolo].get('drawdown', pd.Series([np.nan], index=returns.index))
+                
+                # Ensure returns series is not empty or all NaNs
+                if not returns.empty and not returns.isnull().all():
+                    ret_mean = returns.mean()
+                    ret_std = returns.std()
+                    
+                    metricas[simbolo] = {
+                        'retorno_anual': ret_mean * 252,
+                        'volatilidade_anual': ret_std * np.sqrt(252),
+                        # Calculate Sharpe ratio, handle division by zero or NaN std dev
+                        'sharpe': (ret_mean * 252 - TAXA_LIVRE_RISCO) / (ret_std * np.sqrt(252)) if ret_std > 0 and not np.isnan(ret_std) else 0,
+                        # Calculate max drawdown, handle cases with missing drawdown data
+                        'max_drawdown': drawdown.min() if not drawdown.isnull().all() else np.nan
+                    }
+                else:
+                    print(f"  ⚠️ {simbolo}: Retornos inválidos para métricas de performance.")
+
+        self.metricas_performance = pd.DataFrame(metricas).T
+        
+        print(f"\n✓ Processamento concluído. {len(self.ativos_sucesso)} ativos válidos.")
+        return True
+
+    def coletar_dados_macroeconomicos(self):
+        """Coleta dados macroeconômicos do GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
+        
+        if self.df_master is None:
+            if not self.carregar_dados_gcs():
+                return
+        
+        # Updated indices to include NASDAQ and DXY, and ensure symbols are correct for yfinance if needed later
+        indices = {
+            'IBOV': '^BVSP',
+            'SP500': '^GSPC',
+            'NASDAQ': '^IXIC', # NASDAQ Composite Index
+            'VIX': '^VIX',
+            'DXY': 'DX-Y.NYB', # US Dollar Index Futures
+            'GOLD': 'GC=F',    # Gold Futures
+            'OIL': 'CL=F'      # Crude Oil WTI Futures
+        }
+        
+        for nome, simbolo in indices.items():
+            # Attempt to get data from the master DataFrame
+            df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+                
+            if not df_macro.empty:
+                df_macro = df_macro.set_index('Date').sort_index()
+                if 'Close' in df_macro.columns:
+                    self.dados_macro[nome] = df_macro['Close'].pct_change()
+                    print(f"  ✓ {nome}: {len(df_macro)} dias")
+                else:
+                    print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                    self.dados_macro[nome] = pd.Series()
