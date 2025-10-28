@@ -4882,15 +4882,14 @@ class ColetorDados:
         }
         
         for nome, simbolo in indices.items():
-            try:
-                # Attempt to get data from the master DataFrame
-                df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
+            # Attempt to get data from the master DataFrame
+            df_macro = self.df_master[self.df_master['ticker'] == simbolo].copy()
                 
-                if not df_macro.empty:
-                    df_macro = df_macro.set_index('Date').sort_index()
-                    if 'Close' in df_macro.columns:
-                        self.dados_macro[nome] = df_macro['Close'].pct_change()
-                        print(f"  ✓ {nome}: {len(df_macro)} dias")
-                    else:
-                        print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
-                        self.dados_macro[nome] = pd.Series()
+            if not df_macro.empty:
+                df_macro = df_macro.set_index('Date').sort_index()
+                if 'Close' in df_macro.columns:
+                    self.dados_macro[nome] = df_macro['Close'].pct_change()
+                    print(f"  ✓ {nome}: {len(df_macro)} dias")
+                else:
+                    print(f"  ⚠️ {nome}: Coluna 'Close' não encontrada no GCS data.")
+                    self.dados_macro[nome] = pd.Series()
