@@ -17,6 +17,8 @@ Versão: 7.0.0 - Sistema AutoML Completo Elite
 =============================================================================
 """
 
+import io
+from google.cloud import storage
 import warnings
 import numpy as np
 import pandas as pd
@@ -228,6 +230,16 @@ TODOS_ATIVOS = []
 for setor, ativos in ATIVOS_POR_SETOR.items():
     TODOS_ATIVOS.extend(ativos)
 TODOS_ATIVOS = sorted(list(set(TODOS_ATIVOS)))
+
+# =============================================================================
+# CONSTANTES DE ARMAZENAMENTO DE DADOS (GCS)
+# =============================================================================
+
+# NOME DO BUCKET CRIADO:
+GCS_BUCKET_NAME = 'meu-portfolio-dados-gratuitos' 
+
+# CAMINHO COMPLETO DO ARQUIVO DENTRO DO BUCKET:
+GCS_MASTER_FILE_PATH = 'dados_consolidados/todos_ativos_master.csv'
 
 # =============================================================================
 # CONSTANTES DE GOVERNANÇA (NEW)
