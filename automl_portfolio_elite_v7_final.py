@@ -58,89 +58,30 @@ from tensorflow.keras.optimizers import Adam
 
 warnings.filterwarnings('ignore')
 
-# =============================================================================
-# INSTALAÇÃO AUTOMÁTICA DE DEPENDÊNCIAS
-# =============================================================================
+import streamlit as st
+import yfinance as yf
+import plotly.graph_objects as go
+import plotly.express as px
+from plotly.subplots import make_subplots
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
+from sklearn.linear_model import RidgeClassifier, LogisticRegression
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
+from sklearn.model_selection import TimeSeriesSplit, cross_val_score
+from sklearn.preprocessing import StandardScaler, RobustScaler
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score, mean_squared_error, mean_absolute_error, r2_score, roc_auc_score, precision_score, recall_score, f1_score
+import xgboost as xgb
+import lightgbm as lgb
+from catboost import CatBoostClassifier
+from arch import arch_model
+import optuna
+import shap
+import lime
+import lime.lime_tabular
 
-REQUIRED_PACKAGES = {
-    'yfinance': 'yfinance',
-    'plotly': 'plotly',
-    'streamlit': 'streamlit',
-    'sklearn': 'scikit-learn',
-    'scipy': 'scipy',
-    'xgboost': 'xgboost',
-    'lightgbm': 'lightgbm',
-    'catboost': 'catboost',
-    'arch': 'arch',
-    'optuna': 'optuna',
-    'ta': 'ta',
-    'shap': 'shap',
-    'lime': 'lime',
-    'statsmodels': 'statsmodels',
-    'prophet': 'prophet',
-    'tensorflow': 'tensorflow',
-    'keras': 'keras',
-    'google-cloud-storage': 'google-cloud-storage'
-}
-
-def ensure_package(module_name, package_name):
-    """Instala pacote se não estiver disponível"""
-    try:
-        __import__(module_name)
-    except ImportError:
-        print(f"Instalando {package_name}...")
-        subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--user', package_name])
-        
-        if 'streamlit' in sys.modules:
-            import streamlit as st
-            st.warning(f"{package_name} foi instalado. Por favor, **reexecute** o servidor Streamlit.")
-            st.stop()
-
-# Instala todas as dependências
-try:
-    for module, package in REQUIRED_PACKAGES.items():
-        ensure_package(module.split('.')[0], package)
-    
-    import streamlit as st
-    import yfinance as yf
-    import plotly.graph_objects as go
-    import plotly.express as px
-    from plotly.subplots import make_subplots
-    from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
-    from sklearn.linear_model import RidgeClassifier, LogisticRegression
-    from sklearn.naive_bayes import GaussianNB
-    from sklearn.neighbors import KNeighborsClassifier
-    from sklearn.svm import SVC
-    from sklearn.model_selection import TimeSeriesSplit, cross_val_score
-    from sklearn.preprocessing import StandardScaler, RobustScaler
-    from sklearn.decomposition import PCA
-    from sklearn.cluster import KMeans
-    from sklearn.metrics import silhouette_score, mean_squared_error, mean_absolute_error, r2_score, roc_auc_score, precision_score, recall_score, f1_score
-    import xgboost as xgb
-    import lightgbm as lgb
-    from catboost import CatBoostClassifier
-    from arch import arch_model
-    import optuna
-    import shap
-    import lime
-    import lime.lime_tabular
-    
-    # GCS import
-    try:
-        from google.cloud import storage
-        GCS_AVAILABLE = True
-    except ImportError:
-        GCS_AVAILABLE = False
-        print("⚠️ Google Cloud Storage não disponível. Usando coleta via yfinance.")
-    
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
-    
-except Exception as e:
-    if 'streamlit' in sys.modules:
-        st.error(f"Erro ao carregar bibliotecas: {e}")
-    else:
-        print(f"Erro ao carregar bibliotecas: {e}")
-    sys.exit(1)
 
 # =============================================================================
 # CONSTANTES GLOBAIS E CONFIGURAÇÕES
