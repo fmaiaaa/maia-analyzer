@@ -4902,4 +4902,4 @@ class ColetorDados:
                     #     hist_yf = ticker_yf.history(period=self.periodo, progress=False)
                     #     if not hist_yf.empty and 'Close' in hist_yf.columns:
                     #         self.dados_macro[nome] = hist_yf['Close'].pct_change()
-                    #         print(f"  ✓ {nome} (fallback
+                    #         print(f"  ✓ {nome} (fallback))
