@@ -51,6 +51,7 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout, Conv1D, MaxPooling1D, Flatten, MultiHeadAttention, LayerNormalization
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.optimizers import Adam
+import requests
 
 warnings.filterwarnings('ignore')
 
@@ -149,6 +150,9 @@ WEIGHT_ML = 0.30 # Adicionado peso para ML no score total
 # Limites de peso por ativo na otimização
 PESO_MIN = 0.10
 PESO_MAX = 0.30
+
+session = requests.Session()
+session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
 ATIVOS_IBOVESPA = [
     'ALOS3.SA', 'ABEV3.SA', 'ASAI3.SA', 'AURE3.SA', 'AZZA3.SA', 'B3SA3.SA',
@@ -972,11 +976,11 @@ def coletar_dados_ativos(lista_ativos, periodo='max'):
                 
                 # Direct download attempt
                 df = yf.download(
-                    ticker, 
-                    period=periodo, 
-                    progress=False, # Disable yfinance's built-in progress bar
-                    timeout=30, # Aumente o timeout
-                    # User-agent is managed by yfinance versions. Rely on retries.
+                    ticker,
+                    period=periodo,
+                    progress=False,
+                    timeout=30,
+                    session=session  # <--- Adicionar a sessão aqui
                 )
                 
                 # Check if download was successful and returned data
