@@ -27,6 +27,7 @@ import subprocess
 import sys
 import time
 import os
+from google.cloud import storage
 from datetime import datetime, timedelta
 from tqdm import tqdm
 from scipy.optimize import minimize
@@ -60,6 +61,7 @@ warnings.filterwarnings('ignore')
 # =============================================================================
 
 REQUIRED_PACKAGES = {
+    'google': 'google-cloud-storage',
     'yfinance': 'yfinance',
     'plotly': 'plotly',
     'streamlit': 'streamlit',
@@ -119,6 +121,7 @@ try:
     import shap
     import lime
     import lime.lime_tabular
+    from google.cloud import storage
     
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     
@@ -153,6 +156,10 @@ PESO_MAX = 0.30
 
 session = requests.Session()
 session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
+GCS_PROJECT_ID = os.getenv('GCS_PROJECT_ID', 'seu-projeto-gcp')
+GCS_BUCKET_NAME = os.getenv('GCS_BUCKET_NAME', 'dados-financeiros-processados')
+GCS_DATA_PREFIX = 'etl-processed/'
 
 ATIVOS_IBOVESPA = [
     'ALOS3.SA', 'ABEV3.SA', 'ASAI3.SA', 'AURE3.SA', 'AZZA3.SA', 'B3SA3.SA',
@@ -715,338 +722,280 @@ class EngenheiroFeatures:
             return (max_val - serie) / (max_val - min_val)
 
 # =============================================================================
-# CLASSE: COLETOR DE DADOS
+# CLASSE: LEITOR GCS
+# =============================================================================
+
+class LeitorGCS:
+    """
+    NOVA CLASSE: Lê dados financeiros pré-processados do GCS
+    Substitui a coleta de yfinance com dados já processados e validados
+    """
+    
+    def __init__(self, project_id=GCS_PROJECT_ID, bucket_name=GCS_BUCKET_NAME):
+        self.project_id = project_id
+        self.bucket_name = bucket_name
+        self.client = storage.Client(project=project_id)
+        self.bucket = self.client.bucket(bucket_name)
+        self.cache = {}
+    
+    def listar_tickers_disponiveis(self):
+        """Lista todos os tickers disponíveis no GCS"""
+        blobs = self.client.list_blobs(
+            self.bucket_name,
+            prefix=GCS_DATA_PREFIX
+        )
+        
+        tickers_disponiveis = set()
+        for blob in blobs:
+            # Extrai ticker do nome do arquivo
+            # Exemplo: etl-processed/PETR4_SA/dados_historicos.csv
+            partes = blob.name.split('/')
+            if len(partes) >= 2:
+                ticker = partes[-2].replace('_SA', '.SA')
+                if ticker not in tickers_disponiveis:
+                    tickers_disponiveis.add(ticker)
+        
+        return sorted(list(tickers_disponiveis))
+    
+    def ler_dados_historicos(self, ticker):
+        """
+        Lê dados históricos pré-processados do GCS
+        Retorna DataFrame com OHLCV e indicadores técnicos
+        """
+        try:
+            # Normaliza nome do arquivo
+            ticker_normalizado = ticker.replace('.SA', '_SA')
+            blob_path = f"{GCS_DATA_PREFIX}{ticker_normalizado}/dados_historicos.csv"
+            
+            # Tenta ler do bucket GCS
+            blob = self.bucket.blob(blob_path)
+            
+            if not blob.exists():
+                print(f"⚠️ Arquivo não encontrado no GCS: {blob_path}")
+                return None
+            
+            # Download e parse do CSV
+            dados_csv = blob.download_as_string()
+            df = pd.read_csv(StringIO(dados_csv.decode('utf-8')), index_col='Date', parse_dates=True)
+            
+            # Validação básica
+            if df.empty or len(df) < MIN_DIAS_HISTORICO:
+                print(f"⚠️ {ticker}: Dados insuficientes ({len(df)} dias)")
+                return None
+            
+            return df.sort_index()
+            
+        except Exception as e:
+            print(f"❌ Erro ao ler {ticker} do GCS: {str(e)[:100]}")
+            return None
+    
+    def ler_features_fundamentalistas(self, ticker):
+        """Lê features fundamentalistas pré-calculadas do GCS"""
+        try:
+            ticker_normalizado = ticker.replace('.SA', '_SA')
+            blob_path = f"{GCS_DATA_PREFIX}{ticker_normalizado}/fundamentos.json"
+            
+            blob = self.bucket.blob(blob_path)
+            if not blob.exists():
+                return {}
+            
+            import json
+            dados_json = blob.download_as_string()
+            return json.loads(dados_json.decode('utf-8'))
+            
+        except Exception as e:
+            print(f"⚠️ Erro ao ler fundamentos para {ticker}: {str(e)[:50]}")
+            return {}
+    
+    def ler_metricas_garch(self, ticker):
+        """Lê volatilidades GARCH pré-calculadas"""
+        try:
+            ticker_normalizado = ticker.replace('.SA', '_SA')
+            blob_path = f"{GCS_DATA_PREFIX}{ticker_normalizado}/garch_volatility.json"
+            
+            blob = self.bucket.blob(blob_path)
+            if not blob.exists():
+                return {}
+            
+            import json
+            dados_json = blob.download_as_string()
+            return json.loads(dados_json.decode('utf-8'))
+            
+        except Exception as e:
+            return {}
+    
+    def salvar_dados_processados(self, ticker, dados_dict):
+        """Salva dados processados de volta ao GCS para cache"""
+        try:
+            import json
+            ticker_normalizado = ticker.replace('.SA', '_SA')
+            
+            # Salva como pickle para dados completos
+            blob_path = f"{GCS_DATA_PREFIX}{ticker_normalizado}/dados_processados.pkl"
+            blob = self.bucket.blob(blob_path)
+            blob.upload_from_string(
+                pickle.dumps(dados_dict),
+                content_type='application/octet-stream'
+            )
+            
+            print(f"✓ Dados processados salvos para {ticker}")
+            
+        except Exception as e:
+            print(f"⚠️ Erro ao salvar dados processados: {str(e)[:50]}")
+
+# =============================================================================
+# CLASSE: COLETOR DE DADOS (MODIFICADO PARA GCS)
 # =============================================================================
 
 class ColetorDados:
-    """Coleta e processa dados de mercado com profundidade máxima"""
+    """
+    MODIFICADO: Coleta dados do GCS em vez de yfinance
+    Interface idêntica à versão anterior, mas sem dependência de yfinance
+    """
     
     def __init__(self, periodo=PERIODO_DADOS):
         self.periodo = periodo
+        self.leitor_gcs = LeitorGCS()
         self.dados_por_ativo = {}
         self.dados_fundamentalistas = pd.DataFrame()
         self.ativos_sucesso = []
         self.dados_macro = {}
-        self.metricas_performance = pd.DataFrame() # Initialize metric dataframe
+        self.metricas_performance = pd.DataFrame()
     
     def coletar_dados_macroeconomicos(self):
-        """Coleta dados macroeconômicos para features externas"""
+        """
+        Coleta dados macro disponíveis no GCS
+        Em vez de baixar do yfinance, usa dados pré-processados
+        """
         print("\n📊 Coletando dados macroeconômicos...")
         
         try:
-            # Índices de referência
-            indices = {
-                'IBOV': '^BVSP',  # Ibovespa
-                'SP500': '^GSPC',  # S&P 500
-                'VIX': '^VIX',  # Volatility Index
-                'USD_BRL': 'BRL=X',  # Dólar
-                'GOLD': 'GC=F',  # Ouro
-                'OIL': 'CL=F'  # Petróleo WTI
-            }
+            indices_macro = ['IBOV', 'SP500', 'VIX', 'USD_BRL', 'GOLD', 'OIL']
             
-            for nome, simbolo in indices.items():
+            for indice in indices_macro:
                 try:
-                    ticker = yf.Ticker(simbolo)
-                    hist = ticker.history(period=self.periodo)
+                    # Tenta ler do GCS
+                    blob_path = f"{GCS_DATA_PREFIX}macro/{indice.lower()}_returns.csv"
+                    blob = self.leitor_gcs.bucket.blob(blob_path)
                     
-                    if not hist.empty:
-                        self.dados_macro[nome] = hist['Close'].pct_change()
-                        print(f"  ✓ {nome}: {len(hist)} dias")
+                    if blob.exists():
+                        dados_csv = blob.download_as_string()
+                        serie = pd.read_csv(
+                            StringIO(dados_csv.decode('utf-8')),
+                            index_col='Date',
+                            parse_dates=True,
+                            squeeze=True
+                        )
+                        self.dados_macro[indice] = serie
+                        print(f"  ✓ {indice}: {len(serie)} dias")
                     else:
-                        print(f"  ⚠️ {nome}: Sem dados históricos")
-                        self.dados_macro[nome] = pd.Series()
+                        print(f"  ⚠️ {indice}: Não disponível no GCS")
+                        self.dados_macro[indice] = pd.Series()
+                        
                 except Exception as e:
-                    print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
-                    self.dados_macro[nome] = pd.Series()
+                    print(f"  ⚠️ {indice}: Erro - {str(e)[:50]}")
+                    self.dados_macro[indice] = pd.Series()
             
-            print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
+            print(f"✓ Dados macroeconômicos coletados: {len([k for k, v in self.dados_macro.items() if not v.empty])} indicadores")
             
         except Exception as e:
             print(f"❌ Erro ao coletar dados macro: {str(e)}")
     
-    def adicionar_correlacoes_macro(self, df, simbolo):
-        """Adiciona correlações com indicadores macroeconômicos"""
-        if not self.dados_macro or 'returns' not in df.columns:
-            return df
-        
-        try:
-            # Ensure that 'returns' column is available and not all NaN
-            if df['returns'].isnull().all():
-                print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
-                return df
-
-            for nome, serie_macro in self.dados_macro.items():
-                if serie_macro.empty or serie_macro.isnull().all():
-                    continue
-                
-                # Alinha as datas
-                # Use reindex to align based on df's index, then align serie_macro to it
-                df_returns_aligned = df['returns'].reindex(df.index)
-                
-                # Ensure both series have data after alignment and before calculating rolling corr
-                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
-                    continue
-
-                # Align serie_macro to df_returns_aligned's index and fillna for rolling corr
-                # Using inner join implicitly via reindex and subsequent operations
-                combined_df = pd.DataFrame({
-                    'asset_returns': df_returns_aligned,
-                    'macro_returns': serie_macro.reindex(df.index) # Align macro to asset index
-                }).dropna() # Drop rows where either asset or macro returns are missing for this period
-
-                if len(combined_df) > 60:
-                    # Correlação rolling
-                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
-                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index) # Reindex to original df index
-                else:
-                    df[f'corr_{nome.lower()}'] = np.nan # Not enough data
-        except Exception as e:
-            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}") # Increased length for more detail
-        
-        return df
-    
     def coletar_e_processar_dados(self, simbolos):
-        """Coleta e processa dados de mercado com engenharia de features máxima"""
+        """
+        MODIFICADO: Coleta dados do GCS, não do yfinance
+        Usa dados pré-processados com indicadores técnicos já calculados
+        """
         self.ativos_sucesso = []
         lista_fundamentalistas = []
         
         self.coletar_dados_macroeconomicos()
         
         print(f"\n{'='*60}")
-        print(f"INICIANDO COLETA DE DADOS - {len(simbolos)} ativos")
-        print(f"Período: {self.periodo} (MÁXIMO DISPONÍVEL)")
-        print(f"Mínimo de dias: {MIN_DIAS_HISTORICO}")
+        print(f"INICIANDO COLETA DE DADOS DO GCS - {len(simbolos)} ativos")
+        print(f"Bucket: {self.leitor_gcs.bucket_name}")
+        print(f"Prefix: {GCS_DATA_PREFIX}")
         print(f"{'='*60}\n")
         
-        erros_detalhados = []
+        # Lista tickers disponíveis no GCS
+        tickers_disponiveis_gcs = self.leitor_gcs.listar_tickers_disponiveis()
+        print(f"📊 Tickers disponíveis no GCS: {len(tickers_disponiveis_gcs)}")
         
-        # Use the enhanced data collection function
-        dados_brutos = coletar_dados_ativos(simbolos, periodo=self.periodo)
-        
-        if dados_brutos is None: # Indicates failure to collect enough assets
-            return False
-
-        self.dados_por_ativo = dados_brutos
-        self.ativos_sucesso = list(dados_brutos.keys())
-        
-        # Proceed with feature engineering and fundamental data collection for successfully downloaded assets
-        for simbolo in tqdm(self.ativos_sucesso, desc="⚙️ Processando dados"):
+        # Processa cada ativo
+        for ticker in tqdm(simbolos, desc="📥 Coletando dados do GCS"):
             try:
-                df = EngenheiroFeatures.calcular_indicadores_tecnicos(self.dados_por_ativo[simbolo])
+                # Tenta ler dados do GCS
+                df = self.leitor_gcs.ler_dados_historicos(ticker)
                 
-                df = self.adicionar_correlacoes_macro(df, simbolo)
-                
-                df = df.dropna()
-                
-                # Validação após limpeza - mais flexível
-                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
-                if len(df) < min_dias_flexivel:
-                    erros_detalhados.append(f"{simbolo}: Após limpeza: {len(df)} dias (mínimo: {min_dias_flexivel})")
-                    # Remove from success list if data becomes insufficient after processing
-                    if simbolo in self.ativos_sucesso:
-                        self.ativos_sucesso.remove(simbolo)
+                if df is None or df.empty:
+                    print(f"  ⚠️ {ticker}: Dados não disponível")
                     continue
                 
-                # Sucesso - armazena dados processados
-                self.dados_por_ativo[simbolo] = df
+                # Validação de dados
+                if len(df) < MIN_DIAS_HISTORICO:
+                    print(f"  ⚠️ {ticker}: Dados insuficientes ({len(df)} dias)")
+                    continue
                 
-                # Fundamental data collection
-                try:
-                    ticker = yf.Ticker(simbolo)
-                    info = ticker.info
-                    features_fund = EngenheiroFeatures.calcular_features_fundamentalistas(info)
-                    features_fund['Ticker'] = simbolo
-                    lista_fundamentalistas.append(features_fund)
-                except Exception as fund_e:
-                    print(f"  ⚠️ {simbolo}: Erro ao coletar dados fundamentalistas - {str(fund_e)[:50]}")
-                    # Add a row with NaNs if fundamental data fails but historical data is good
-                    features_fund = {'Ticker': simbolo}
-                    # Add all expected fundamental columns with NaN values
-                    expected_fund_cols = [
-                        'pe_ratio', 'forward_pe', 'pb_ratio', 'ps_ratio', 'peg_ratio', 'ev_ebitda',
-                        'div_yield', 'payout_ratio', 'roe', 'roa', 'roic', 'profit_margin',
-                        'operating_margin', 'gross_margin', 'debt_to_equity', 'current_ratio',
-                        'quick_ratio', 'revenue_growth', 'earnings_growth', 'market_cap',
-                        'enterprise_value', 'beta', 'sector', 'industry'
-                    ]
-                    for col in expected_fund_cols:
-                        features_fund[col] = np.nan
-                    lista_fundamentalistas.append(features_fund)
-
-                print(f"  ✓ {simbolo}: {len(df)} dias coletados e processados")
+                # Armazena dados
+                self.dados_por_ativo[ticker] = df
+                self.ativos_sucesso.append(ticker)
+                
+                # Tenta ler features fundamentalistas
+                fund_features = self.leitor_gcs.ler_features_fundamentalistas(ticker)
+                if fund_features:
+                    fund_features['Ticker'] = ticker
+                    lista_fundamentalistas.append(fund_features)
+                else:
+                    # Cria entrada vazia se não houver dados
+                    fund_features = {'Ticker': ticker}
+                    lista_fundamentalistas.append(fund_features)
+                
+                print(f"  ✓ {ticker}: {len(df)} dias coletados")
                 
             except Exception as e:
-                erros_detalhados.append(f"{simbolo}: Erro no processamento - {str(e)[:50]}")
-                if simbolo in self.ativos_sucesso:
-                    self.ativos_sucesso.remove(simbolo)
+                print(f"  ❌ {ticker}: Erro - {str(e)[:50]}")
                 continue
         
-        # Log detailed errors from processing stage
-        if erros_detalhados:
-            print(f"\n⚠️ Ativos com problemas durante processamento ({len(erros_detalhados)}):")
-            for erro in erros_detalhados[:10]:
-                print(f"  • {erro}")
-            if len(erros_detalhados) > 10:
-                print(f"  ... e mais {len(erros_detalhados) - 10} ativos")
-        
-        # Final validation on number of assets after processing
+        # Validação final
         if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
-            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos após processamento.")
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos.")
             print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos")
-            print(f"\n💡 Dicas:")
-            print(f"  • Verifique sua conexão com a internet")
-            print(f"  • Tente selecionar mais ativos ou setores diferentes")
-            print(f"  • Alguns ativos podem estar sem dados recentes ou ter inconsistências")
-            print(f"  • Verifique os logs de erro detalhados acima\n")
             return False
         
-        self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
-        self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+        # Processa dataframe de fundamentos
+        if lista_fundamentalistas:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+            self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
+            
+            # Imputa valores faltantes
+            scaler = RobustScaler()
+            numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
+            
+            for col in numeric_cols:
+                if self.dados_fundamentalistas[col].isnull().any():
+                    median_val = self.dados_fundamentalistas[col].median()
+                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+            
+            self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
+                self.dados_fundamentalistas[numeric_cols]
+            )
         
-        scaler = RobustScaler()
-        numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
-        
-        # Impute median ONLY for numeric columns, then scale
-        for col in numeric_cols:
-            if self.dados_fundamentalistas[col].isnull().any():
-                median_val = self.dados_fundamentalistas[col].median()
-                self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
-        
-        # Apply scaling AFTER imputation
-        self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(self.dados_fundamentalistas[numeric_cols])
-
         # Calcula métricas de performance
         metricas = {}
         for simbolo in self.ativos_sucesso:
-            if 'returns' in self.dados_por_ativo[simbolo] and 'drawdown' in self.dados_por_ativo[simbolo]:
+            if 'returns' in self.dados_por_ativo[simbolo]:
                 returns = self.dados_por_ativo[simbolo]['returns']
                 metricas[simbolo] = {
                     'retorno_anual': returns.mean() * 252,
                     'volatilidade_anual': returns.std() * np.sqrt(252),
                     'sharpe': (returns.mean() * 252 - TAXA_LIVRE_RISCO) / (returns.std() * np.sqrt(252)) if returns.std() > 0 else 0,
-                    'max_drawdown': self.dados_por_ativo[simbolo]['drawdown'].min() # Use the calculated drawdown
+                    'max_drawdown': np.nan  # Pode ser calculado se disponível
                 }
-            elif 'returns' in self.dados_por_ativo[simbolo]: # Fallback if drawdown is not calculated
-                returns = self.dados_por_ativo[simbolo]['returns']
-                metricas[simbolo] = {
-                    'retorno_anual': returns.mean() * 252,
-                    'volatilidade_anual': returns.std() * np.sqrt(252),
-                    'sharpe': (returns.mean() * 252 - TAXA_LIVRE_RISCO) / (returns.std() * np.sqrt(252)) if returns.std() > 0 else 0,
-                    'max_drawdown': np.nan # Indicate missing drawdown
-                }
-
+        
         self.metricas_performance = pd.DataFrame(metricas).T
         
+        print(f"✓ Coleta concluída: {len(self.ativos_sucesso)} ativos válidos\n")
         return True
-
-def coletar_dados_ativos(lista_ativos, periodo='max'):
-    """
-    Coleta dados históricos de múltiplos ativos com tratamento robusto de erros
-    
-    """
-    dados_coletados = {}
-    ativos_com_erro = []
-    
-    # Streamlit progress elements
-    progress_bar = None
-    status_text = None
-    
-    # É necessário que 'sys', 'time', 'numpy', 'yfinance', 'tqdm', e 'st' (Streamlit)
-    # estejam importados no topo do seu arquivo principal.
-    if 'streamlit' in sys.modules: # Only use Streamlit elements if running in Streamlit
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-    
-    total = len(lista_ativos)
-    
-    for idx, ticker in enumerate(tqdm(lista_ativos, desc="📥 Coletando dados")):
-        if status_text:
-            status_text.text(f"Coletando {ticker} ({idx+1}/{total})...")
-        if progress_bar:
-            progress_bar.progress((idx + 1) / total)
-            
-        # Add retry logic with exponential backoff
-        max_retries = 3
-        retry_delay = 1
-        
-        for attempt in range(max_retries):
-            try:
-                # >>> NOVO: Tenta usar um método mais estável de download
-                # Caching mechanism would be implemented here if using a dedicated library or custom logic
-                
-                # Direct download attempt
-                df = yf.download(
-                    ticker,
-                    period=periodo,
-                    progress=False,
-                    timeout=30,
-                    session=session  # <--- Adicionar a sessão aqui
-                )
-                
-                # Check if download was successful and returned data
-                if not df.empty and len(df) > 1: # Ensure it's not just an empty DataFrame from a failed request
-                    dados_coletados[ticker] = df
-                    break # Exit retry loop if successful
-                else:
-                    raise ValueError("Download returned empty DataFrame or insufficient data points.") # Trigger retry
-                
-            except Exception as e:
-                # Log specific download error if it's the last attempt
-                if attempt == max_retries - 1:
-                    ativos_com_erro.append((ticker, str(e)))
-                
-                # Wait before retrying
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-        
-        # --- [INSERIDO] Atraso principal para evitar Rate Limiting ---
-        # Pausa de 1.0 a 2.0 segundos entre o download de cada ativo.
-        time.sleep(1.0 + np.random.rand()) 
-        # -----------------------------------------------------------
-    
-    # Clean up Streamlit elements if they were used
-    if progress_bar:
-        progress_bar.empty()
-    if status_text:
-        status_text.empty()
-    
-    # Display collection summary in Streamlit if applicable
-    if ativos_com_erro and 'streamlit' in sys.modules:
-        with st.expander(f"⚠️ Ativos com problemas ({len(ativos_com_erro)}):"):
-            for ticker, erro in ativos_com_erro[:10]:  # Show first 10
-                st.text(f"  • {ticker}: {erro}")
-            if len(ativos_com_erro) > 10:
-                st.text(f"  ... e mais {len(ativos_com_erro) - 10} ativos")
-    elif ativos_com_erro:
-        print(f"\n⚠️ Ativos com problemas ({len(ativos_com_erro)}):")
-        for ticker, erro in ativos_com_erro[:10]:
-            print(f"  • {ticker}: {erro}")
-
-    if 'streamlit' in sys.modules:
-        st.success(f"✓ Coleta concluída: {len(dados_coletados)} ativos com dados.")
-    else:
-        print(f"\n✓ Coleta concluída: {len(dados_coletados)} ativos com dados.")
-    
-    # Validate minimum assets collected
-    if len(dados_coletados) < NUM_ATIVOS_PORTFOLIO:
-        error_msg = f"""
-        ❌ ERRO: Apenas {len(dados_coletados)} ativos coletados.
-            Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos
-        
-        💡 Dicas:
-          • Verifique sua conexão com a internet
-          • Tente selecionar mais ativos ou setores diferentes
-          • Alguns ativos podem estar sem dados recentes
-          • Aguarde alguns minutos e tente novamente (possível rate limiting)
-        """
-        if 'streamlit' in sys.modules:
-            st.error(error_msg)
-        else:
-            print(error_msg)
-        return None
-    
-    return dados_coletados
 # =============================================================================
 # CLASSE: MODELAGEM DE VOLATILIDADE GARCH
 # =============================================================================
