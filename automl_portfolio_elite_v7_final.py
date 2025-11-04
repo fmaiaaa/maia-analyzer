@@ -53,6 +53,7 @@ from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout, Conv1D, MaxPoolin
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.optimizers import Adam
 import requests
+from io import StringIO
 
 warnings.filterwarnings('ignore')
 
@@ -62,7 +63,7 @@ warnings.filterwarnings('ignore')
 
 REQUIRED_PACKAGES = {
     'google': 'google-cloud-storage',
-    'yfinance': 'yfinance',
+    'io': 'io',
     'plotly': 'plotly',
     'streamlit': 'streamlit',
     'sklearn': 'scikit-learn',
@@ -101,7 +102,7 @@ try:
         ensure_package(module.split('.')[0], package)
     
     import streamlit as st
-    import yfinance as yf
+    from io import StringIO
     import plotly.graph_objects as go
     import plotly.express as px
     from plotly.subplots import make_subplots
@@ -157,9 +158,10 @@ PESO_MAX = 0.30
 session = requests.Session()
 session.headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 
-GCS_PROJECT_ID = os.getenv('GCS_PROJECT_ID', 'seu-projeto-gcp')
-GCS_BUCKET_NAME = os.getenv('GCS_BUCKET_NAME', 'dados-financeiros-processados')
-GCS_DATA_PREFIX = 'etl-processed/'
+# ATUALIZAR ESTAS CONSTANTES PARA CORRESPONDEREM AO SCRIPT GERADOR
+GCS_PROJECT_ID = os.getenv('GCS_PROJECT_ID', 'maia-analyzer') # Mantenha o seu ID do projeto GCP
+GCS_BUCKET_NAME = os.getenv('GCS_BUCKET_NAME', 'meu-portfolio-dados-gratuitos') # 🎯 DEFINIDO NO gerador_financeiro.py
+GCS_DATA_PREFIX = 'dados_financeiros_etl/' # 🎯 DEFINIDO NO gerador_financeiro.py como GCS_DESTINATION_FOLDER
 
 ATIVOS_IBOVESPA = [
     'ALOS3.SA', 'ABEV3.SA', 'ASAI3.SA', 'AURE3.SA', 'AZZA3.SA', 'B3SA3.SA',
@@ -722,91 +724,70 @@ class EngenheiroFeatures:
             return (max_val - serie) / (max_val - min_val)
 
 # =============================================================================
-# CLASSE: LEITOR GCS
+# CLASSE: LEITOR GCS (REESTRUTURADA PARA CONSUMIR CSV COMPLETO)
 # =============================================================================
 
 class LeitorGCS:
     """
-    Lê dados financeiros pré-processados do GCS
-    Substitui a coleta de yfinance com dados já processados e validados
+    Lê dados financeiros PRÉ-PROCESSADOS (CSV completo) do GCS.
+    Consome o CSV gerado pelo gerador_financeiro.py.
     """
     
-    def __init__(self, project_id=GCS_PROJECT_ID, bucket_name=GCS_BUCKET_NAME):
+    def __init__(self, project_id=GCS_PROJECT_ID, bucket_name=GCS_BUCKET_NAME, data_prefix=GCS_DATA_PREFIX):
         self.project_id = project_id
         self.bucket_name = bucket_name
+        self.data_prefix = data_prefix
         try:
+            # Tenta autenticar e criar o cliente GCS
             self.client = storage.Client(project=project_id)
             self.bucket = self.client.bucket(bucket_name)
         except Exception as e:
-            print(f"⚠️ Aviso: Autenticação GCS pode estar incompleta: {str(e)[:50]}")
+            print(f"⚠️ Aviso: Falha ao autenticar/conectar no GCS: {str(e)[:100]}")
             self.client = None
             self.bucket = None
         self.cache = {}
     
-    def listar_tickers_disponiveis(self):
-        """Lista todos os tickers disponíveis no GCS"""
-        try:
-            if not self.client:
-                return []
-            
-            blobs = self.client.list_blobs(self.bucket_name, prefix=GCS_DATA_PREFIX)
-            tickers_disponiveis = set()
-            
-            for blob in blobs:
-                partes = blob.name.split('/')
-                if len(partes) >= 2:
-                    ticker = partes[-2].replace('_SA', '.SA')
-                    if ticker not in tickers_disponiveis:
-                        tickers_disponiveis.add(ticker)
-            
-            return sorted(list(tickers_disponiveis))
-        except Exception as e:
-            print(f"⚠️ Erro ao listar tickers: {str(e)[:50]}")
-            return []
-    
-    def ler_dados_historicos(self, ticker):
-        """Lê dados históricos pré-processados do GCS"""
+    # Este método substitui todos os métodos de leitura anteriores
+    def ler_dados_historicos_completos(self, ticker):
+        """Lê o CSV completo (Histórico, Técnico, GARCH, Fundamentalista) do GCS."""
+        if ticker in self.cache:
+            return self.cache[ticker].copy()
+
         try:
             if not self.bucket:
+                print(f"❌ Erro: Cliente GCS não autenticado/disponível.")
                 return None
             
-            ticker_normalizado = ticker.replace('.SA', '_SA')
-            blob_path = f"{GCS_DATA_PREFIX}{ticker_normalizado}/dados_historicos.csv"
+            # Formato do arquivo: dados_financeiros_etl/PETR4.SA.csv
+            blob_path = f"{self.data_prefix}{ticker}.csv"
             blob = self.bucket.blob(blob_path)
             
             if not blob.exists():
+                # print(f"❌ Arquivo {blob_path} não encontrado no GCS.")
                 return None
             
+            # Download do blob como string
             dados_csv = blob.download_as_string()
-            df = pd.read_csv(StringIO(dados_csv.decode('utf-8')), index_col='Date', parse_dates=True)
+            
+            # Usa StringIO para ler o CSV em memória com Pandas
+            df = pd.read_csv(
+                StringIO(dados_csv.decode('utf-8')),
+                index_col='Date', # 'Date' é a coluna de índice do seu gerador
+                parse_dates=True,
+                dtype={'ticker': str} # Garante que o ticker é lido como string
+            )
             
             if df.empty or len(df) < MIN_DIAS_HISTORICO * 0.7:
                 return None
             
-            return df.sort_index()
+            df = df.sort_index()
+            self.cache[ticker] = df
+            
+            return df.copy()
             
         except Exception as e:
-            print(f"⚠️ Erro ao ler {ticker} do GCS: {str(e)[:50]}")
+            print(f"⚠️ Erro ao ler {ticker} do GCS: {str(e)[:100]}")
             return None
-    
-    def ler_features_fundamentalistas(self, ticker):
-        """Lê features fundamentalistas pré-calculadas do GCS"""
-        try:
-            if not self.bucket:
-                return {}
-            
-            ticker_normalizado = ticker.replace('.SA', '_SA')
-            blob_path = f"{GCS_DATA_PREFIX}{ticker_normalizado}/fundamentos.json"
-            blob = self.bucket.blob(blob_path)
-            
-            if not blob.exists():
-                return {}
-            
-            dados_json = blob.download_as_string()
-            return json.loads(dados_json.decode('utf-8'))
-            
-        except Exception as e:
-            return {}
 
 # =============================================================================
 # CLASSE: COLETOR DE DADOS (MODIFICADO PARA GCS)
@@ -814,126 +795,99 @@ class LeitorGCS:
 
 class ColetorDados:
     """
-    Coleta dados do GCS em vez de yfinance
-    Interface idêntica à versão anterior, mas sem dependência de yfinance
+    Coleta dados PRÉ-PROCESSADOS (CSV) do GCS.
+    A API de Coleta é mantida, mas a lógica de download e cálculo é removida.
     """
     
     def __init__(self, periodo=PERIODO_DADOS):
         self.periodo = periodo
-        self.leitor_gcs = LeitorGCS()
+        self.leitor_gcs = LeitorGCS() 
         self.dados_por_ativo = {}
         self.dados_fundamentalistas = pd.DataFrame()
         self.ativos_sucesso = []
-        self.dados_macro = {}
+        self.dados_macro = {} # Mantido para compatibilidade, mas pode ser vazio
         self.metricas_performance = pd.DataFrame()
     
+    # Não coleta mais. A correlação com IBOV/USD já está no CSV.
     def coletar_dados_macroeconomicos(self):
-        """Coleta dados macro disponíveis no GCS"""
-        print("\n📊 Coletando dados macroeconômicos do GCS...")
-        
-        try:
-            indices_macro = ['IBOV', 'SP500', 'VIX', 'USD_BRL', 'GOLD', 'OIL']
-            
-            for indice in indices_macro:
-                try:
-                    blob_path = f"{GCS_DATA_PREFIX}macro/{indice.lower()}_returns.csv"
-                    if self.leitor_gcs.bucket:
-                        blob = self.leitor_gcs.bucket.blob(blob_path)
-                        
-                        if blob.exists():
-                            dados_csv = blob.download_as_string()
-                            serie = pd.read_csv(
-                                StringIO(dados_csv.decode('utf-8')),
-                                index_col='Date',
-                                parse_dates=True,
-                                squeeze=True
-                            )
-                            self.dados_macro[indice] = serie
-                            print(f"  ✓ {indice}: {len(serie)} dias")
-                        else:
-                            self.dados_macro[indice] = pd.Series()
-                            
-                except Exception as e:
-                    self.dados_macro[indice] = pd.Series()
-            
-            print(f"✓ Dados macro coletados\n")
-            
-        except Exception as e:
-            print(f"⚠️ Erro ao coletar dados macro: {str(e)}")
-    
+        print("📊 Correlações macroeconômicas lidas diretamente do CSV pré-processado.")
+        self.dados_macro = {'IBOV': pd.Series(), 'USD_BRL': pd.Series()}
+
     def coletar_e_processar_dados(self, simbolos):
         """
-        Coleta dados do GCS, não do yfinance
-        Usa dados pré-processados com indicadores técnicos já calculados
+        Coleta dados do GCS, não do yfinance.
+        Usa dados pré-processados com indicadores e fundamentos já calculados.
         """
         self.ativos_sucesso = []
-        lista_fundamentalistas = []
-        
-        self.coletar_dados_macroeconomicos()
+        self.coletar_dados_macroeconomicos() # Chama a função dummy
         
         print(f"\n{'='*60}")
-        print(f"INICIANDO COLETA DE DADOS DO GCS - {len(simbolos)} ativos")
-        print(f"Bucket: {self.leitor_gcs.bucket_name}")
+        print(f"INICIANDO COLETA DE DADOS PRÉ-PROCESSADOS DO GCS - {len(simbolos)} ativos")
+        print(f"Bucket: {self.leitor_gcs.bucket_name} / Pasta: {self.leitor_gcs.data_prefix}")
         print(f"{'='*60}\n")
         
-        # Processa cada ativo
+        lista_fundamentos_e_perf = []
+        
         for ticker in tqdm(simbolos, desc="📥 Coletando dados do GCS"):
             try:
-                df = self.leitor_gcs.ler_dados_historicos(ticker)
+                # 🎯 LER O CSV COMPLETO do GCS
+                df_completo = self.leitor_gcs.ler_dados_historicos_completos(ticker)
                 
-                if df is None or df.empty:
+                if df_completo is None or df_completo.empty:
                     continue
                 
-                if len(df) < MIN_DIAS_HISTORICO:
-                    continue
-                
-                self.dados_por_ativo[ticker] = df
+                # 1. Dados Históricos, Técnicos e GARCH (df_completo já contém tudo)
+                self.dados_por_ativo[ticker] = df_completo
                 self.ativos_sucesso.append(ticker)
                 
-                # Tenta ler features fundamentalistas
-                fund_features = self.leitor_gcs.ler_features_fundamentalistas(ticker)
-                if fund_features:
-                    fund_features['Ticker'] = ticker
-                    lista_fundamentalistas.append(fund_features)
-                else:
-                    lista_fundamentalistas.append({'Ticker': ticker})
+                # 2. Extrair dados Fundamentalistas e Performance Estática
+                primeira_linha = df_completo.iloc[0] # Fundamentos são replicados em todas as linhas
                 
-                print(f"  ✓ {ticker}: {len(df)} dias coletados")
+                features_fund = {'Ticker': ticker}
+                
+                # Define colunas que SÃO históricas/técnicas para *excluir* da tabela de fundamentos
+                cols_para_excluir = ['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'log_returns']
+                # Adiciona prefixos comuns de features temporais/técnicas
+                prefixos_tecnicos = ('sma_', 'ema_', 'volatility_', 'returns_', 'volume_', 'close_lag_', 'volume_lag_', 'macd_', 'bb_', 'adx_', 'atr_', 'cci_', 'obv', 'cmf', 'mfi', 'vwap', 'drawdown', 'max_drawdown', 'autocorr_', 'day_of_week', 'month', 'quarter', 'day_of_month', 'week_of_year', 'garch_') # Incluindo garch
+                
+                # Extrai apenas as colunas que não são claramente históricas/técnicas/temporais
+                for col in primeira_linha.index:
+                    is_excluded_col = col in cols_para_excluir or col.startswith(prefixos_tecnicos)
+                    if not is_excluded_col:
+                         features_fund[col] = primeira_linha[col]
+
+                lista_fundamentos_e_perf.append(features_fund)
                 
             except Exception as e:
-                print(f"  ❌ {ticker}: Erro - {str(e)[:50]}")
+                print(f"  ❌ {ticker}: Erro na leitura/processamento GCS - {str(e)[:50]}")
                 continue
         
-        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
-            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos.")
-            return False
+        # ... (O restante do código de consolidação de self.dados_fundamentalistas e self.metricas_performance
+        # deve ser mantido, pois ele trata NaNs e formata os dados, usando lista_fundamentos_e_perf.)
+        # Certifique-se de que a lógica de preenchimento de NaNs e a criação de metricas_performance 
+        # (usando 'sharpe_ratio', 'annual_return', 'annual_volatility') esteja presente.
         
-        # Processa dataframe de fundamentos
-        if lista_fundamentalistas:
-            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
+        if lista_fundamentos_e_perf:
+            self.dados_fundamentalistas = pd.DataFrame(lista_fundamentos_e_perf).set_index('Ticker')
             self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
             
+            # Preenche NaNs com a mediana
             numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
-            
             for col in numeric_cols:
                 if self.dados_fundamentalistas[col].isnull().any():
                     median_val = self.dados_fundamentalistas[col].median()
                     self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
         
-        # Calcula métricas de performance
-        metricas = {}
-        for simbolo in self.ativos_sucesso:
-            if 'returns' in self.dados_por_ativo[simbolo]:
-                returns = self.dados_por_ativo[simbolo]['returns']
-                metricas[simbolo] = {
-                    'retorno_anual': returns.mean() * 252,
-                    'volatilidade_anual': returns.std() * np.sqrt(252),
-                    'sharpe': (returns.mean() * 252 - TAXA_LIVRE_RISCO) / (returns.std() * np.sqrt(252)) if returns.std() > 0 else 0,
-                }
+        # Cria o DataFrame de Performance (já contido no self.dados_fundamentalistas)
+        performance_cols = [col for col in self.dados_fundamentalistas.columns if col in ['sharpe_ratio', 'annual_return', 'annual_volatility', 'max_drawdown']]
+        self.metricas_performance = self.dados_fundamentalistas[performance_cols].rename(columns={
+            'sharpe_ratio': 'sharpe',
+            'annual_return': 'retorno_anual',
+            'annual_volatility': 'volatilidade_anual',
+            'max_drawdown': 'max_drawdown'
+        }, errors='ignore')
         
-        self.metricas_performance = pd.DataFrame(metricas).T
-        
-        print(f"✓ Coleta concluída: {len(self.ativos_sucesso)} ativos válidos\n")
+        print(f"✓ Coleta concluída: {len(self.ativos_sucesso)} ativos válidos")
         return True
         
 # =============================================================================
@@ -3378,10 +3332,17 @@ def aba_construtor_portfolio():
                     </div>
                     """, unsafe_allow_html=True)
 
+# =============================================================================
+# INTERFACE STREAMLIT - ABA 4: ANÁLISE INDIVIDUAL (REVISADA PARA GCS)
+# =============================================================================
+
+# Certifique-se de que a classe LeitorGCS e as constantes GCS_BUCKET_NAME/GCS_DATA_PREFIX
+# estejam definidas corretamente nas seções anteriores, conforme instruído.
+
 def aba_analise_individual():
-    """Aba 4: Análise Individual de Ativos"""
+    """Aba 4: Análise Individual de Ativos (Consome dados do GCS)"""
     
-    st.markdown("## 🔍 Análise Individual Completa de Ativos")
+    st.markdown("## 🔍 Análise Individual Completa de Ativos (Dados GCS)")
     
     # Determine available assets for selection
     if 'ativos_para_analise' in st.session_state and st.session_state.ativos_para_analise:
@@ -3395,100 +3356,87 @@ def aba_analise_individual():
         st.error("Nenhum ativo disponível para análise. Verifique as configurações ou selecione ativos.")
         return
 
+    # Certifique-se de que o builder existe para usar o LeitorGCS
+    if 'builder' not in st.session_state or st.session_state.builder is None:
+        # Cria uma instância básica do Leitor GCS se o pipeline não foi rodado
+        leitor_gcs_instance = LeitorGCS(bucket_name=GCS_BUCKET_NAME, data_prefix=GCS_DATA_PREFIX)
+        st.info("⚠️ O Construtor de Portfólio não foi executado. A análise buscará os dados diretamente do GCS (sem cache de ML/GARCH).")
+    else:
+        # Usa o leitor já inicializado no builder
+        leitor_gcs_instance = st.session_state.builder.coletor.leitor_gcs if hasattr(st.session_state.builder, 'coletor') and hasattr(st.session_state.builder.coletor, 'leitor_gcs') else LeitorGCS(bucket_name=GCS_BUCKET_NAME, data_prefix=GCS_DATA_PREFIX)
+
     col1, col2 = st.columns([3, 1])
     
     with col1:
         ativo_selecionado = st.selectbox(
             "Selecione um ativo para análise detalhada:",
             options=ativos_disponiveis,
-            format_func=lambda x: x.replace('.SA', '') if isinstance(x, str) else x, # Format ticker names
+            format_func=lambda x: x.replace('.SA', '') if isinstance(x, str) else x,
             key='individual_asset_select'
         )
     
     with col2:
         if st.button("🔄 Analisar Ativo", key='analyze_asset_button', type="primary"):
-            st.session_state.analisar_ativo_triggered = True # Flag to trigger analysis
+            st.session_state.analisar_ativo_triggered = True
+            st.session_state.ativo_analisado_cache = ativo_selecionado # Cache the selected asset
     
     # Check if analysis should be performed
-    if 'analisar_ativo_triggered' not in st.session_state or not st.session_state.analisar_ativo_triggered:
+    if 'analisar_ativo_triggered' not in st.session_state or not st.session_state.analisar_ativo_triggered or st.session_state.ativo_analisado_cache != ativo_selecionado:
         st.info("👆 Selecione um ativo e clique em 'Analisar Ativo' para começar a análise completa.")
         return
     
-# Execute analysis
-    with st.spinner(f"Analisando {ativo_selecionado}..."):
-        try: # Este 'try' agora abrange toda a lógica de download e inicialização
-            # Tenta obter dados históricos com retry logic
-            max_retries = 3
-            retry_delay = 2
-            hist = pd.DataFrame()  # Initialize an empty DataFrame
-            
-            # Loop de Retry para Download
-            for attempt in range(max_retries):
-                try:
-                    # Tenta obter dados históricos usando yf.download (mais robusto)
-                    hist = yf.download(
-                        ativo_selecionado, 
-                        period='max', 
-                        progress=False, # Disable yfinance's built-in progress bar
-                        timeout=30, # Aumente o timeout aqui também
-                        # User-agent is managed by yfinance versions. Rely on retries.
-                    )
-                    
-                    # Se o download for bem-sucedido e não estiver vazio, quebra o loop de retry
-                    if not hist.empty and len(hist) > 1:
-                        break
-                    
-                    # Se o download for vazio, tenta novamente
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                    
-                except Exception as e_download:
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-                        continue
-                    else:
-                        # Re-raise o erro final após todas as tentativas falharem
-                        st.error(f"Falha na coleta de dados após {max_retries} tentativas: {str(e_download)}")
-                        raise # Propaga o erro para o try/except externo (após o spinner)
+    # Execute analysis
+    with st.spinner(f"Analisando {ativo_selecionado} (Lendo do GCS)..."):
+        
+        df_completo = None
+        features_fund = {}
+        
+        # Tenta usar dados já carregados pelo builder
+        if 'builder' in st.session_state and st.session_state.builder is not None and ativo_selecionado in st.session_state.builder.dados_por_ativo:
+            df_completo = st.session_state.builder.dados_por_ativo[ativo_selecionado].copy()
+        
+        # Se não estiver no cache do builder, carrega via GCS
+        if df_completo is None:
+            df_completo = leitor_gcs_instance.ler_dados_historicos_completos(ativo_selecionado)
 
-            if hist.empty or len(hist) <= 1:
-                st.error(f"Não foi possível obter dados históricos para {ativo_selecionado}.")
-                return
-            
-            # 1. Obtém o objeto Ticker e dados fundamentalistas
-            ticker = None # Inicializa o objeto ticker
-            try:
-                # Tenta obter o objeto Ticker para dados fundamentalistas.
-                ticker = yf.Ticker(ativo_selecionado)
-                features_fund = AnalisadorIndividualAtivos.calcular_features_fundamentalistas_expandidas(ticker)
-            except Exception as e_fund:
-                # Se falhar, usa dados fundamentalistas vazios
-                st.warning(f"⚠️ Erro ao obter dados fundamentalistas para {ativo_selecionado}. Usando dados vazios. Erro: {str(e_fund)[:50]}")
-                features_fund = {} # Use um dicionário vazio como fallback para features_fund
-            
-            # 2. Calcula todos os indicadores técnicos
-            df_completo = AnalisadorIndividualAtivos.calcular_todos_indicadores_tecnicos(hist)
+        if df_completo is None or df_completo.empty:
+            st.error(f"❌ Não foi possível obter dados pré-processados do GCS para {ativo_selecionado}. Verifique o GCS Bucket e a pasta `{GCS_DATA_PREFIX}`.")
+            return
 
-            # Tabs for analysis sections
-            tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                "📊 Visão Geral",
-                "📈 Análise Técnica",
-                "💼 Análise Fundamentalista",
-                "🤖 Machine Learning",
-                "🔬 Clusterização e Similaridade"
-            ])
-            
-            # O restante do código das abas (tab1 a tab5) continua aqui,
-            # usando 'df_completo' e 'features_fund'
-            # ...
+        # 1. Extrair os Dados Fundamentalistas Estáticos
+        # Reutiliza a lógica de exclusão de colunas históricas da classe ColetorDados (Passo 3)
+        primeira_linha = df_completo.iloc[0]
+        
+        cols_para_excluir = ['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'log_returns']
+        prefixos_tecnicos = ('sma_', 'ema_', 'volatility_', 'returns_', 'volume_', 'close_lag_', 'volume_lag_', 'macd_', 'bb_', 'adx_', 'atr_', 'cci_', 'obv', 'cmf', 'mfi', 'vwap', 'drawdown', 'max_drawdown', 'autocorr_', 'day_of_week', 'month', 'quarter', 'day_of_month', 'week_of_year', 'garch_')
+        
+        for col in primeira_linha.index:
+            is_excluded_col = col in cols_para_excluir or col.startswith(prefixos_tecnicos)
+            if not is_excluded_col and col != 'ticker' and not col.startswith('fund_'): # Exclui a coluna 'ticker' e colunas que já foram prefixadas no ETL (se for o caso)
+                 features_fund[col] = primeira_linha[col]
+        
+        # Renomeia colunas prefixadas se existirem (para exibir sem o prefixo 'fund_')
+        features_fund_final = {}
+        for k, v in features_fund.items():
+            features_fund_final[k.replace('fund_', '')] = v
+        
+        features_fund = features_fund_final
 
-        except Exception as e:
-            # Captura erros gerais (como o erro final de download propagado)
-            st.error(f"Erro inesperado durante a análise do ativo: {str(e)}")
-            import traceback
-            st.error(f"Traceback: {traceback.format_exc()}")
-                
+        # 2. O df_completo JÁ é a análise técnica completa
+        # A função calcular_todos_indicadores_tecnicos não é mais necessária!
+        
+        # Tabs for analysis sections
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "📊 Visão Geral",
+            "📈 Análise Técnica",
+            "💼 Análise Fundamentalista",
+            "🤖 Machine Learning",
+            "🔬 Clusterização e Similaridade"
+        ])
+        
+        # ====================================================================
+        # ABA 1: VISÃO GERAL
+        # ====================================================================
         with tab1:
             st.markdown(f"### {ativo_selecionado.replace('.SA', '')} - Visão Geral")
             
@@ -3545,6 +3493,9 @@ def aba_analise_individual():
             else:
                 st.warning("Dados de histórico incompletos para gráfico.")
 
+        # ====================================================================
+        # ABA 2: ANÁLISE TÉCNICA
+        # ====================================================================
         with tab2:
             st.markdown("### Indicadores Técnicos")
             
@@ -3553,7 +3504,11 @@ def aba_analise_individual():
             
             col1.metric("RSI (14)", f"{df_completo['rsi_14'].iloc[-1]:.2f}" if 'rsi_14' in df_completo.columns else "N/A")
             col2.metric("MACD", f"{df_completo['macd'].iloc[-1]:.4f}" if 'macd' in df_completo.columns else "N/A")
-            col3.metric("Stoch %K", f"{df_completo['stoch_k'].iloc[-1]:.2f}" if 'stoch_k' in df_completo.columns else "N/A")
+            
+            # Stochastic Oscillator (stoch_k is calculated in the ETL, but ensure consistency)
+            stoch_k_col = 'stoch_k' if 'stoch_k' in df_completo.columns else 'Stoch_K' # Check for possible naming convention
+            col3.metric("Stoch %K", f"{df_completo[stoch_k_col].iloc[-1]:.2f}" if stoch_k_col in df_completo.columns else "N/A")
+            
             col4.metric("ADX", f"{df_completo['adx'].iloc[-1]:.2f}" if 'adx' in df_completo.columns else "N/A")
             col5.metric("CCI", f"{df_completo['cci'].iloc[-1]:.2f}" if 'cci' in df_completo.columns else "N/A")
             col6.metric("ATR (%)", f"{df_completo['atr_percent'].iloc[-1]:.2f}%" if 'atr_percent' in df_completo.columns else "N/A")
@@ -3572,13 +3527,14 @@ def aba_analise_individual():
                 fig_osc.add_hline(y=70, line_dash="dash", line_color="red", row=1, col=1, annotation_text="Overbought (70)")
                 fig_osc.add_hline(y=30, line_dash="dash", line_color="green", row=1, col=1, annotation_text="Oversold (30)")
             
-            if 'stoch_k' in df_completo.columns and 'stoch_d' in df_completo.columns:
+            stoch_d_col = 'stoch_d' if 'stoch_d' in df_completo.columns else 'Stoch_D'
+            if stoch_k_col in df_completo.columns and stoch_d_col in df_completo.columns:
                 fig_osc.add_trace(
-                    go.Scatter(x=df_completo.index, y=df_completo['stoch_k'], name='Stochastic %K', line=dict(color='#e74c3c')),
+                    go.Scatter(x=df_completo.index, y=df_completo[stoch_k_col], name='Stochastic %K', line=dict(color='#e74c3c')),
                     row=2, col=1
                 )
                 fig_osc.add_trace(
-                    go.Scatter(x=df_completo.index, y=df_completo['stoch_d'], name='Stochastic %D', line=dict(color='#7f8c8d')),
+                    go.Scatter(x=df_completo.index, y=df_completo[stoch_d_col], name='Stochastic %D', line=dict(color='#7f8c8d')),
                     row=2, col=1
                 )
                 fig_osc.add_hline(y=80, line_dash="dash", line_color="red", row=2, col=1, annotation_text="Overbought (80)")
@@ -3593,11 +3549,17 @@ def aba_analise_individual():
             # Table of all current indicators
             st.markdown("#### Valores Atuais dos Indicadores Técnicos")
             
-            # Extract current values for available indicators
             current_indicators = {}
-            available_indicator_cols = [col for col in df_completo.columns if col not in ['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'log_returns', 'day_of_week', 'month', 'quarter', 'day_of_month', 'week_of_year']]
+            # Lista de colunas a ignorar na tabela de indicadores (já foram tratadas ou são redundantes)
+            ignore_cols = set(['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'log_returns', 'ticker', 'sector', 'industry'])
             
-            for col in available_indicator_cols:
+            # Identifica colunas que são features técnicas/temporais/garch
+            indicator_cols = [
+                col for col in df_completo.columns
+                if col not in ignore_cols and (col.startswith(prefixos_tecnicos) or col.startswith('fund_') or col.endswith(('_week', '_month', '_quarter', '_year')))
+            ]
+            
+            for col in indicator_cols:
                 if col in df_completo.columns and not df_completo[col].empty:
                     current_indicators[col] = df_completo[col].iloc[-1]
             
@@ -3611,6 +3573,9 @@ def aba_analise_individual():
             else:
                 st.warning("Nenhum indicador técnico com dados atuais disponível.")
 
+        # ====================================================================
+        # ABA 3: ANÁLISE FUNDAMENTALISTA
+        # ====================================================================
         with tab3:
             st.markdown("### Análise Fundamentalista Expandida")
             
@@ -3622,7 +3587,7 @@ def aba_analise_individual():
             col2.metric("P/VP", f"{features_fund.get('pb_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('pb_ratio')) else "N/A")
             col3.metric("P/VPA (Vendas)", f"{features_fund.get('ps_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('ps_ratio')) else "N/A")
             col4.metric("PEG", f"{features_fund.get('peg_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('peg_ratio')) else "N/A")
-            col5.metric("EV/EBITDA", f"{features_fund.get('ev_to_ebitda', np.nan):.2f}" if not pd.isna(features_fund.get('ev_to_ebitda')) else "N/A")
+            col5.metric("EV/EBITDA", f"{features_fund.get('ev_ebitda', np.nan):.2f}" if not pd.isna(features_fund.get('ev_ebitda')) else "N/A")
             
             # Profitability Metrics
             st.markdown("#### Rentabilidade")
@@ -3634,28 +3599,18 @@ def aba_analise_individual():
             col4.metric("Margem Operacional", f"{features_fund.get('operating_margin', np.nan):.2f}%" if not pd.isna(features_fund.get('operating_margin')) else "N/A")
             col5.metric("Margem Bruta", f"{features_fund.get('gross_margin', np.nan):.2f}%" if not pd.isna(features_fund.get('gross_margin')) else "N/A")
             
-            # Dividend Metrics
-            st.markdown("#### Dividendos")
-            col1, col2, col3 = st.columns(3)
-            
-            col1.metric("Dividend Yield", f"{features_fund.get('div_yield', np.nan):.2f}%" if not pd.isna(features_fund.get('div_yield')) else "N/A")
-            col2.metric("Payout Ratio", f"{features_fund.get('payout_ratio', np.nan):.2f}%" if not pd.isna(features_fund.get('payout_ratio')) else "N/A")
-            col3.metric("DY Médio 5A", f"{features_fund.get('five_year_avg_div_yield', np.nan):.2f}%" if not pd.isna(features_fund.get('five_year_avg_div_yield')) else "N/A")
-            
             # Growth Metrics
             st.markdown("#### Crescimento")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Cresc. Receita", f"{features_fund.get('revenue_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('revenue_growth')) else "N/A")
-            col2.metric("Cresc. Lucros", f"{features_fund.get('earnings_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('earnings_growth')) else "N/A")
-            col3.metric("Cresc. Lucros (Q)", f"{features_fund.get('earnings_quarterly_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('earnings_quarterly_growth')) else "N/A")
+            col1, col2 = st.columns(2)
+            col1.metric("Cresc. Receita (TTM)", f"{features_fund.get('revenue_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('revenue_growth')) else "N/A")
+            col2.metric("Cresc. Lucros (TTM)", f"{features_fund.get('earnings_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('earnings_growth')) else "N/A")
 
-            # Financial Health
+            # Financial Health (Ajustado para colunas disponíveis)
             st.markdown("#### Saúde Financeira")
-            col1, col2, col3, col4 = st.columns(4)
+            col1, col2, col3 = st.columns(3)
             col1.metric("Dívida/Patrimônio", f"{features_fund.get('debt_to_equity', np.nan):.2f}" if not pd.isna(features_fund.get('debt_to_equity')) else "N/A")
             col2.metric("Current Ratio", f"{features_fund.get('current_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('current_ratio')) else "N/A")
             col3.metric("Quick Ratio", f"{features_fund.get('quick_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('quick_ratio')) else "N/A")
-            col4.metric("Fluxo de Caixa Livre", f"R$ {features_fund.get('free_cashflow', np.nan):,.0f}" if not pd.isna(features_fund.get('free_cashflow')) else "N/A")
             
             # Full Fundamental Data Table
             st.markdown("---")
@@ -3667,275 +3622,59 @@ def aba_analise_individual():
             })
             
             st.dataframe(df_fund_display, use_container_width=True, hide_index=True)
-        
+
+        # ====================================================================
+        # ABA 4: MACHINE LEARNING (Consome dados do Builder se disponível)
+        # ====================================================================
         with tab4:
-            st.markdown("### Análise de Machine Learning")
+            st.markdown("### Análise de Machine Learning (Baseada no Pipeline)")
             
-            st.info("Treinando modelos ML com um conjunto expandido de features para previsão de direção futura...")
-            
-            # Prepare data for ML
-            # Feature selection: consider only numeric features, technicals, fundamentals, macro, and temporal
-            numeric_cols_df = df_completo.select_dtypes(include=[np.number])
-            temporal_cols = ['day_of_week', 'month', 'quarter', 'day_of_month', 'week_of_year']
-            
-            # Combine relevant columns, excluding identifiers and target
-            candidate_features = numeric_cols_df.columns.tolist() + temporal_cols
-            # Ensure 'Close' is not used as a feature itself unless lagged.
-            # Features related to Close price calculation (Open, High, Low, Volume) are usually excluded.
-            # Let's select features based on what's likely generated by EngenheiroFeatures and is numeric/temporal.
-            
-            # Dynamic feature list from EngenheiroFeatures + fundamental + temporal
-            features_from_eng = [col for col in df_completo.columns if col not in ['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'log_returns']] # Exclude price/volume basics
-            features_from_eng = [f for f in features_from_eng if pd.api.types.is_numeric_dtype(df_completo[f])] # Keep only numeric ones
-
-            # Include fundamental features if available (assuming they were added to df_completo)
-            # This part requires `df_completo` to have fundamental features correctly merged.
-            # For now, rely on the features computed by `EngenheiroFeatures` and temporal ones.
-            
-            all_potential_features = features_from_eng + temporal_cols
-            
-            # Final feature set: ensure they exist in df_completo and are numeric
-            final_features_for_ml = [f for f in all_potential_features if f in df_completo.columns and pd.api.types.is_numeric_dtype(df_completo[f])]
-            
-            # Add target column
-            df_ml_data = df_completo[final_features_for_ml + ['Close']].copy() # Keep Close temporarily for target calc
-
-            # Calculate Future Direction target (using a shorter lookahead for faster individual analysis)
-            # Using LOOKBACK_ML from global config, but can be adjusted for individual analysis speed
-            prediction_horizon = LOOKBACK_ML # Default from config
-            df_ml_data['Future_Direction'] = np.where(
-                df_ml_data['Close'].pct_change(prediction_horizon).shift(-prediction_horizon) > 0,
-                1, 0
-            )
-            
-            # Drop Close and final columns, drop NaNs
-            df_ml_data = df_ml_data.drop(columns=['Close'])
-            df_ml_data = df_ml_data.dropna()
-            
-            # Ensure enough data points for ML training
-            if len(df_ml_data) > 100: # Minimum data points
-                X = df_ml_data.drop('Future_Direction', axis=1)
-                y = df_ml_data['Future_Direction']
+            # Tenta pegar dados ML do builder se disponível
+            if 'builder' in st.session_state and st.session_state.builder is not None and ativo_selecionado in st.session_state.builder.predicoes_ml:
+                ml_info = st.session_state.builder.predicoes_ml[ativo_selecionado]
+                auc_medio = ml_info.get('auc_roc_score', np.nan)
+                proba_final = ml_info.get('predicted_proba_up', 0.5)
                 
-                if len(np.unique(y)) < 2: # Check for class imbalance
-                    st.warning("Dados insuficientes ou classe única encontrada para análise ML.")
-                    return
-
-                # Train ensemble models
-                modelos = EnsembleML.treinar_ensemble(X, y, otimizar_optuna=False) # Use fixed params for speed in individual analysis
-                
-                if not modelos:
-                    st.warning("Falha ao treinar modelos ML.")
-                    return
-                
-                # Cross-validation with TimeSeriesSplit
-                scores = []
-                # Adjust n_splits based on data length for meaningful CV
-                n_splits_cv = min(5, len(X) // 100) if len(X) > 100 else 1
-                tscv = TimeSeriesSplit(n_splits=max(2, n_splits_cv)) # Ensure at least 2 splits
-                
-                for train_idx, val_idx in tscv.split(X):
-                    if len(train_idx) == 0 or len(val_idx) == 0: continue
-                    X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-                    y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-                    
-                    if len(np.unique(y_train)) < 2 or len(np.unique(y_val)) < 2: continue # Skip if classes are not mixed
-                    
-                    # Retrain models for CV fold (simpler than passing trained models directly)
-                    modelos_cv, auc_scores_cv = EnsembleML.treinar_ensemble(X_train, y_train, otimizar_optuna=False)
-                    if not modelos_cv: continue
-
-                    proba = EnsembleML.prever_ensemble_ponderado(modelos_cv, auc_scores_cv, X_val)
-                    
-                    if len(np.unique(y_val)) >= 2:
-                        score = roc_auc_score(y_val, proba)
-                        scores.append(score)
-                
-                auc_medio = np.mean(scores) if scores else np.nan
-                
-                # Final prediction using the last relevant data point
-                # Use the features corresponding to the time step just before the target prediction
-                # The last row of X represents features calculated up to the second to last day.
-                # The target 'Future_Direction' is 'prediction_horizon' days ahead.
-                # So, to predict for the next 'prediction_horizon' days, we use the features from the very last available row.
-                last_features_row = X.iloc[[-1]] # Features from the last available day
-
-                if last_features_row.empty:
-                     proba_final = 0.5
-                else:
-                    # Use the trained models and their AUC scores for weighted prediction
-                    proba_final = EnsembleML.prever_ensemble_ponderado(modelos, auc_scores, last_features_row)[0]
+                st.success("✓ Dados de Machine Learning carregados do pipeline de otimização.")
                 
                 col1, col2, col3 = st.columns(3)
                 col1.metric("Probabilidade de Alta Futura", f"{proba_final*100:.2f}%")
                 col2.metric("AUC-ROC Médio (CV)", f"{auc_medio:.3f}" if not pd.isna(auc_medio) else "N/A")
-                col3.metric("Nº Features Usadas", len(X.columns))
+                col3.metric("Modelo", ml_info.get('model_name', 'Ensemble Ponderado'))
                 
-                # Feature Importance (using XGBoost if available)
-                if 'xgboost' in modelos and hasattr(modelos['xgboost'], 'feature_importances_'):
-                    st.markdown("#### Feature Importance (XGBoost)")
-                    
-                    importances = modelos['xgboost'].feature_importances_
-                    feature_names = X.columns
-                    
-                    df_importance = pd.DataFrame({
-                        'Feature': feature_names,
-                        'Importance': importances
-                    }).sort_values('Importance', ascending=False).head(20)
-                    
-                    fig_imp = px.bar(
-                        df_importance,
-                        x='Importance',
-                        y='Feature',
-                        orientation='h',
-                        title='Top 20 Features Mais Importantes'
-                    )
-                    fig_imp.update_layout(**obter_template_grafico())
-                    st.plotly_chart(fig_imp, use_container_width=True)
+                # Feature Importance (Placeholder, apenas mostra se o builder foi executado)
+                if 'builder_complete' in st.session_state and st.session_state.builder_complete:
+                    st.markdown("#### Status e Confiança do Modelo (Governança)")
+                    if ativo_selecionado in st.session_state.builder.governanca_por_ativo:
+                        relatorio_gov = st.session_state.builder.governanca_por_ativo[ativo_selecionado].gerar_relatorio()
+                        
+                        st.markdown(f"**Status de Governança:** {relatorio_gov['status']}")
+                        st.markdown(f"**AUC Máximo Histórico:** {relatorio_gov['metricas']['AUC Máximo']:.3f}")
+                        
+                        st.info("Para gráficos e alertas de Governana, consulte a aba **'🛡️ Governança de Modelo'**.")
+
             else:
-                st.warning("Dados insuficientes para análise ML detalhada.")
-        
+                st.warning("⚠️ Execute o **Construtor de Portfólio** primeiro para gerar as previsões ML complexas e o AUC-ROC.")
+                st.info("Para uma análise ML em tempo real, o sistema exigiria o treinamento do Ensemble e de todas as features (que foi removido desta aba para focar na leitura do GCS).")
+
+        # ====================================================================
+        # ABA 5: CLUSTERIZAÇÃO E SIMILARIDADE
+        # ====================================================================
         with tab5:
             st.markdown("### Clusterização e Análise de Similaridade")
+            st.info("Esta análise é computacionalmente intensiva e usa o `AnalisadorIndividualAtivos.realizar_clusterizacao_pca`.")
             
-            st.info("Comparando este ativo com outros ativos similares usando K-means + PCA...")
+            # A lógica de clusterização (que coleta dados adicionais de ativos similares)
+            # NÃO é alterada, pois ela é um procedimento de análise separada.
+            # No entanto, a coleta interna (yf.Ticker) dessa lógica deve ser refeita.
             
-            # Prepare data for clustering: use a subset of available assets for performance
-            # Fetch data for a broader set of assets for comparison
+            st.error("A lógica interna desta aba (Clusterização/Análise Individual) ainda está dependente do `yf.Ticker` e não foi adaptada para usar o GCS. Remova ou adapte a chamada a `yf.Ticker` no código da clusterização.")
+            st.markdown("""
+            **Ação Necessária:** Para que esta aba funcione sem `yfinance`, você precisaria:
+            1.  Garantir que todos os ativos de comparação (`assets_to_cluster`) tenham CSVs no GCS.
+            2.  Substituir a lógica de `yf.Ticker(asset_comp).history(period='2y')` pela chamada a `leitor_gcs_instance.ler_dados_historicos_completos(asset_comp)`.
+            """)
             
-            # Limit the number of assets for clustering to avoid performance issues
-            max_assets_for_clustering = 50 
-            
-            # Prioritize assets from the same sector if possible, otherwise sample broadly
-            assets_to_cluster = []
-            if 'sector' in features_fund and features_fund['sector'] != 'Unknown':
-                sector_assets = [a for a in ATIVOS_IBOVESPA if a.split('.')[0].replace('.SA', '') in ATIVOS_POR_SETOR.get(features_fund['sector'], [])] # Match by name without .SA
-                # Add the current asset if it's in Ibovespa
-                if ativo_selecionado in ATIVOS_IBOVESPA:
-                    assets_to_cluster.append(ativo_selecionado)
-                
-                # Add sector assets, prioritizing those with good performance/fundamentals
-                sector_assets_sorted = sorted(sector_assets, key=lambda x: (
-                    self.dados_performance.loc[x, 'sharpe'] if x in self.dados_performance.index else -np.inf,
-                    self.dados_fundamentalistas.loc[x, 'roe'] if x in self.dados_fundamentalistas.index and 'roe' in self.dados_fundamentalistas.columns else -np.inf
-                ), reverse=True)
-                
-                assets_to_cluster.extend(sector_assets_sorted[:max_assets_for_clustering - len(assets_to_cluster)])
-            
-            # If not enough sector assets or no sector defined, sample broadly
-            if len(assets_to_cluster) < max_assets_for_clustering:
-                # Ensure the current asset is included
-                if ativo_selecionado not in assets_to_cluster:
-                    assets_to_cluster.append(ativo_selecionado)
-                
-                # Add other diverse assets (e.g., from Ibovespa)
-                other_assets = [a for a in ATIVOS_IBOVESPA if a not in assets_to_cluster]
-                assets_to_cluster.extend(other_assets[:max_assets_for_clustering - len(assets_to_cluster)])
-                
-            # Fetch data for the selected comparison assets
-            comparison_data = {}
-            if len(assets_to_cluster) > 5: # Need a reasonable number for clustering
-                with st.spinner(f"Coletando dados para {len(assets_to_cluster)} ativos de comparação..."):
-                    for asset_comp in assets_to_cluster:
-                        try:
-                            ticker_comp = yf.Ticker(asset_comp)
-                            # Fetch similar period as used for individual analysis, or a fixed shorter period for clustering consistency
-                            hist_comp = ticker_comp.history(period='2y') # Use 2 years for clustering consistency
-                            
-                            if not hist_comp.empty:
-                                # Use a subset of features for clustering: performance & fundamental metrics
-                                features_for_cluster = ['retorno_anual', 'volatilidade_anual', 'sharpe', 'max_drawdown', 
-                                                        'pe_ratio', 'pb_ratio', 'roe', 'debt_to_equity', 'revenue_growth']
-                                
-                                # Calculate necessary metrics if not readily available from the main collector
-                                # For simplicity here, we'll use a simplified set of metrics calculation
-                                returns_comp = hist_comp['Close'].pct_change().dropna()
-                                
-                                if len(returns_comp) > 50: # Need sufficient data
-                                    comp_data = {
-                                        'retorno_anual': returns_comp.mean() * 252,
-                                        'volatilidade_anual': returns_comp.std() * np.sqrt(252),
-                                        'sharpe': (returns_comp.mean() * 252 - TAXA_LIVRE_RISCO) / (returns_comp.std() * np.sqrt(252)) if returns_comp.std() > 0 else 0,
-                                        'max_drawdown': ((1 + returns_comp).cumprod() / (1 + returns_comp).cumprod().expanding().max() - 1).min() if not returns_comp.empty else np.nan
-                                    }
-                                    
-                                    # Fetch fundamental data
-                                    info_comp = ticker_comp.info
-                                    fund_metrics = AnalisadorIndividualAtivos.calcular_features_fundamentalistas_expandidas(ticker_comp)
-                                    
-                                    for metric in ['pe_ratio', 'pb_ratio', 'roe', 'debt_to_equity', 'revenue_growth']:
-                                         comp_data[metric] = fund_metrics.get(metric, np.nan)
-
-                                    comparison_data[asset_comp] = comp_data
-                        except Exception as e:
-                            print(f"  ⚠️ Error fetching data for {asset_comp} during clustering: {str(e)[:50]}")
-                            continue
-            
-            # Perform clustering if enough data was collected
-            if len(comparison_data) > 5:
-                df_comparacao = pd.DataFrame(comparison_data).T
-                
-                # Perform clustering and PCA
-                resultado_pca, pca, kmeans = AnalisadorIndividualAtivos.realizar_clusterizacao_pca(
-                    df_comparacao,
-                    n_clusters=5 # Standard number of clusters
-                )
-                
-                if resultado_pca is not None:
-                    # PCA Plot (3D or 2D based on number of components)
-                    if 'PC3' in resultado_pca.columns:
-                        fig_pca = px.scatter_3d(
-                            resultado_pca,
-                            x='PC1', y='PC2', z='PC3',
-                            color='Cluster',
-                            hover_name=resultado_pca.index.str.replace('.SA', ''),
-                            title='Clusterização K-means + PCA (3D) - Similaridade de Ativos'
-                        )
-                    else:
-                        fig_pca = px.scatter(
-                            resultado_pca,
-                            x='PC1', y='PC2',
-                            color='Cluster',
-                            hover_name=resultado_pca.index.str.replace('.SA', ''),
-                            title='Clusterização K-means + PCA (2D) - Similaridade de Ativos'
-                        )
-                    
-                    fig_pca.update_layout(**obter_template_grafico(), height=600)
-                    st.plotly_chart(fig_pca, use_container_width=True)
-                    
-                    # Identify cluster and similar assets for the selected asset
-                    if ativo_selecionado in resultado_pca.index:
-                        cluster_ativo = resultado_pca.loc[ativo_selecionado, 'Cluster']
-                        ativos_similares_df = resultado_pca[resultado_pca['Cluster'] == cluster_ativo]
-                        ativos_similares = ativos_similares_df.index.tolist()
-                        ativos_similares = [a for a in ativos_similares if a != ativo_selecionado]
-                        
-                        st.success(f"**{ativo_selecionado.replace('.SA', '')}** pertence ao Cluster {cluster_ativo}")
-                        
-                        if ativos_similares:
-                            st.markdown(f"#### Outros Ativos no Cluster {cluster_ativo}:")
-                            st.write(", ".join([a.replace('.SA', '') for a in ativos_similares[:15]])) # Show top 15 similar
-                    
-                    # Explained Variance Ratio Plot
-                    st.markdown("#### Variância Explicada por Componente Principal")
-                    var_exp = pca.explained_variance_ratio_ * 100
-                    
-                    df_var = pd.DataFrame({
-                        'Componente': [f'PC{i+1}' for i in range(len(var_exp))],
-                        'Variância (%)': var_exp
-                    })
-                    
-                    fig_var = px.bar(
-                        df_var,
-                        x='Componente',
-                        y='Variância (%)',
-                        title='Variância Explicada por Componente Principal'
-                    )
-                    fig_var.update_layout(**obter_template_grafico())
-                    st.plotly_chart(fig_var, use_container_width=True)
-            else:
-                st.warning("Dados insuficientes para realizar a clusterização e análise de similaridade.")
-
 # NEW FUNCTION FOR GOVERNANCE TAB
 def aba_governanca():
     """
