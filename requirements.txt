@@ -23,6 +23,7 @@ catboost>=1.2.0
 # Deep Learning
 tensorflow>=2.13.0
 keras>=2.13.0
+google.cloud
 
 # Séries temporais e estatística
 statsmodels>=0.14.0
