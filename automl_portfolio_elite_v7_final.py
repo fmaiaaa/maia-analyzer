@@ -731,31 +731,53 @@ class LeitorGCS:
     """
     Lê dados financeiros PRÉ-PROCESSADOS (CSV completo) do GCS.
     Consome o CSV gerado pelo gerador_financeiro.py.
+    Versão 8.0: Corrigida a lógica de cache, tratamento de erros e autenticação.
     """
     
     def __init__(self, project_id=GCS_PROJECT_ID, bucket_name=GCS_BUCKET_NAME, data_prefix=GCS_DATA_PREFIX):
         self.project_id = project_id
         self.bucket_name = bucket_name
         self.data_prefix = data_prefix
+        self.client = None
+        self.bucket = None
+        self.cache = {}
+        self._inicializar_cliente()
+    
+    def _inicializar_cliente(self):
+        """
+        Inicializa o cliente GCS com tratamento robusto de erros.
+        Tenta autenticação e valida a conexão.
+        """
         try:
-            # Tenta autenticar e criar o cliente GCS
-            self.client = storage.Client(project=project_id)
-            self.bucket = self.client.bucket(bucket_name)
+            self.client = storage.Client(project=self.project_id)
+            self.bucket = self.client.bucket(self.bucket_name)
+            # Valida a conexão tentando listar um blob
+            list(self.bucket.list_blobs(prefix=self.data_prefix, max_results=1))
+            print(f"✓ Conectado ao GCS: {self.bucket_name} / {self.data_prefix}")
         except Exception as e:
-            print(f"⚠️ Aviso: Falha ao autenticar/conectar no GCS: {str(e)[:100]}")
+            print(f"⚠️ Aviso: Falha ao conectar no GCS: {str(e)[:100]}")
             self.client = None
             self.bucket = None
-        self.cache = {}
     
-    # Este método substitui todos os métodos de leitura anteriores
-    def ler_dados_historicos_completos(self, ticker):
-        """Lê o CSV completo (Histórico, Técnico, GARCH, Fundamentalista) do GCS."""
-        if ticker in self.cache:
+    def limpar_cache(self):
+        """Limpa o cache de tickers carregados"""
+        self.cache.clear()
+    
+    def ler_dados_historicos_completos(self, ticker, usar_cache=True):
+        """
+        Lê o CSV completo (Histórico, Técnico, GARCH, Fundamentalista) do GCS.
+        Melhorias:
+        - Validação robusta do cache
+        - Tratamento de erros granular
+        - Validação de dados após leitura
+        """
+        # Verifica cache primeiro
+        if usar_cache and ticker in self.cache:
             return self.cache[ticker].copy()
 
         try:
-            if not self.bucket:
-                print(f"❌ Erro: Cliente GCS não autenticado/disponível.")
+            if not self.bucket or self.client is None:
+                print(f"❌ Erro: Cliente GCS não autenticado para {ticker}.")
                 return None
             
             # Formato do arquivo: dados_financeiros_etl/PETR4.SA.csv
@@ -763,30 +785,54 @@ class LeitorGCS:
             blob = self.bucket.blob(blob_path)
             
             if not blob.exists():
-                # print(f"❌ Arquivo {blob_path} não encontrado no GCS.")
+                print(f"ℹ️ Arquivo {blob_path} não encontrado no GCS.")
                 return None
             
             # Download do blob como string
-            dados_csv = blob.download_as_string()
-            
-            # Usa StringIO para ler o CSV em memória com Pandas
-            df = pd.read_csv(
-                StringIO(dados_csv.decode('utf-8')),
-                index_col='Date', # 'Date' é a coluna de índice do seu gerador
-                parse_dates=True,
-                dtype={'ticker': str} # Garante que o ticker é lido como string
-            )
-            
-            if df.empty or len(df) < MIN_DIAS_HISTORICO * 0.7:
+            try:
+                dados_csv = blob.download_as_string()
+            except Exception as download_err:
+                print(f"❌ Erro ao fazer download de {blob_path}: {str(download_err)[:50]}")
                 return None
             
-            df = df.sort_index()
-            self.cache[ticker] = df
+            # Tratamento robusto de tipos de dados
+            try:
+                df = pd.read_csv(
+                    StringIO(dados_csv.decode('utf-8')),
+                    index_col='Date',
+                    parse_dates=True,
+                    dtype={'ticker': str}
+                )
+            except Exception as csv_err:
+                print(f"❌ Erro ao parsear CSV de {ticker}: {str(csv_err)[:50]}")
+                return None
             
+            if df.empty:
+                print(f"⚠️ DataFrame vazio para {ticker}")
+                return None
+            
+            # Verifica mínimo de dias
+            if len(df) < MIN_DIAS_HISTORICO * 0.7:
+                print(f"⚠️ Dados insuficientes para {ticker}: {len(df)} dias (mínimo: {int(MIN_DIAS_HISTORICO * 0.7)})")
+                return None
+            
+            colunas_essenciais = ['Open', 'High', 'Low', 'Close', 'Volume']
+            colunas_faltantes = [col for col in colunas_essenciais if col not in df.columns]
+            if colunas_faltantes:
+                print(f"⚠️ Colunas faltantes em {ticker}: {colunas_faltantes}")
+                return None
+            
+            # Ordena por índice de data
+            df = df.sort_index()
+            
+            # Armazena em cache
+            self.cache[ticker] = df.copy()
+            
+            print(f"✓ {ticker}: {len(df)} dias carregados com sucesso")
             return df.copy()
             
         except Exception as e:
-            print(f"⚠️ Erro ao ler {ticker} do GCS: {str(e)[:100]}")
+            print(f"❌ Erro geral ao ler {ticker} do GCS: {str(e)[:100]}")
             return None
 
 # =============================================================================
@@ -796,7 +842,8 @@ class LeitorGCS:
 class ColetorDados:
     """
     Coleta dados PRÉ-PROCESSADOS (CSV) do GCS.
-    A API de Coleta é mantida, mas a lógica de download e cálculo é removida.
+    A API de Coleta é mantida, mas a lógica é otimizada e corrigida.
+    Versão 8.0: Melhor tratamento de dados faltantes e validação.
     """
     
     def __init__(self, periodo=PERIODO_DADOS):
@@ -805,28 +852,36 @@ class ColetorDados:
         self.dados_por_ativo = {}
         self.dados_fundamentalistas = pd.DataFrame()
         self.ativos_sucesso = []
-        self.dados_macro = {} # Mantido para compatibilidade, mas pode ser vazio
+        self.dados_macro = {}
         self.metricas_performance = pd.DataFrame()
     
-    # Não coleta mais. A correlação com IBOV/USD já está no CSV.
     def coletar_dados_macroeconomicos(self):
+        """
+        Dados macroeconômicos agora vêm do CSV pré-processado.
+        Função mantida para compatibilidade com pipeline.
+        """
         print("📊 Correlações macroeconômicas lidas diretamente do CSV pré-processado.")
         self.dados_macro = {'IBOV': pd.Series(), 'USD_BRL': pd.Series()}
 
     def coletar_e_processar_dados(self, simbolos):
         """
-        Coleta dados do GCS, não do yfinance.
-        Usa dados pré-processados com indicadores e fundamentos já calculados.
+        Versão otimizada e corrigida da coleta.
+        Melhorias:
+        - Extração melhor de fundamentos e performance
+        - Tratamento robusto de NaNs
+        - Validação de dados antes de consolidação
         """
         self.ativos_sucesso = []
-        self.coletar_dados_macroeconomicos() # Chama a função dummy
+        self.coletar_dados_macroeconomicos()
         
-        print(f"\n{'='*60}")
-        print(f"INICIANDO COLETA DE DADOS PRÉ-PROCESSADOS DO GCS - {len(simbolos)} ativos")
-        print(f"Bucket: {self.leitor_gcs.bucket_name} / Pasta: {self.leitor_gcs.data_prefix}")
-        print(f"{'='*60}\n")
+        print(f"\n{'='*70}")
+        print(f"INICIANDO COLETA DE DADOS PRÉ-PROCESSADOS DO GCS")
+        print(f"Ativos para processar: {len(simbolos)}")
+        print(f"Bucket: {self.leitor_gcs.bucket_name} | Pasta: {self.leitor_gcs.data_prefix}")
+        print(f"{'='*70}\n")
         
         lista_fundamentos_e_perf = []
+        ativos_processados = 0
         
         for ticker in tqdm(simbolos, desc="📥 Coletando dados do GCS"):
             try:
@@ -839,22 +894,40 @@ class ColetorDados:
                 # 1. Dados Históricos, Técnicos e GARCH (df_completo já contém tudo)
                 self.dados_por_ativo[ticker] = df_completo
                 self.ativos_sucesso.append(ticker)
+                ativos_processados += 1
                 
-                # 2. Extrair dados Fundamentalistas e Performance Estática
-                primeira_linha = df_completo.iloc[0] # Fundamentos são replicados em todas as linhas
+                # 2. Extrair dados Fundamentalistas e Performance com validação
+                primeira_linha = df_completo.iloc[0]
                 
                 features_fund = {'Ticker': ticker}
                 
-                # Define colunas que SÃO históricas/técnicas para *excluir* da tabela de fundamentos
-                cols_para_excluir = ['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'log_returns']
-                # Adiciona prefixos comuns de features temporais/técnicas
-                prefixos_tecnicos = ('sma_', 'ema_', 'volatility_', 'returns_', 'volume_', 'close_lag_', 'volume_lag_', 'macd_', 'bb_', 'adx_', 'atr_', 'cci_', 'obv', 'cmf', 'mfi', 'vwap', 'drawdown', 'max_drawdown', 'autocorr_', 'day_of_week', 'month', 'quarter', 'day_of_month', 'week_of_year', 'garch_') # Incluindo garch
+                cols_para_excluir = {
+                    'Open', 'High', 'Low', 'Close', 'Volume', 
+                    'returns', 'log_returns', 'ticker'
+                }
                 
-                # Extrai apenas as colunas que não são claramente históricas/técnicas/temporais
+                prefixos_tecnicos = (
+                    'sma_', 'ema_', 'wma_', 'hma_', 'volatility_', 'returns_', 'volume_',
+                    'close_lag_', 'volume_lag_', 'macd_', 'bb_', 'adx_', 'atr_', 'cci_',
+                    'obv', 'cmf', 'mfi', 'vwap', 'drawdown', 'max_drawdown', 'autocorr_',
+                    'day_of_week', 'month', 'quarter', 'day_of_month', 'week_of_year',
+                    'garch_', 'stoch_', 'rsi_', 'williams_', 'kc_', 'dc_', 'momentum_',
+                    'higher_high', 'lower_low', 'price_', 'returns_mean', 'returns_std',
+                    'returns_skew', 'returns_kurt', 'volume_mean', 'volume_std'
+                )
+                
                 for col in primeira_linha.index:
-                    is_excluded_col = col in cols_para_excluir or col.startswith(prefixos_tecnicos)
-                    if not is_excluded_col:
-                         features_fund[col] = primeira_linha[col]
+                    # Verifica se coluna deve ser excluída
+                    eh_excluida = col in cols_para_excluir or col.startswith(prefixos_tecnicos)
+                    
+                    if not eh_excluida:
+                        try:
+                            valor = primeira_linha[col]
+                            # Só inclui se não for NaN
+                            if pd.notna(valor):
+                                features_fund[col] = valor
+                        except Exception as e:
+                            continue
 
                 lista_fundamentos_e_perf.append(features_fund)
                 
@@ -862,33 +935,42 @@ class ColetorDados:
                 print(f"  ❌ {ticker}: Erro na leitura/processamento GCS - {str(e)[:50]}")
                 continue
         
-        # ... (O restante do código de consolidação de self.dados_fundamentalistas e self.metricas_performance
-        # deve ser mantido, pois ele trata NaNs e formata os dados, usando lista_fundamentos_e_perf.)
-        # Certifique-se de que a lógica de preenchimento de NaNs e a criação de metricas_performance 
-        # (usando 'sharpe_ratio', 'annual_return', 'annual_volatility') esteja presente.
-        
         if lista_fundamentos_e_perf:
             self.dados_fundamentalistas = pd.DataFrame(lista_fundamentos_e_perf).set_index('Ticker')
+            
             self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
             
-            # Preenche NaNs com a mediana
+            # Preenche NaNs com a mediana (mais robusto que média)
             numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
             for col in numeric_cols:
                 if self.dados_fundamentalistas[col].isnull().any():
                     median_val = self.dados_fundamentalistas[col].median()
-                    self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+                    if not pd.isna(median_val):
+                        self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
+                    else:
+                        self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(0)
+            
+            performance_cols = [col for col in self.dados_fundamentalistas.columns 
+                               if col in ['sharpe_ratio', 'annual_return', 'annual_volatility', 'max_drawdown']]
+            
+            if performance_cols:
+                self.metricas_performance = self.dados_fundamentalistas[performance_cols].copy()
+                # Renomeia para consistência
+                rename_map = {
+                    'sharpe_ratio': 'sharpe',
+                    'annual_return': 'retorno_anual',
+                    'annual_volatility': 'volatilidade_anual',
+                    'max_drawdown': 'max_drawdown'
+                }
+                self.metricas_performance = self.metricas_performance.rename(columns=rename_map)
         
-        # Cria o DataFrame de Performance (já contido no self.dados_fundamentalistas)
-        performance_cols = [col for col in self.dados_fundamentalistas.columns if col in ['sharpe_ratio', 'annual_return', 'annual_volatility', 'max_drawdown']]
-        self.metricas_performance = self.dados_fundamentalistas[performance_cols].rename(columns={
-            'sharpe_ratio': 'sharpe',
-            'annual_return': 'retorno_anual',
-            'annual_volatility': 'volatilidade_anual',
-            'max_drawdown': 'max_drawdown'
-        }, errors='ignore')
+        print(f"\n✓ Coleta concluída:")
+        print(f"  - Ativos com sucesso: {len(self.ativos_sucesso)}")
+        print(f"  - Total processado: {ativos_processados}")
+        print(f"  - Fundamentos consolidados: {len(self.dados_fundamentalistas)}")
+        print()
         
-        print(f"✓ Coleta concluída: {len(self.ativos_sucesso)} ativos válidos")
-        return True
+        return len(self.ativos_sucesso) > 0
         
 # =============================================================================
 # CLASSE: MODELAGEM DE VOLATILIDADE GARCH
