@@ -3498,16 +3498,25 @@ def aba_analise_individual():
     # Execute analysis
     with st.spinner(f"Analisando {ativo_selecionado}..."):
         try:
-            ticker = yf.Ticker(ativo_selecionado)
-            # Use 'max' period for historical depth, similar to global settings
-            hist = ticker.history(period='max') 
+            # Tenta obter dados históricos usando yf.download (mais robusto para ambientes virtuais)
+            hist = yf.download(ativo_selecionado, period='max', progress=False, timeout=10)
             
             if hist.empty:
                 st.error(f"Não foi possível obter dados históricos para {ativo_selecionado}.")
                 return
-            
-            # Calculate all indicators
+        
+            # A partir daqui, você ainda precisa do objeto Ticker para dados fundamentalistas.
+            # Acessar .info pode falhar, mas a análise continuará.
+            try:
+                ticker = yf.Ticker(ativo_selecionado)
+                features_fund = AnalisadorIndividualAtivos.calcular_features_fundamentalistas_expandidas(ticker)
+            except Exception as e_fund:
+                st.warning(f"⚠️ Erro ao obter dados fundamentalistas para {ativo_selecionado}. Usando dados vazios. Erro: {str(e_fund)[:50]}")
+                features_fund = {} # Use um dicionário vazio como fallback para features_fund
+        
+            # Calcula todos os indicadores
             df_completo = AnalisadorIndividualAtivos.calcular_todos_indicadores_tecnicos(hist)
+
             features_fund = AnalisadorIndividualAtivos.calcular_features_fundamentalistas_expandidas(ticker)
             
             # Tabs for analysis sections
