@@ -953,20 +953,20 @@ def coletar_dados_ativos(lista_ativos, periodo='max'):
             retry_delay = 1
             
             for attempt in range(max_retries):
-                            try:
-                                # >>> NOVO: Tenta usar um método mais estável de download
-                                import yfinance as yf
+                try:
+                    # >>> NOVO: Tenta usar um método mais estável de download
+                    import yfinance as yf
                                 
-                                df = yf.download(
-                                    ticker, 
-                                    period=periodo, 
-                                    progress=False,
-                                    timeout=30, # Aumente o timeout
-                                    # Tenta passar um user-agent mais comum para evitar a detecção como bot/serviço
-                                    # Isso deve ser feito fora da biblioteca, mas é uma tentativa para contornar
-                                    # O yfinance mais recente tenta gerenciar isso sozinho.
-                                    # Aqui, confiamos nos mecanismos de retry e timeout.
-                                )
+                    df = yf.download(
+                        ticker, 
+                        period=periodo, 
+                        progress=False,
+                        timeout=30, # Aumente o timeout
+                        # Tenta passar um user-agent mais comum para evitar a detecção como bot/serviço
+                        # Isso deve ser feito fora da biblioteca, mas é uma tentativa para contornar
+                        # O yfinance mais recente tenta gerenciar isso sozinho.
+                        # Aqui, confiamos nos mecanismos de retry e timeout.
+                    )
                     
                 except Exception as e:
                     if attempt < max_retries - 1:
