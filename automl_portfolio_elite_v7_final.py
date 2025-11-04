@@ -2995,7 +2995,7 @@ def aba_construtor_portfolio():
                     'reaction': p511_reaction,
                     'level': p_level,
                     'time_purpose': p211_time,
-                    'liquidity': p311_liquid
+                    'liquidez': p311_liquid
                 }
                 
                 analyzer = AnalisadorPerfilInvestidor()
