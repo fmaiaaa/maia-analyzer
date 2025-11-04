@@ -953,28 +953,20 @@ def coletar_dados_ativos(lista_ativos, periodo='max'):
             retry_delay = 1
             
             for attempt in range(max_retries):
-                try:
-                    # Download with extended timeout
-                    df = yf.download(
-                        ticker, 
-                        period=periodo, 
-                        progress=False,
-                        timeout=10
-                        # O argumento headers foi removido para compatibilidade com versões mais antigas
-                    )
-                    
-                    if df.empty or len(df) < MIN_DIAS_HISTORICO:
-                        if attempt < max_retries - 1:
-                            time.sleep(retry_delay)
-                            retry_delay *= 2
-                            continue
-                        else:
-                            ativos_com_erro.append((ticker, "Sem dados históricos suficientes"))
-                            break
-                    
-                    # Successful download
-                    dados_coletados[ticker] = df
-                    break
+                            try:
+                                # >>> NOVO: Tenta usar um método mais estável de download
+                                import yfinance as yf
+                                
+                                df = yf.download(
+                                    ticker, 
+                                    period=periodo, 
+                                    progress=False,
+                                    timeout=30, # Aumente o timeout
+                                    # Tenta passar um user-agent mais comum para evitar a detecção como bot/serviço
+                                    # Isso deve ser feito fora da biblioteca, mas é uma tentativa para contornar
+                                    # O yfinance mais recente tenta gerenciar isso sozinho.
+                                    # Aqui, confiamos nos mecanismos de retry e timeout.
+                                )
                     
                 except Exception as e:
                     if attempt < max_retries - 1:
@@ -3497,13 +3489,35 @@ def aba_analise_individual():
     
     # Execute analysis
     with st.spinner(f"Analisando {ativo_selecionado}..."):
-        try:
-            # Tenta obter dados históricos usando yf.download (mais robusto para ambientes virtuais)
-            hist = yf.download(ativo_selecionado, period='max', progress=False, timeout=10)
-            
-            if hist.empty:
-                st.error(f"Não foi possível obter dados históricos para {ativo_selecionado}.")
-                return
+                    try:
+                        # Tenta obter dados históricos usando yf.download (mais robusto)
+                        max_retries = 3
+                        retry_delay = 2
+                        hist = pd.DataFrame() # Initialize an empty DataFrame
+                        
+                        for attempt in range(max_retries):
+                            try:
+                                hist = yf.download(
+                                    ativo_selecionado, 
+                                    period='max', 
+                                    progress=False, 
+                                    timeout=30 # Aumente o timeout aqui também
+                                )
+                                if not hist.empty:
+                                    break
+                                time.sleep(retry_delay)
+                                retry_delay *= 2
+                            except Exception as e_download:
+                                if attempt < max_retries - 1:
+                                    time.sleep(retry_delay)
+                                    retry_delay *= 2
+                                    continue
+                                else:
+                                    raise # Re-raise the exception if retries fail
+                        
+                        if hist.empty:
+                            st.error(f"Não foi possível obter dados históricos para {ativo_selecionado}.")
+                            return
         
             # A partir daqui, você ainda precisa do objeto Ticker para dados fundamentalistas.
             # Acessar .info pode falhar, mas a análise continuará.
