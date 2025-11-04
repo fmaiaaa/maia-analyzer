@@ -4007,11 +4007,6 @@ with st.spinner(f"Analisando {ativo_selecionado}..."):
         else:
             st.warning("Dados insuficientes para realizar a clusterização e análise de similaridade.")
 
-except Exception as e:
-    st.error(f"Erro ao analisar o ativo {ativo_selecionado}: {str(e)}")
-    import traceback
-    st.error(f"Traceback: {traceback.format_exc()}")
-
 # NEW FUNCTION FOR GOVERNANCE TAB
 def aba_governanca():
     """
