@@ -727,121 +727,86 @@ class EngenheiroFeatures:
 
 class LeitorGCS:
     """
-    NOVA CLASSE: Lê dados financeiros pré-processados do GCS
+    Lê dados financeiros pré-processados do GCS
     Substitui a coleta de yfinance com dados já processados e validados
     """
     
     def __init__(self, project_id=GCS_PROJECT_ID, bucket_name=GCS_BUCKET_NAME):
         self.project_id = project_id
         self.bucket_name = bucket_name
-        self.client = storage.Client(project=project_id)
-        self.bucket = self.client.bucket(bucket_name)
+        try:
+            self.client = storage.Client(project=project_id)
+            self.bucket = self.client.bucket(bucket_name)
+        except Exception as e:
+            print(f"⚠️ Aviso: Autenticação GCS pode estar incompleta: {str(e)[:50]}")
+            self.client = None
+            self.bucket = None
         self.cache = {}
     
     def listar_tickers_disponiveis(self):
         """Lista todos os tickers disponíveis no GCS"""
-        blobs = self.client.list_blobs(
-            self.bucket_name,
-            prefix=GCS_DATA_PREFIX
-        )
-        
-        tickers_disponiveis = set()
-        for blob in blobs:
-            # Extrai ticker do nome do arquivo
-            # Exemplo: etl-processed/PETR4_SA/dados_historicos.csv
-            partes = blob.name.split('/')
-            if len(partes) >= 2:
-                ticker = partes[-2].replace('_SA', '.SA')
-                if ticker not in tickers_disponiveis:
-                    tickers_disponiveis.add(ticker)
-        
-        return sorted(list(tickers_disponiveis))
+        try:
+            if not self.client:
+                return []
+            
+            blobs = self.client.list_blobs(self.bucket_name, prefix=GCS_DATA_PREFIX)
+            tickers_disponiveis = set()
+            
+            for blob in blobs:
+                partes = blob.name.split('/')
+                if len(partes) >= 2:
+                    ticker = partes[-2].replace('_SA', '.SA')
+                    if ticker not in tickers_disponiveis:
+                        tickers_disponiveis.add(ticker)
+            
+            return sorted(list(tickers_disponiveis))
+        except Exception as e:
+            print(f"⚠️ Erro ao listar tickers: {str(e)[:50]}")
+            return []
     
     def ler_dados_historicos(self, ticker):
-        """
-        Lê dados históricos pré-processados do GCS
-        Retorna DataFrame com OHLCV e indicadores técnicos
-        """
+        """Lê dados históricos pré-processados do GCS"""
         try:
-            # Normaliza nome do arquivo
+            if not self.bucket:
+                return None
+            
             ticker_normalizado = ticker.replace('.SA', '_SA')
             blob_path = f"{GCS_DATA_PREFIX}{ticker_normalizado}/dados_historicos.csv"
-            
-            # Tenta ler do bucket GCS
             blob = self.bucket.blob(blob_path)
             
             if not blob.exists():
-                print(f"⚠️ Arquivo não encontrado no GCS: {blob_path}")
                 return None
             
-            # Download e parse do CSV
             dados_csv = blob.download_as_string()
             df = pd.read_csv(StringIO(dados_csv.decode('utf-8')), index_col='Date', parse_dates=True)
             
-            # Validação básica
-            if df.empty or len(df) < MIN_DIAS_HISTORICO:
-                print(f"⚠️ {ticker}: Dados insuficientes ({len(df)} dias)")
+            if df.empty or len(df) < MIN_DIAS_HISTORICO * 0.7:
                 return None
             
             return df.sort_index()
             
         except Exception as e:
-            print(f"❌ Erro ao ler {ticker} do GCS: {str(e)[:100]}")
+            print(f"⚠️ Erro ao ler {ticker} do GCS: {str(e)[:50]}")
             return None
     
     def ler_features_fundamentalistas(self, ticker):
         """Lê features fundamentalistas pré-calculadas do GCS"""
         try:
+            if not self.bucket:
+                return {}
+            
             ticker_normalizado = ticker.replace('.SA', '_SA')
             blob_path = f"{GCS_DATA_PREFIX}{ticker_normalizado}/fundamentos.json"
-            
             blob = self.bucket.blob(blob_path)
+            
             if not blob.exists():
                 return {}
             
-            import json
-            dados_json = blob.download_as_string()
-            return json.loads(dados_json.decode('utf-8'))
-            
-        except Exception as e:
-            print(f"⚠️ Erro ao ler fundamentos para {ticker}: {str(e)[:50]}")
-            return {}
-    
-    def ler_metricas_garch(self, ticker):
-        """Lê volatilidades GARCH pré-calculadas"""
-        try:
-            ticker_normalizado = ticker.replace('.SA', '_SA')
-            blob_path = f"{GCS_DATA_PREFIX}{ticker_normalizado}/garch_volatility.json"
-            
-            blob = self.bucket.blob(blob_path)
-            if not blob.exists():
-                return {}
-            
-            import json
             dados_json = blob.download_as_string()
             return json.loads(dados_json.decode('utf-8'))
             
         except Exception as e:
             return {}
-    
-    def salvar_dados_processados(self, ticker, dados_dict):
-        """Salva dados processados de volta ao GCS para cache"""
-        try:
-            import json
-            ticker_normalizado = ticker.replace('.SA', '_SA')
-            
-            # Salva como pickle para dados completos
-            blob_path = f"{GCS_DATA_PREFIX}{ticker_normalizado}/dados_processados.pkl"
-            blob = self.bucket.blob(blob_path)
-            blob.upload_from_string(
-                pickle.dumps(dados_dict),
-                content_type='application/octet-stream'
-            )
-            
-            print(f"✓ Dados processados salvos para {ticker}")
-            
-        except Exception as e:
-            print(f"⚠️ Erro ao salvar dados processados: {str(e)[:50]}")
 
 # =============================================================================
 # CLASSE: COLETOR DE DADOS (MODIFICADO PARA GCS)
@@ -849,7 +814,7 @@ class LeitorGCS:
 
 class ColetorDados:
     """
-    MODIFICADO: Coleta dados do GCS em vez de yfinance
+    Coleta dados do GCS em vez de yfinance
     Interface idêntica à versão anterior, mas sem dependência de yfinance
     """
     
@@ -863,47 +828,42 @@ class ColetorDados:
         self.metricas_performance = pd.DataFrame()
     
     def coletar_dados_macroeconomicos(self):
-        """
-        Coleta dados macro disponíveis no GCS
-        Em vez de baixar do yfinance, usa dados pré-processados
-        """
-        print("\n📊 Coletando dados macroeconômicos...")
+        """Coleta dados macro disponíveis no GCS"""
+        print("\n📊 Coletando dados macroeconômicos do GCS...")
         
         try:
             indices_macro = ['IBOV', 'SP500', 'VIX', 'USD_BRL', 'GOLD', 'OIL']
             
             for indice in indices_macro:
                 try:
-                    # Tenta ler do GCS
                     blob_path = f"{GCS_DATA_PREFIX}macro/{indice.lower()}_returns.csv"
-                    blob = self.leitor_gcs.bucket.blob(blob_path)
-                    
-                    if blob.exists():
-                        dados_csv = blob.download_as_string()
-                        serie = pd.read_csv(
-                            StringIO(dados_csv.decode('utf-8')),
-                            index_col='Date',
-                            parse_dates=True,
-                            squeeze=True
-                        )
-                        self.dados_macro[indice] = serie
-                        print(f"  ✓ {indice}: {len(serie)} dias")
-                    else:
-                        print(f"  ⚠️ {indice}: Não disponível no GCS")
-                        self.dados_macro[indice] = pd.Series()
+                    if self.leitor_gcs.bucket:
+                        blob = self.leitor_gcs.bucket.blob(blob_path)
                         
+                        if blob.exists():
+                            dados_csv = blob.download_as_string()
+                            serie = pd.read_csv(
+                                StringIO(dados_csv.decode('utf-8')),
+                                index_col='Date',
+                                parse_dates=True,
+                                squeeze=True
+                            )
+                            self.dados_macro[indice] = serie
+                            print(f"  ✓ {indice}: {len(serie)} dias")
+                        else:
+                            self.dados_macro[indice] = pd.Series()
+                            
                 except Exception as e:
-                    print(f"  ⚠️ {indice}: Erro - {str(e)[:50]}")
                     self.dados_macro[indice] = pd.Series()
             
-            print(f"✓ Dados macroeconômicos coletados: {len([k for k, v in self.dados_macro.items() if not v.empty])} indicadores")
+            print(f"✓ Dados macro coletados\n")
             
         except Exception as e:
-            print(f"❌ Erro ao coletar dados macro: {str(e)}")
+            print(f"⚠️ Erro ao coletar dados macro: {str(e)}")
     
     def coletar_e_processar_dados(self, simbolos):
         """
-        MODIFICADO: Coleta dados do GCS, não do yfinance
+        Coleta dados do GCS, não do yfinance
         Usa dados pré-processados com indicadores técnicos já calculados
         """
         self.ativos_sucesso = []
@@ -914,29 +874,19 @@ class ColetorDados:
         print(f"\n{'='*60}")
         print(f"INICIANDO COLETA DE DADOS DO GCS - {len(simbolos)} ativos")
         print(f"Bucket: {self.leitor_gcs.bucket_name}")
-        print(f"Prefix: {GCS_DATA_PREFIX}")
         print(f"{'='*60}\n")
-        
-        # Lista tickers disponíveis no GCS
-        tickers_disponiveis_gcs = self.leitor_gcs.listar_tickers_disponiveis()
-        print(f"📊 Tickers disponíveis no GCS: {len(tickers_disponiveis_gcs)}")
         
         # Processa cada ativo
         for ticker in tqdm(simbolos, desc="📥 Coletando dados do GCS"):
             try:
-                # Tenta ler dados do GCS
                 df = self.leitor_gcs.ler_dados_historicos(ticker)
                 
                 if df is None or df.empty:
-                    print(f"  ⚠️ {ticker}: Dados não disponível")
                     continue
                 
-                # Validação de dados
                 if len(df) < MIN_DIAS_HISTORICO:
-                    print(f"  ⚠️ {ticker}: Dados insuficientes ({len(df)} dias)")
                     continue
                 
-                # Armazena dados
                 self.dados_por_ativo[ticker] = df
                 self.ativos_sucesso.append(ticker)
                 
@@ -946,9 +896,7 @@ class ColetorDados:
                     fund_features['Ticker'] = ticker
                     lista_fundamentalistas.append(fund_features)
                 else:
-                    # Cria entrada vazia se não houver dados
-                    fund_features = {'Ticker': ticker}
-                    lista_fundamentalistas.append(fund_features)
+                    lista_fundamentalistas.append({'Ticker': ticker})
                 
                 print(f"  ✓ {ticker}: {len(df)} dias coletados")
                 
@@ -956,10 +904,8 @@ class ColetorDados:
                 print(f"  ❌ {ticker}: Erro - {str(e)[:50]}")
                 continue
         
-        # Validação final
         if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
             print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos.")
-            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos")
             return False
         
         # Processa dataframe de fundamentos
@@ -967,18 +913,12 @@ class ColetorDados:
             self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
             self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
             
-            # Imputa valores faltantes
-            scaler = RobustScaler()
             numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
             
             for col in numeric_cols:
                 if self.dados_fundamentalistas[col].isnull().any():
                     median_val = self.dados_fundamentalistas[col].median()
                     self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
-            
-            self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(
-                self.dados_fundamentalistas[numeric_cols]
-            )
         
         # Calcula métricas de performance
         metricas = {}
@@ -989,13 +929,13 @@ class ColetorDados:
                     'retorno_anual': returns.mean() * 252,
                     'volatilidade_anual': returns.std() * np.sqrt(252),
                     'sharpe': (returns.mean() * 252 - TAXA_LIVRE_RISCO) / (returns.std() * np.sqrt(252)) if returns.std() > 0 else 0,
-                    'max_drawdown': np.nan  # Pode ser calculado se disponível
                 }
         
         self.metricas_performance = pd.DataFrame(metricas).T
         
         print(f"✓ Coleta concluída: {len(self.ativos_sucesso)} ativos válidos\n")
         return True
+        
 # =============================================================================
 # CLASSE: MODELAGEM DE VOLATILIDADE GARCH
 # =============================================================================
