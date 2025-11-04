@@ -935,7 +935,6 @@ class ColetorDados:
         
         return True
 
-# Function to collect data (enhanced version)
 def coletar_dados_ativos(lista_ativos, periodo='max'):
     """
     Coleta dados históricos de múltiplos ativos com tratamento robusto de erros
@@ -948,6 +947,8 @@ def coletar_dados_ativos(lista_ativos, periodo='max'):
     progress_bar = None
     status_text = None
     
+    # É necessário que 'sys', 'time', 'numpy', 'yfinance', 'tqdm', e 'st' (Streamlit)
+    # estejam importados no topo do seu arquivo principal.
     if 'streamlit' in sys.modules: # Only use Streamlit elements if running in Streamlit
         progress_bar = st.progress(0)
         status_text = st.empty()
@@ -994,6 +995,11 @@ def coletar_dados_ativos(lista_ativos, periodo='max'):
                 if attempt < max_retries - 1:
                     time.sleep(retry_delay)
                     retry_delay *= 2
+        
+        # --- [INSERIDO] Atraso principal para evitar Rate Limiting ---
+        # Pausa de 1.0 a 2.0 segundos entre o download de cada ativo.
+        time.sleep(1.0 + np.random.rand()) 
+        # -----------------------------------------------------------
     
     # Clean up Streamlit elements if they were used
     if progress_bar:
@@ -1037,7 +1043,6 @@ def coletar_dados_ativos(lista_ativos, periodo='max'):
         return None
     
     return dados_coletados
-
 # =============================================================================
 # CLASSE: MODELAGEM DE VOLATILIDADE GARCH
 # =============================================================================
