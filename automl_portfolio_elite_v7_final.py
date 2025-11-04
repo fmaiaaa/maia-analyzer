@@ -1001,8 +1001,9 @@ def coletar_dados_ativos(lista_ativos, periodo='max'):
     st.success(f"✓ Total coletado: {len(dados_coletados)}")
     
     # Validate minimum assets collected
+    # Validate minimum assets collected
     if len(dados_coletados) < NUM_ATIVOS_PORTFOLIO:
-        st.error("""
+        st.error(f"""
         ❌ ERRO: Apenas {len(dados_coletados)} ativos coletados.
             Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos
         
@@ -1011,7 +1012,7 @@ def coletar_dados_ativos(lista_ativos, periodo='max'):
           • Tente selecionar mais ativos ou setores diferentes
           • Alguns ativos podem estar sem dados recentes
           • Aguarde alguns minutos e tente novamente (possível rate limiting)
-        """.format(len=len, NUM_ATIVOS_PORTFOLIO=NUM_ATIVOS_PORTFOLIO))
+        """)
         return None
     
     return dados_coletados
