@@ -3487,60 +3487,78 @@ def aba_analise_individual():
         st.info("👆 Selecione um ativo e clique em 'Analisar Ativo' para começar a análise completa.")
         return
     
-        # Execute analysis
-        with st.spinner(f"Analisando {ativo_selecionado}..."):
-                        try:
-                            # Tenta obter dados históricos usando yf.download (mais robusto)
-                            max_retries = 3
-                            retry_delay = 2
-                            hist = pd.DataFrame() # Initialize an empty DataFrame
-                            
-                            for attempt in range(max_retries):
-                                try:
-                                    hist = yf.download(
-                                        ativo_selecionado, 
-                                        period='max', 
-                                        progress=False, 
-                                        timeout=30 # Aumente o timeout aqui também
-                                    )
-                                    if not hist.empty:
-                                        break
-                                    time.sleep(retry_delay)
-                                    retry_delay *= 2
-                                except Exception as e_download:
-                                    if attempt < max_retries - 1:
-                                        time.sleep(retry_delay)
-                                        retry_delay *= 2
-                                        continue
-                                    else:
-                                        raise # Re-raise the exception if retries fail
-                            
-                            if hist.empty:
-                                st.error(f"Não foi possível obter dados históricos para {ativo_selecionado}.")
-                                return
+# Execute analysis
+with st.spinner(f"Analisando {ativo_selecionado}..."):
+    try: # Este 'try' agora abrange toda a lógica de download e inicialização
+        # Tenta obter dados históricos com retry logic
+        max_retries = 3
+        retry_delay = 2
+        hist = pd.DataFrame()  # Initialize an empty DataFrame
         
-            # A partir daqui, você ainda precisa do objeto Ticker para dados fundamentalistas.
-            # Acessar .info pode falhar, mas a análise continuará.
+        # Loop de Retry para Download
+        for attempt in range(max_retries):
             try:
-                ticker = yf.Ticker(ativo_selecionado)
-                features_fund = AnalisadorIndividualAtivos.calcular_features_fundamentalistas_expandidas(ticker)
-            except Exception as e_fund:
-                st.warning(f"⚠️ Erro ao obter dados fundamentalistas para {ativo_selecionado}. Usando dados vazios. Erro: {str(e_fund)[:50]}")
-                features_fund = {} # Use um dicionário vazio como fallback para features_fund
-        
-            # Calcula todos os indicadores
-            df_completo = AnalisadorIndividualAtivos.calcular_todos_indicadores_tecnicos(hist)
+                # Tenta obter dados históricos usando yf.download (mais robusto)
+                hist = yf.download(
+                    ativo_selecionado, 
+                    period='max', 
+                    progress=False, 
+                    timeout=30 # Aumente o timeout aqui também
+                )
+                # Se o download for bem-sucedido e não estiver vazio, quebra o loop de retry
+                if not hist.empty and len(hist) > 1:
+                    break
+                
+                # Se o download for vazio, tenta novamente
+                time.sleep(retry_delay)
+                retry_delay *= 2
+                
+            except Exception as e_download:
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    retry_delay *= 2
+                    continue
+                else:
+                    # Re-raise o erro final após todas as tentativas falharem
+                    st.error(f"Falha na coleta de dados após {max_retries} tentativas: {str(e_download)}")
+                    raise # Propaga o erro para o try/except externo (após o spinner)
 
+        if hist.empty or len(hist) <= 1:
+            st.error(f"Não foi possível obter dados históricos para {ativo_selecionado}.")
+            return
+        
+        # 1. Obtém o objeto Ticker e dados fundamentalistas
+        ticker = None # Inicializa o objeto ticker
+        try:
+            # Tenta obter o objeto Ticker para dados fundamentalistas.
+            ticker = yf.Ticker(ativo_selecionado)
             features_fund = AnalisadorIndividualAtivos.calcular_features_fundamentalistas_expandidas(ticker)
-            
-            # Tabs for analysis sections
-            tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                "📊 Visão Geral",
-                "📈 Análise Técnica",
-                "💼 Análise Fundamentalista",
-                "🤖 Machine Learning",
-                "🔬 Clusterização e Similaridade"
-            ])
+        except Exception as e_fund:
+            # Se falhar, usa dados fundamentalistas vazios
+            st.warning(f"⚠️ Erro ao obter dados fundamentalistas para {ativo_selecionado}. Usando dados vazios. Erro: {str(e_fund)[:50]}")
+            features_fund = {} # Use um dicionário vazio como fallback para features_fund
+        
+        # 2. Calcula todos os indicadores técnicos
+        df_completo = AnalisadorIndividualAtivos.calcular_todos_indicadores_tecnicos(hist)
+
+        # Tabs for analysis sections
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "📊 Visão Geral",
+            "📈 Análise Técnica",
+            "💼 Análise Fundamentalista",
+            "🤖 Machine Learning",
+            "🔬 Clusterização e Similaridade"
+        ])
+        
+        # O restante do código das abas (tab1 a tab5) continua aqui,
+        # usando 'df_completo' e 'features_fund'
+        # ...
+
+    except Exception as e:
+        # Captura erros gerais (como o erro final de download propagado)
+        st.error(f"Erro inesperado durante a análise do ativo: {str(e)}")
+        import traceback
+        st.error(f"Traceback: {traceback.format_exc()}")
             
             with tab1:
                 st.markdown(f"### {ativo_selecionado.replace('.SA', '')} - Visão Geral")
