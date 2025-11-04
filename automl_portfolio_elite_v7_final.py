@@ -959,9 +959,8 @@ def coletar_dados_ativos(lista_ativos, periodo='max'):
                         ticker, 
                         period=periodo, 
                         progress=False,
-                        timeout=10,
-                        # Add headers to avoid rate limiting
-                        headers={'User-Agent': 'Mozilla/5.0'}
+                        timeout=10
+                        # O argumento headers foi removido para compatibilidade com versões mais antigas
                     )
                     
                     if df.empty or len(df) < MIN_DIAS_HISTORICO:
