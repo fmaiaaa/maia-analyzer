@@ -8,7 +8,7 @@ google-cloud-storage>=2.10.0
 
 # Análise técnica e financeira
 ta>=0.11.0
-yfinance>=0.2.66
+--upgrade yfinance
 
 # Visualização
 plotly>=5.17.0
