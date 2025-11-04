@@ -3487,37 +3487,37 @@ def aba_analise_individual():
         st.info("👆 Selecione um ativo e clique em 'Analisar Ativo' para começar a análise completa.")
         return
     
-    # Execute analysis
-    with st.spinner(f"Analisando {ativo_selecionado}..."):
-                    try:
-                        # Tenta obter dados históricos usando yf.download (mais robusto)
-                        max_retries = 3
-                        retry_delay = 2
-                        hist = pd.DataFrame() # Initialize an empty DataFrame
-                        
-                        for attempt in range(max_retries):
-                            try:
-                                hist = yf.download(
-                                    ativo_selecionado, 
-                                    period='max', 
-                                    progress=False, 
-                                    timeout=30 # Aumente o timeout aqui também
-                                )
-                                if not hist.empty:
-                                    break
-                                time.sleep(retry_delay)
-                                retry_delay *= 2
-                            except Exception as e_download:
-                                if attempt < max_retries - 1:
+        # Execute analysis
+        with st.spinner(f"Analisando {ativo_selecionado}..."):
+                        try:
+                            # Tenta obter dados históricos usando yf.download (mais robusto)
+                            max_retries = 3
+                            retry_delay = 2
+                            hist = pd.DataFrame() # Initialize an empty DataFrame
+                            
+                            for attempt in range(max_retries):
+                                try:
+                                    hist = yf.download(
+                                        ativo_selecionado, 
+                                        period='max', 
+                                        progress=False, 
+                                        timeout=30 # Aumente o timeout aqui também
+                                    )
+                                    if not hist.empty:
+                                        break
                                     time.sleep(retry_delay)
                                     retry_delay *= 2
-                                    continue
-                                else:
-                                    raise # Re-raise the exception if retries fail
-                        
-                        if hist.empty:
-                            st.error(f"Não foi possível obter dados históricos para {ativo_selecionado}.")
-                            return
+                                except Exception as e_download:
+                                    if attempt < max_retries - 1:
+                                        time.sleep(retry_delay)
+                                        retry_delay *= 2
+                                        continue
+                                    else:
+                                        raise # Re-raise the exception if retries fail
+                            
+                            if hist.empty:
+                                st.error(f"Não foi possível obter dados históricos para {ativo_selecionado}.")
+                                return
         
             # A partir daqui, você ainda precisa do objeto Ticker para dados fundamentalistas.
             # Acessar .info pode falhar, mas a análise continuará.
