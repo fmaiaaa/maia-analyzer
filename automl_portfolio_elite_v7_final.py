@@ -2874,8 +2874,8 @@ def aba_selecao_ativos():
     modo_selecao = st.radio(
         "**Modo de Seleção:**",
         [
-            "📊 Ibovespa Completo (87 ativos)",
-            "🌐 Lista Completa de Ativos (300+ ativos)",
+            "📊 Ibovespa Completo (82 ativos)",
+            "🌐 B3 Completa (259 ativos)",
             "🏢 Setores Específicos",
             "✍️ Digitar Ativos Manualmente"
         ],
@@ -3224,6 +3224,12 @@ def aba_construtor_portfolio():
     
     # FASE 2: RESULTADOS
     else:
+        # CORREÇÃO DE SEGURANÇA: Verifica se o objeto builder existe
+        if st.session_state.builder is None:
+            st.session_state.builder_complete = False
+            st.warning("⚠️ O estado da sessão expirou ou foi recarregado. Por favor, preencha o questionário novamente.")
+            return # Sai para forçar a re-execução em FASE 1 no próximo ciclo
+        
         builder = st.session_state.builder
         profile = st.session_state.profile
         assets = builder.ativos_selecionados
