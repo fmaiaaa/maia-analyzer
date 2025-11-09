@@ -3665,53 +3665,34 @@ def aba_analise_individual():
             st.error(f"Traceback: {traceback.format_exc()}")
 
 def main():
-    """Função principal com estrutura de 5 abas (NEW: adicionada aba de Governança)"""
+    """Função principal com estrutura de 4 abas (Sidebar removida)"""
     
     # Initialize session state variables if they don't exist
     if 'builder' not in st.session_state:
         st.session_state.builder = None
         st.session_state.builder_complete = False
         st.session_state.profile = {}
-        st.session_state.ativos_para_analise = [] # Initialize asset selection
-        st.session_state.analisar_ativo_triggered = False # Initialize analysis trigger
+        st.session_state.ativos_para_analise = []
+        st.session_state.analisar_ativo_triggered = False
         
+    # Certifique-se de que 'configurar_pagina()' usa 'layout="wide"'
+    # Exemplo: st.set_page_config(layout="wide", page_title="AutoML Elite")
     configurar_pagina()
     
-    # Sidebar configuration
-    st.sidebar.markdown(
-        '<p style="font-size: 26px; font-weight: bold; color: #2c3e50;">📈 AutoML Elite</p>',
-        unsafe_allow_html=True
-    )
-    
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 🎯 Recursos Elite")
-    st.sidebar.markdown("""
-    - **9 Modelos ML**: XGBoost, LightGBM, CatBoost, RF, ET, KNN, SVC, LR, GNB
-    - **Ponderação AUC-ROC**: Ensemble inteligente
-    - **Governança**: Monitoramento e alertas
-    - **GARCH/EGARCH**: Volatilidade avançada
-    - **Modelos Estatísticos**: ARIMA, Prophet, VAR
-    - **30+ Indicadores Técnicos**: Biblioteca `ta`
-    - **Análise Fundamentalista**: Métricas expandidas
-    - **Clusterização**: K-means + PCA para similaridade
-    - **Otimização CVaR**: Risco condicional
-    """)
-    
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**Versão**: 7.0.0 Elite Final")
-    st.sidebar.markdown("**Sistema**: Quantitative AutoML")
-    st.sidebar.markdown("[Repositório](https://github.com/seu-usuario/seu-repositorio)") # Placeholder for link
+    # O CÓDIGO DA SIDEBAR FOI REMOVIDO AQUI:
+    # st.sidebar.markdown(...)
+    # st.sidebar.markdown("---")
+    # ... e assim por diante.
     
     # Main title
     st.markdown('<h1 class="main-header">Sistema AutoML Elite - Otimização Quantitativa de Portfólio</h1>', unsafe_allow_html=True)
     
-    # NEW: 5 tabs instead of 4
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    # Configuração das 4 abas
+    tab1, tab2, tab3, tab4 = st.tabs([
         "📚 Introdução",
         "🎯 Seleção de Ativos",
         "🏗️ Construtor de Portfólio",
-        "🔍 Análise Individual",
-        "🛡️ Governança de Modelo"  # NEW TAB
+        "🔍 Análise Individual"
     ])
     
     # Render content for each tab
