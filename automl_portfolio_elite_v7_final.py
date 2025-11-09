@@ -2324,6 +2324,10 @@ def aba_selecao_ativos():
     else:
         st.warning("⚠️ Nenhum ativo selecionado. Por favor, faça uma seleção.")
 
+# =============================================================================
+# Aba 3: Questionário e Construção de Portfólio (Corrigida)
+# =============================================================================
+
 def aba_construtor_portfolio():
     """Aba 3: Questionário e Construção de Portfólio"""
     
@@ -2363,7 +2367,7 @@ def aba_construtor_portfolio():
                 'B: Médio (1-5 anos)',
                 'C: Longo (5+ anos)'
             ]
-            options_liquidity = [
+            options_liquidez = [
                 'A: Menos de 6 meses',
                 'B: Entre 6 meses e 2 anos',
                 'C: Mais de 2 anos'
@@ -2412,7 +2416,7 @@ def aba_construtor_portfolio():
                 
                 p311_liquid = st.radio(
                     "**8. Necessidade de liquidez (prazo mínimo para resgate):**",
-                    options=options_liquidity,
+                    options=options_liquidez,
                     index=2, key='liquidity_radio'
                 )[0] # Get the key (A, B, C)
                 
@@ -2428,12 +2432,13 @@ def aba_construtor_portfolio():
             
             # Opções avançadas
             with st.expander("Opções Avançadas"):
+                # Otimização Optuna é para o LightGBM (único modelo agora)
                 otimizar_ml = st.checkbox("Ativar otimização Optuna (mais lento, melhor precisão)", value=False, key='optimize_ml_checkbox')
             
             submitted = st.form_submit_button("🚀 Gerar Portfólio Otimizado", type="primary")
             
             if submitted:
-                # Analisa perfil
+                # 1. Analisa perfil
                 risk_answers = {
                     'risk_accept': p2_risk,
                     'max_gain': p3_gain,
@@ -2455,21 +2460,32 @@ def aba_construtor_portfolio():
                     'risk_score': score
                 }
                 
-                # Cria construtor
-                builder = ConstrutorPortfolioAutoML(investment)
-                st.session_state.builder = builder
-                
-                # Executa pipeline
+                # 2. Cria construtor
+                try:
+                    # Cria a instância localmente e armazena em session_state
+                    builder_local = ConstrutorPortfolioAutoML(investment)
+                    st.session_state.builder = builder_local
+                except Exception as e:
+                    st.error(f"Erro fatal ao inicializar o construtor do portfólio: {e}")
+                    return
+
+                # 3. Executa pipeline
                 with st.spinner(f'Criando portfólio para **PERFIL {risk_level}** ({horizon})...'):
-                    success = builder.executar_pipeline(
-                        simbolos_customizados=st.session_state.ativos_para_analise,
-                        perfil_investidor=st.session_state.profile,
-                        otimizar_ml=otimizar_ml
-                    )
+                    try:
+                        # CHAMA O MÉTODO USANDO A VARIÁVEL LOCAL ONDE O OBJETO FOI CRIADO
+                        success = builder_local.executar_pipeline(
+                            simbolos_customizados=st.session_state.ativos_para_analise,
+                            perfil_inputs=st.session_state.profile,
+                            otimizar_ml=otimizar_ml
+                        )
+                    except AttributeError as e:
+                        st.error(f"Erro de Atributo: O objeto ConstrutorPortfolioAutoML não tem o método 'executar_pipeline'. Erro: {e}")
+                        st.error("Verifique se a classe ConstrutorPortfolioAutoML foi definida corretamente.")
+                        return
                     
                     if not success:
                         st.error("Falha ao coletar dados suficientes ou processar os ativos. Tente novamente com uma seleção diferente de ativos ou verifique sua conexão.")
-                        # Optionally clear builder and profile to allow retry
+                        # Limpa o estado para permitir uma nova tentativa
                         st.session_state.builder = None
                         st.session_state.profile = {}
                         return
@@ -2480,6 +2496,12 @@ def aba_construtor_portfolio():
     # FASE 2: RESULTADOS
     else:
         builder = st.session_state.builder
+        # Adiciona verificação de segurança, embora o erro tenha ocorrido na fase 1
+        if builder is None:
+            st.error("Objeto construtor não encontrado. Recomece a análise.")
+            st.session_state.builder_complete = False
+            return
+            
         profile = st.session_state.profile
         assets = builder.ativos_selecionados
         allocation = builder.alocacao_portfolio
@@ -2491,7 +2513,7 @@ def aba_construtor_portfolio():
         col1.metric("Perfil de Risco", profile.get('risk_level', 'N/A'), f"Score: {profile.get('risk_score', 'N/A')}")
         col2.metric("Horizonte", profile.get('time_horizon', 'N/A'))
         col3.metric("Sharpe Ratio", f"{builder.metricas_portfolio.get('sharpe_ratio', 0):.3f}")
-        col4.metric("Estratégia", builder.metodo_alocacao_atual.split('(')[0].strip()) # Extract strategy name
+        col4.metric("Estratégia", builder.metodo_alocacao_atual.split('(')[0].strip())
         
         # Button to restart analysis
         if st.button("🔄 Recomeçar Análise", key='recomecar_analysis'):
@@ -2499,12 +2521,12 @@ def aba_construtor_portfolio():
             st.session_state.builder_complete = False
             st.session_state.builder = None
             st.session_state.profile = {}
-            st.session_state.ativos_para_analise = [] # Clear asset selection as well
+            st.session_state.ativos_para_analise = [] 
             st.rerun()
         
         st.markdown("---")
         
-        # Dashboard de resultados (código existente mantido e melhorado)
+        # Dashboard de resultados (código de exibição inalterado)
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "📊 Alocação", "📈 Performance", "🔬 Análise ML", "📉 Volatilidade GARCH", "❓ Justificativas"
         ])
@@ -2516,7 +2538,7 @@ def aba_construtor_portfolio():
                 st.markdown('#### Alocação de Capital')
                 alloc_data = pd.DataFrame([
                     {'Ativo': a, 'Peso (%)': allocation[a]['weight'] * 100}
-                    for a in assets if a in allocation and allocation[a]['weight'] > 0.001 # Filter small weights for pie chart
+                    for a in assets if a in allocation and allocation[a]['weight'] > 0.001
                 ])
                 
                 if not alloc_data.empty:
@@ -2538,21 +2560,21 @@ def aba_construtor_portfolio():
                 
                 alloc_table = []
                 for asset in assets:
-                    if asset in allocation and allocation[asset]['weight'] > 0: # Only show allocated assets
+                    if asset in allocation and allocation[asset]['weight'] > 0:
                         weight = allocation[asset]['weight']
                         amount = allocation[asset]['amount']
                         sector = builder.dados_fundamentalistas.loc[asset, 'sector'] if asset in builder.dados_fundamentalistas.index and 'sector' in builder.dados_fundamentalistas.columns else 'Unknown'
                         ml_info = builder.predicoes_ml.get(asset, {})
-                        stat_info = builder.predicoes_estatisticas.get(asset, {}) # Get statistical info
+                        stat_info = builder.predicoes_estatisticas.get(asset, {})
                         
                         alloc_table.append({
-                            'Ativo': asset.replace('.SA', ''), # Clean ticker name
+                            'Ativo': asset.replace('.SA', ''), 
                             'Setor': sector,
                             'Peso (%)': f"{weight * 100:.2f}",
                             'Valor (R$)': f"R$ {amount:,.2f}",
                             'ML Prob. Alta (%)': f"{ml_info.get('predicted_proba_up', 0.5)*100:.1f}",
                             'ML AUC': f"{ml_info.get('auc_roc_score', 0):.3f}" if not pd.isna(ml_info.get('auc_roc_score')) else "N/A",
-                            'Estatístico Dir.': f"{stat_info.get('predicted_direction', 0.5)*100:.0f}%" if stat_info.get('predicted_direction') is not None else "N/A", # Display as percentage
+                            'Estatístico Dir.': f"{stat_info.get('predicted_direction', 0.5)*100:.0f}%" if stat_info.get('predicted_direction') is not None else "N/A",
                             'Estatístico Prev.': f"R$ {stat_info.get('forecast', np.nan):,.2f}" if not np.isnan(stat_info.get('forecast', np.nan)) else "N/A"
                         })
                 
@@ -2605,7 +2627,7 @@ def aba_construtor_portfolio():
                         'Prob. Alta (%)': ml_info.get('predicted_proba_up', 0.5) * 100,
                         'AUC-ROC (CV)': ml_info.get('auc_roc_score', np.nan),
                         'Modelo': ml_info.get('model_name', 'N/A'),
-                        'Nº Modelos': ml_info.get('num_models', 0)
+                        'Nº Modelos': 1 # Agora é modelo único
                     })
             
             df_ml = pd.DataFrame(ml_data)
@@ -2618,7 +2640,7 @@ def aba_construtor_portfolio():
                     y=df_ml['Prob. Alta (%)'],
                     marker=dict(
                         color=df_ml['Prob. Alta (%)'],
-                        colorscale='RdYlGn', # Green for high probability, Red for low
+                        colorscale='RdYlGn', 
                         showscale=True,
                         colorbar=dict(title="Prob. (%)")
                     ),
@@ -2627,7 +2649,7 @@ def aba_construtor_portfolio():
                 ))
                 
                 fig_layout = obter_template_grafico()
-                fig_layout['title']['text'] = "Probabilidade de Alta Futura (ML Ensemble)"
+                fig_layout['title']['text'] = "Probabilidade de Alta Futura (LightGBM Único)"
                 fig_layout['yaxis']['title'] = "Probabilidade (%)"
                 fig_layout['xaxis']['title'] = "Ativo"
                 fig_ml.update_layout(**fig_layout, height=400)
@@ -2652,16 +2674,14 @@ def aba_construtor_portfolio():
             
             dados_garch = []
             for ativo in assets:
-                # Ensure asset exists in performance metrics and GARCH calculations
                 if ativo in builder.dados_performance.index and ativo in builder.volatilidades_garch:
                     vol_hist = builder.dados_performance.loc[ativo, 'volatilidade_anual'] if 'volatilidade_anual' in builder.dados_performance.columns else np.nan
                     vol_garch = builder.volatilidades_garch.get(ativo)
                     
-                    # Handle cases where GARCH might have failed or returned NaN
                     if vol_garch is not None and not np.isnan(vol_garch):
                         status = '✓ GARCH Ajustado'
                         vol_display = vol_garch
-                    elif vol_hist is not None and not np.isnan(vol_hist): # Fallback to historical if GARCH failed
+                    elif vol_hist is not None and not np.isnan(vol_hist): 
                         status = '⚠️ Histórica (GARCH Falhou)'
                         vol_display = vol_hist
                     else:
@@ -2680,8 +2700,7 @@ def aba_construtor_portfolio():
             if not df_garch.empty:
                 fig_garch = go.Figure()
                 
-                # Filter out NAs for plotting if necessary, or handle directly
-                plot_df_garch = df_garch[df_garch['Vol. GARCH (%)'] != 'N/A'].copy() # Filter GARCH adjusted for plotting bars
+                plot_df_garch = df_garch[df_garch['Vol. GARCH (%)'] != 'N/A'].copy() 
                 plot_df_garch['Vol. GARCH (%)'] = plot_df_garch['Vol. GARCH (%)'].astype(float)
                 plot_df_garch['Vol. Histórica (%)'] = plot_df_garch['Vol. Histórica (%)'].apply(lambda x: float(x) if x != 'N/A' else np.nan)
 
