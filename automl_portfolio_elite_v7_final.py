@@ -2171,9 +2171,6 @@ def configurar_pagina():
         </style>
     """, unsafe_allow_html=True)
 
-import streamlit as st
-import pandas as pd # Necessário para a tabela
-
 def aba_introducao():
     """Aba 1: Introdução e Metodologia"""
     
@@ -2193,23 +2190,46 @@ def aba_introducao():
     with col1:
         st.markdown("### Metodologia Científica")
         st.markdown("""
-        O processo se inicia com uma **Análise Detalhada do Perfil do Investidor**, utilizando um questionário rigoroso (baseado em normas CVM) para avaliar sua tolerância ao risco, definir o horizonte temporal dos investimentos e entender sua experiência.
+        #### Fases do Processo
         
-        Em seguida, realizamos a **Coleta e Processamento de Dados**, consolidando dados históricos de preços, mais de 30 indicadores técnicos, 20+ métricas fundamentalistas, dados macroeconômicos essenciais, e informações detalhadas de volume e liquidez dos ativos. 
+        - **Análise de Perfil do Investidor:**
+          - Questionário rigoroso baseado em normas CVM.
+          - Avaliação da tolerância ao risco e definição do horizonte temporal.
+          - Análise da experiência e conhecimento do mercado.
         
-        Finalmente, aplicamos a **Engenharia de Features**, transformando os dados brutos em variáveis preditivas avançadas. Isso inclui indicadores técnicos sofisticados (RSI, MACD, Bollinger, Stochastic, ADX, ATR, CCI, Williams %R, OBV, MFI, Ichimoku, Keltner, Donchian), a extração de indicadores fundamentalistas detalhados, a incorporação de Smart Beta Factors (Qualidade, Valor, Momentum), a modelagem de volatilidade (GARCH/EGARCH) e correlações, além de incluir lags, estatísticas rolling e codificação temporal.
+        - **Coleta e Processamento de Dados:**
+          - Consolidação de dados históricos de preços.
+          - Mais de 30 indicadores técnicos e 20+ métricas fundamentalistas.
+          - Dados macroeconômicos, volume e liquidez.
+        
+        - **Engenharia de Features Avançada:**
+          - **Indicadores Técnicos Sophisticados:** RSI, MACD, Bollinger, Stochastic, ADX, ATR, CCI, Williams %R, OBV, MFI, Ichimoku, Keltner, Donchian.
+          - **Fatores:** Smart Beta Factors (Qualidade, Valor, Momentum).
+          - **Modelagem:** Volatilidade (GARCH/EGARCH), correlações, Lags, estatísticas rolling e codificação temporal.
         """)
     
     with col2:
         st.markdown("### Tecnologias Utilizadas")
         st.markdown("""
-        Para as previsões, empregamos um poderoso **Machine Learning Ensemble**, que combina modelos robustos como XGBoost, LightGBM, CatBoost, Random Forest e Extra Trees, juntamente com métodos tradicionais como KNN, SVC, Regressão Logística e Gaussian Naive Bayes. A otimização Optuna é utilizada para ajuste automático dos hiperparâmetros, e a ponderação final é feita de forma inteligente com base no AUC-ROC.
+        #### Ferramentas Chave
         
-        Complementamos isso com **Modelagem Estatística e Séries Temporais** (ARIMA, SARIMA, VAR, Prophet) para criar um ensemble de previsões de preços mais estável, e **Modelagem de Volatilidade** usando GARCH(1,1) / EGARCH.
+        - **Machine Learning Ensemble:**
+            - Combinação de modelos robustos: XGBoost, LightGBM, CatBoost, Random Forest, Extra Trees.
+            - Inclusão de métodos clássicos: KNN, SVC, Regressão Logística, Gaussian Naive Bayes.
+            - **Ajuste:** Otimização Optuna para hyperparameter tuning automático.
+            - **Ponderação:** Ensemble inteligente baseado em AUC-ROC.
         
-        A **Otimização de Portfólio** aplica a Teoria de Markowitz para traçar a Fronteira Eficiente (ajustada com GARCH), maximizar o Sharpe Ratio e minimizar a volatilidade. Otimizamos também o CVaR (*Conditional Value at Risk*) e aplicamos restrições rigorosas de peso (10-30% por ativo).
+        - **Modelagem Estatística e Séries Temporais:**
+            - Utilização de modelos como ARIMA, SARIMA, VAR e Prophet.
+            - Ensemble de modelos para previsões de preços mais estáveis.
+
+        - **Otimização de Portfólio (Teoria Moderna):**
+            - Traçado da Fronteira Eficiente (Markowitz + GARCH).
+            - Maximização do Sharpe Ratio e Minimização da Volatilidade.
+            - Otimização de CVaR (*Conditional Value at Risk*).
+            - Restrições de peso rigorosas (10-30% por ativo).
         
-        A **Governança de Modelo** garante a robustez do sistema através do monitoramento contínuo de métricas como AUC-ROC, Precision, Recall, F1-Score, com alertas automáticos para degradação ou *drift* do modelo.
+        - **Governança de Modelo:** Monitoramento contínuo de AUC-ROC, Precision, Recall, F1-Score, com alertas automáticos para degradação e *drift*.
         """)
     
     st.markdown("---")
@@ -2228,25 +2248,35 @@ def aba_introducao():
     with col1:
         st.markdown("""
         **Score de Performance (até 40%)**
-        Este score avalia o histórico do ativo focando na qualidade do seu retorno. Analisamos o *Sharpe Ratio* histórico, o retorno anualizado ajustado ao risco e o *Drawdown* máximo, garantindo que o ativo entregue retornos consistentes.
+        - Sharpe Ratio histórico.
+        - Retorno anualizado ajustado ao risco.
+        - Drawdown máximo.
         """)
     
     with col2:
         st.markdown("""
         **Score Fundamentalista (até 50%)**
-        Focado na saúde e valor da empresa, este score avalia a Qualidade (ROE, margens, ROIC), o Valor (P/L, P/VP baixos) e o Crescimento (Receita, Lucros), além da Saúde Financeira (Dívida/Patrimônio, Liquidez).
+        - Qualidade: ROE, margens, ROIC.
+        - Valor: P/L, P/VP baixos.
+        - Crescimento: Receita, Lucros.
+        - Saúde financeira: Dívida/Patrimônio, Liquidez.
         """)
     
     with col3:
         st.markdown("""
         **Score Técnico (até 50%)**
-        Esta dimensão foca na dinâmica de mercado e preço. Analisa Indicadores de Momentum (MACD, RSI), Volatilidade (Bandas de Bollinger, ATR) e Tendência (ADX, Médias Móveis), identificando padrões de preço.
+        - Indicadores de Momentum (MACD, RSI).
+        - Volatilidade (Bandas de Bollinger, ATR).
+        - Tendência (ADX, Médias Móveis).
+        - Padrões de preço.
         """)
     
     with col4:
         st.markdown("""
         **Score de Machine Learning (até 30%)**
-        Este é um indicador preditivo que mede a probabilidade de alta futura prevista pelo ensemble. É ponderado pela confiança do modelo (AUC-ROC médio) e validado por um rigoroso processo de validação cruzada temporal.
+        - Probabilidade de alta prevista pelo ensemble ponderado por AUC.
+        - Confiança do modelo (AUC-ROC médio).
+        - Validação cruzada temporal.
         """)
     
     st.markdown("---")
@@ -2271,7 +2301,12 @@ def aba_introducao():
     
     st.markdown("""
     <div class="info-box">
-    <p>O sistema garante ativamente a <strong>diversificação</strong> e o <strong>gerenciamento de risco</strong> da sua carteira. A alocação é pensada para limitar a, no máximo, 2 ativos por setor (sempre que a disponibilidade permitir), priorizando ativos de segmentos diferentes para reduzir o risco de concentração. Utilizamos a modelagem de volatilidade GARCH e a otimização de CVaR (*Conditional Value at Risk*) como pilares para assegurar a máxima robustez da carteira em diferentes cenários.</p>
+    <p>O sistema garante ativamente a <strong>diversificação</strong> e o <strong>gerenciamento de risco</strong> da sua carteira:</p>
+    <ul>
+        <li>Alocação limitada a, no máximo, 2 ativos por setor.</li>
+        <li>Priorização de ativos de segmentos diferentes para reduzir risco de concentração.</li>
+        <li>Utilização da modelagem de volatilidade GARCH e otimização de CVaR (*Conditional Value at Risk*) para máxima robustez.</li>
+    </ul>
     </div>
     """, unsafe_allow_html=True)
     
