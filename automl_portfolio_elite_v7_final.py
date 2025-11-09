@@ -103,7 +103,7 @@ warnings.filterwarnings('ignore')
 # =============================================================================
 
 # Período de coleta de dados. 'max' indica o máximo disponível no yfinance.
-PERIODO_DADOS = '2y'
+PERIODO_DADOS = 'max'
 # Mínimo de dias úteis para considerar um histórico válido (aprox. 1 ano)
 MIN_DIAS_HISTORICO = 252
 # Número de ativos a serem selecionados para compor o portfólio final
@@ -3153,7 +3153,7 @@ def aba_construtor_portfolio():
                     """, unsafe_allow_html=True)
 
 def aba_analise_individual():
-    """Aba 4: Análise Individual de Ativos"""
+    """Aba 4: Análise Individual de Ativos - Otimizada para velocidade."""
     
     st.markdown("## 🔍 Análise Individual Completa de Ativos")
     
@@ -3175,15 +3175,14 @@ def aba_analise_individual():
         ativo_selecionado = st.selectbox(
             "Selecione um ativo para análise detalhada:",
             options=ativos_disponiveis,
-            format_func=lambda x: x.replace('.SA', '') if isinstance(x, str) else x, # Format ticker names
+            format_func=lambda x: x.replace('.SA', '') if isinstance(x, str) else x,
             key='individual_asset_select'
         )
     
     with col2:
         if st.button("🔄 Analisar Ativo", key='analyze_asset_button', type="primary"):
-            st.session_state.analisar_ativo_triggered = True # Flag to trigger analysis
+            st.session_state.analisar_ativo_triggered = True 
     
-    # Check if analysis should be performed
     if 'analisar_ativo_triggered' not in st.session_state or not st.session_state.analisar_ativo_triggered:
         st.info("👆 Selecione um ativo e clique em 'Analisar Ativo' para começar a análise completa.")
         return
@@ -3192,8 +3191,9 @@ def aba_analise_individual():
     with st.spinner(f"Analisando {ativo_selecionado}..."):
         try:
             ticker = yf.Ticker(ativo_selecionado)
-            # Use 'max' period for historical depth, similar to global settings
-            hist = ticker.history(period='max') 
+            
+            # --- OTIMIZAÇÃO DE VELOCIDADE 1: Reduzir período histórico de 'max' para '5y' ---
+            hist = ticker.history(period='5y') 
             
             if hist.empty:
                 st.error(f"Não foi possível obter dados históricos para {ativo_selecionado}.")
@@ -3208,7 +3208,7 @@ def aba_analise_individual():
                 "📊 Visão Geral",
                 "📈 Análise Técnica",
                 "💼 Análise Fundamentalista",
-                "🤖 Machine Learning",
+                "🤖 Machine Learning", # <-- Esta é a aba alterada
                 "🔬 Clusterização e Similaridade"
             ])
             
@@ -3228,7 +3228,7 @@ def aba_analise_individual():
                 col4.metric("Indústria", features_fund.get('industry', 'N/A'))
                 col5.metric("Beta", f"{features_fund.get('beta', np.nan):.2f}" if not np.isnan(features_fund.get('beta')) else "N/A")
                 
-                # Candlestick chart with Volume
+                # Candlestick chart with Volume (Code unchanged)
                 if not df_completo.empty:
                     fig = make_subplots(
                         rows=2, cols=1,
@@ -3271,7 +3271,7 @@ def aba_analise_individual():
             with tab2:
                 st.markdown("### Indicadores Técnicos")
                 
-                # Display key indicators
+                # Display key indicators (Code unchanged)
                 col1, col2, col3, col4, col5, col6 = st.columns(6)
                 
                 col1.metric("RSI (14)", f"{df_completo['rsi_14'].iloc[-1]:.2f}" if 'rsi_14' in df_completo.columns else "N/A")
@@ -3281,7 +3281,7 @@ def aba_analise_individual():
                 col5.metric("CCI", f"{df_completo['cci'].iloc[-1]:.2f}" if 'cci' in df_completo.columns else "N/A")
                 col6.metric("ATR (%)", f"{df_completo['atr_percent'].iloc[-1]:.2f}%" if 'atr_percent' in df_completo.columns else "N/A")
 
-                # RSI and Stochastic Oscillator Plot
+                # RSI and Stochastic Oscillator Plot (Code unchanged)
                 st.markdown("#### RSI e Stochastic Oscillator")
                 
                 fig_osc = make_subplots(rows=2, cols=1, shared_xaxes=True,
@@ -3313,10 +3313,9 @@ def aba_analise_individual():
                 
                 st.plotly_chart(fig_osc, use_container_width=True)
                 
-                # Table of all current indicators
+                # Table of all current indicators (Code unchanged)
                 st.markdown("#### Valores Atuais dos Indicadores Técnicos")
                 
-                # Extract current values for available indicators
                 current_indicators = {}
                 available_indicator_cols = [col for col in df_completo.columns if col not in ['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'log_returns', 'day_of_week', 'month', 'quarter', 'day_of_month', 'week_of_year']]
                 
@@ -3337,7 +3336,7 @@ def aba_analise_individual():
             with tab3:
                 st.markdown("### Análise Fundamentalista Expandida")
                 
-                # Valuation Metrics
+                # Valuation Metrics (Code unchanged)
                 st.markdown("#### Valuation")
                 col1, col2, col3, col4, col5 = st.columns(5)
                 
@@ -3347,7 +3346,7 @@ def aba_analise_individual():
                 col4.metric("PEG", f"{features_fund.get('peg_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('peg_ratio')) else "N/A")
                 col5.metric("EV/EBITDA", f"{features_fund.get('ev_to_ebitda', np.nan):.2f}" if not pd.isna(features_fund.get('ev_to_ebitda')) else "N/A")
                 
-                # Profitability Metrics
+                # Profitability Metrics (Code unchanged)
                 st.markdown("#### Rentabilidade")
                 col1, col2, col3, col4, col5 = st.columns(5)
                 
@@ -3357,7 +3356,7 @@ def aba_analise_individual():
                 col4.metric("Margem Operacional", f"{features_fund.get('operating_margin', np.nan):.2f}%" if not pd.isna(features_fund.get('operating_margin')) else "N/A")
                 col5.metric("Margem Bruta", f"{features_fund.get('gross_margin', np.nan):.2f}%" if not pd.isna(features_fund.get('gross_margin')) else "N/A")
                 
-                # Dividend Metrics
+                # Dividend Metrics (Code unchanged)
                 st.markdown("#### Dividendos")
                 col1, col2, col3 = st.columns(3)
                 
@@ -3365,14 +3364,14 @@ def aba_analise_individual():
                 col2.metric("Payout Ratio", f"{features_fund.get('payout_ratio', np.nan):.2f}%" if not pd.isna(features_fund.get('payout_ratio')) else "N/A")
                 col3.metric("DY Médio 5A", f"{features_fund.get('five_year_avg_div_yield', np.nan):.2f}%" if not pd.isna(features_fund.get('five_year_avg_div_yield')) else "N/A")
                 
-                # Growth Metrics
+                # Growth Metrics (Code unchanged)
                 st.markdown("#### Crescimento")
                 col1, col2, col3 = st.columns(3)
                 col1.metric("Cresc. Receita", f"{features_fund.get('revenue_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('revenue_growth')) else "N/A")
                 col2.metric("Cresc. Lucros", f"{features_fund.get('earnings_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('earnings_growth')) else "N/A")
                 col3.metric("Cresc. Lucros (Q)", f"{features_fund.get('earnings_quarterly_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('earnings_quarterly_growth')) else "N/A")
 
-                # Financial Health
+                # Financial Health (Code unchanged)
                 st.markdown("#### Saúde Financeira")
                 col1, col2, col3, col4 = st.columns(4)
                 col1.metric("Dívida/Patrimônio", f"{features_fund.get('debt_to_equity', np.nan):.2f}" if not pd.isna(features_fund.get('debt_to_equity')) else "N/A")
@@ -3380,7 +3379,7 @@ def aba_analise_individual():
                 col3.metric("Quick Ratio", f"{features_fund.get('quick_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('quick_ratio')) else "N/A")
                 col4.metric("Fluxo de Caixa Livre", f"R$ {features_fund.get('free_cashflow', np.nan):,.0f}" if not pd.isna(features_fund.get('free_cashflow')) else "N/A")
                 
-                # Full Fundamental Data Table
+                # Full Fundamental Data Table (Code unchanged)
                 st.markdown("---")
                 st.markdown("#### Todos os Fundamentos Disponíveis")
                 
@@ -3392,166 +3391,130 @@ def aba_analise_individual():
                 st.dataframe(df_fund_display, use_container_width=True, hide_index=True)
             
             with tab4:
-                st.markdown("### Análise de Machine Learning")
+                st.markdown("### Análise de Machine Learning (Otimizada para Velocidade)")
                 
-                st.info("Treinando modelos ML com um conjunto expandido de features para previsão de direção futura...")
+                st.info("Utilizando um único modelo **LightGBM** com 2-Fold CV para previsão rápida da direção futura.")
                 
-                # Prepare data for ML
-                # Feature selection: consider only numeric features, technicals, fundamentals, macro, and temporal
-                numeric_cols_df = df_completo.select_dtypes(include=[np.number])
-                temporal_cols = ['day_of_week', 'month', 'quarter', 'day_of_month', 'week_of_year']
+                # Prepare data for ML (Code mostly unchanged, relies on previous feature creation)
                 
-                # Combine relevant columns, excluding identifiers and target
-                candidate_features = numeric_cols_df.columns.tolist() + temporal_cols
-                # Ensure 'Close' is not used as a feature itself unless lagged.
-                # Features related to Close price calculation (Open, High, Low, Volume) are usually excluded.
-                # Let's select features based on what's likely generated by EngenheiroFeatures and is numeric/temporal.
+                # Dynamic feature list from EngenheiroFeatures + temporal
+                features_from_eng = [col for col in df_completo.columns if col not in ['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'log_returns']] 
+                features_from_eng = [f for f in features_from_eng if pd.api.types.is_numeric_dtype(df_completo[f])] 
                 
-                # Dynamic feature list from EngenheiroFeatures + fundamental + temporal
-                features_from_eng = [col for col in df_completo.columns if col not in ['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'log_returns']] # Exclude price/volume basics
-                features_from_eng = [f for f in features_from_eng if pd.api.types.is_numeric_dtype(df_completo[f])] # Keep only numeric ones
-
-                # Include fundamental features if available (assuming they were added to df_completo)
-                # This part requires `df_completo` to have fundamental features correctly merged.
-                # For now, rely on the features computed by `EngenheiroFeatures` and temporal ones.
-                
-                all_potential_features = features_from_eng + temporal_cols
-                
-                # Final feature set: ensure they exist in df_completo and are numeric
+                all_potential_features = features_from_eng
                 final_features_for_ml = [f for f in all_potential_features if f in df_completo.columns and pd.api.types.is_numeric_dtype(df_completo[f])]
                 
-                # Add target column
-                df_ml_data = df_completo[final_features_for_ml + ['Close']].copy() # Keep Close temporarily for target calc
+                df_ml_data = df_completo[final_features_for_ml + ['Close']].copy() 
 
-                # Calculate Future Direction target (using a shorter lookahead for faster individual analysis)
-                # Using LOOKBACK_ML from global config, but can be adjusted for individual analysis speed
-                prediction_horizon = LOOKBACK_ML # Default from config
+                # Calculate Future Direction target (using LOOKBACK_ML from global config)
+                prediction_horizon = LOOKBACK_ML 
                 df_ml_data['Future_Direction'] = np.where(
                     df_ml_data['Close'].pct_change(prediction_horizon).shift(-prediction_horizon) > 0,
                     1, 0
                 )
                 
-                # Drop Close and final columns, drop NaNs
                 df_ml_data = df_ml_data.drop(columns=['Close'])
                 df_ml_data = df_ml_data.dropna()
                 
                 # Ensure enough data points for ML training
-                if len(df_ml_data) > 100: # Minimum data points
+                if len(df_ml_data) > 100 and len(np.unique(df_ml_data['Future_Direction'])) >= 2:
                     X = df_ml_data.drop('Future_Direction', axis=1)
                     y = df_ml_data['Future_Direction']
                     
-                    if len(np.unique(y)) < 2: # Check for class imbalance
-                        st.warning("Dados insuficientes ou classe única encontrada para análise ML.")
-                        return
-
-                    # Train ensemble models
-                    modelos, auc_scores = EnsembleML.treinar_ensemble(X, y, otimizar_optuna=False)  # Use fixed params for speed in individual analysis
+                    # --- ALTERAÇÃO: Treinamento de Modelo Único (LightGBM) ---
                     
-                    if not modelos:
-                        st.warning("Falha ao treinar modelos ML.")
-                        return
-                    
-                    # Cross-validation with TimeSeriesSplit
-                    scores = []
-                    # Adjust n_splits based on data length for meaningful CV
-                    n_splits_cv = min(5, len(X) // 100) if len(X) > 100 else 1
-                    tscv = TimeSeriesSplit(n_splits=max(2, n_splits_cv)) # Ensure at least 2 splits
-                    
-                    for train_idx, val_idx in tscv.split(X):
-                        if len(train_idx) == 0 or len(val_idx) == 0: continue
-                        X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-                        y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-                        
-                        if len(np.unique(y_train)) < 2 or len(np.unique(y_val)) < 2: continue # Skip if classes are not mixed
-                        
-                        # Retrain models for CV fold (simpler than passing trained models directly)
-                        modelos_cv, auc_scores_cv = EnsembleML.treinar_ensemble(X_train, y_train, otimizar_optuna=False)
-                        if not modelos_cv: continue
-
-                        proba = EnsembleML.prever_ensemble_ponderado(modelos_cv, auc_scores_cv, X_val)
-                        
-                        if len(np.unique(y_val)) >= 2:
-                            score = roc_auc_score(y_val, proba)
-                            scores.append(score)
-                    
-                    auc_medio = np.mean(scores) if scores else np.nan
-                    
-                    # Final prediction using the last relevant data point
-                    # Use the features corresponding to the time step just before the target prediction
-                    # The last row of X represents features calculated up to the second to last day.
-                    # The target 'Future_Direction' is 'prediction_horizon' days ahead.
-                    # So, to predict for the next 'prediction_horizon' days, we use the features from the very last available row.
-                    last_features_row = X.iloc[[-1]] # Features from the last available day
-
-                    if last_features_row.empty:
-                         proba_final = 0.5
-                    else:
-                        # Use the trained models and their AUC scores for weighted prediction
-                        proba_final = EnsembleML.prever_ensemble_ponderado(modelos, auc_scores, last_features_row)[0]
-                    
-                    col1, col2, col3 = st.columns(3)
-                    col1.metric("Probabilidade de Alta Futura", f"{proba_final*100:.2f}%")
-                    col2.metric("AUC-ROC Médio (CV)", f"{auc_medio:.3f}" if not pd.isna(auc_medio) else "N/A")
-                    col3.metric("Nº Features Usadas", len(X.columns))
-                    
-                    # Feature Importance (using XGBoost if available)
-                    if 'xgboost' in modelos and hasattr(modelos['xgboost'], 'feature_importances_'):
-                        st.markdown("#### Feature Importance (XGBoost)")
-                        
-                        importances = modelos['xgboost'].feature_importances_
-                        feature_names = X.columns
-                        
-                        df_importance = pd.DataFrame({
-                            'Feature': feature_names,
-                            'Importance': importances
-                        }).sort_values('Importance', ascending=False).head(20)
-                        
-                        fig_imp = px.bar(
-                            df_importance,
-                            x='Importance',
-                            y='Feature',
-                            orientation='h',
-                            title='Top 20 Features Mais Importantes'
+                    try:
+                        # 1. Configurar e treinar o modelo único e rápido
+                        modelo_unico = lgb.LGBMClassifier(
+                            n_estimators=50, # Reduzir n_estimators
+                            max_depth=5,     # Limitar profundidade
+                            learning_rate=0.1, 
+                            random_state=42, 
+                            verbose=-1, 
+                            objective='binary', 
+                            metric='auc'
                         )
-                        fig_imp.update_layout(**obter_template_grafico())
-                        st.plotly_chart(fig_imp, use_container_width=True)
+                        modelo_unico.fit(X, y)
+                        
+                        # 2. Previsão final usando a última linha de features
+                        last_features_row = X.iloc[[-1]] 
+                        proba_final = modelo_unico.predict_proba(last_features_row)[:, 1][0]
+
+                        # 3. Simular AUC-ROC com validação cruzada rápida (2 folds)
+                        tscv_quick = TimeSeriesSplit(n_splits=2)
+                        auc_scores_quick = cross_val_score(
+                            modelo_unico, 
+                            X, 
+                            y, 
+                            cv=tscv_quick, 
+                            scoring='roc_auc', 
+                            error_score='raise'
+                        )
+                        auc_medio = np.mean(auc_scores_quick) if len(auc_scores_quick) > 0 else 0.5
+                        
+                        # Resultados
+                        col1, col2, col3 = st.columns(3)
+                        col1.metric("Probabilidade de Alta Futura (LGBM)", f"{proba_final*100:.2f}%")
+                        col2.metric("AUC-ROC Médio (2-Fold CV)", f"{auc_medio:.3f}" if not pd.isna(auc_medio) else "N/A")
+                        col3.metric("Nº Features Usadas", len(X.columns))
+                        
+                        # Feature Importance (LGBM)
+                        if hasattr(modelo_unico, 'feature_importances_'):
+                            st.markdown("#### Feature Importance (LightGBM)")
+                            
+                            importances = modelo_unico.feature_importances_
+                            feature_names = X.columns
+                            
+                            df_importance = pd.DataFrame({
+                                'Feature': feature_names,
+                                'Importance': importances
+                            }).sort_values('Importance', ascending=False).head(20)
+                            
+                            fig_imp = px.bar(
+                                df_importance,
+                                x='Importance',
+                                y='Feature',
+                                orientation='h',
+                                title='Top 20 Features Mais Importantes (LightGBM)'
+                            )
+                            fig_imp.update_layout(**obter_template_grafico())
+                            st.plotly_chart(fig_imp, use_container_width=True)
+                            
+                    except Exception as e:
+                        st.warning(f"Falha na análise ML do ativo: {str(e)}")
                 else:
-                    st.warning("Dados insuficientes para análise ML detalhada.")
+                    st.warning("Dados insuficientes ou classe única encontrada para análise ML detalhada (mínimo de 100 dias com features válidas).")
             
             with tab5:
-                st.markdown("### Clusterização e Análise de Similaridade")
+                st.markdown("### Clusterização e Análise de Similaridade (Otimizada)")
                 
-                st.info("Comparando este ativo com outros ativos similares usando K-means + PCA...")
+                st.info("Comparando este ativo com outros similares usando K-means + PCA...")
+                
+                # --- OTIMIZAÇÃO DE VELOCIDADE 2: Reduzir o número de ativos de comparação ---
+                max_assets_for_clustering = 20 # Reduz de 50 para 20
+                
+                # (O restante do código de amostragem de ativos de comparação, coleta de dados
+                # de 2 anos, PCA e plotagem permanece inalterado)
                 
                 # Prepare data for clustering: use a subset of available assets for performance
-                # Fetch data for a broader set of assets for comparison
                 
-                # Limit the number of assets for clustering to avoid performance issues
-                max_assets_for_clustering = 50 
-                
-                # Prioritize assets from the same sector if possible, otherwise sample broadly
                 assets_to_cluster = []
                 if 'sector' in features_fund and features_fund['sector'] != 'Unknown':
-                    sector_assets = [a for a in ATIVOS_IBOVESPA if a.split('.')[0].replace('.SA', '') in ATIVOS_POR_SETOR.get(features_fund['sector'], [])] # Match by name without .SA
-                    # Add the current asset if it's in Ibovespa
-                    if ativo_selecionado in ATIVOS_IBOVESPA:
+                    # Use ATIVOS_POR_SETOR para pegar a lista completa de tickers
+                    sector_assets = ATIVOS_POR_SETOR.get(features_fund['sector'], [])
+                    
+                    if ativo_selecionado in sector_assets:
                         assets_to_cluster.append(ativo_selecionado)
                     
-                    # Add sector assets, prioritizing those with good performance/fundamentals
-                    sector_assets_sorted = sorted(sector_assets, key=lambda x: (
-                        self.dados_performance.loc[x, 'sharpe'] if x in self.dados_performance.index else -np.inf,
-                        self.dados_fundamentalistas.loc[x, 'roe'] if x in self.dados_fundamentalistas.index and 'roe' in self.dados_fundamentalistas.columns else -np.inf
-                    ), reverse=True)
-                    
-                    assets_to_cluster.extend(sector_assets_sorted[:max_assets_for_clustering - len(assets_to_cluster)])
+                    # Adiciona ativos do setor (limitado)
+                    other_sector_assets = [a for a in sector_assets if a != ativo_selecionado]
+                    assets_to_cluster.extend(other_sector_assets[:max_assets_for_clustering - len(assets_to_cluster)])
                 
-                # If not enough sector assets or no sector defined, sample broadly
+                # Fallback para Ibovespa
                 if len(assets_to_cluster) < max_assets_for_clustering:
-                    # Ensure the current asset is included
                     if ativo_selecionado not in assets_to_cluster:
                         assets_to_cluster.append(ativo_selecionado)
                     
-                    # Add other diverse assets (e.g., from Ibovespa)
                     other_assets = [a for a in ATIVOS_IBOVESPA if a not in assets_to_cluster]
                     assets_to_cluster.extend(other_assets[:max_assets_for_clustering - len(assets_to_cluster)])
                     
@@ -3562,19 +3525,16 @@ def aba_analise_individual():
                         for asset_comp in assets_to_cluster:
                             try:
                                 ticker_comp = yf.Ticker(asset_comp)
-                                # Fetch similar period as used for individual analysis, or a fixed shorter period for clustering consistency
-                                hist_comp = ticker_comp.history(period='2y') # Use 2 years for clustering consistency
+                                # Período de 2 anos já está no código original, mantido para clusterização
+                                hist_comp = ticker_comp.history(period='2y') 
                                 
                                 if not hist_comp.empty:
-                                    # Use a subset of features for clustering: performance & fundamental metrics
                                     features_for_cluster = ['retorno_anual', 'volatilidade_anual', 'sharpe', 'max_drawdown', 
                                                             'pe_ratio', 'pb_ratio', 'roe', 'debt_to_equity', 'revenue_growth']
                                     
-                                    # Calculate necessary metrics if not readily available from the main collector
-                                    # For simplicity here, we'll use a simplified set of metrics calculation
                                     returns_comp = hist_comp['Close'].pct_change().dropna()
                                     
-                                    if len(returns_comp) > 50: # Need sufficient data
+                                    if len(returns_comp) > 50: 
                                         comp_data = {
                                             'retorno_anual': returns_comp.mean() * 252,
                                             'volatilidade_anual': returns_comp.std() * np.sqrt(252),
@@ -3582,7 +3542,6 @@ def aba_analise_individual():
                                             'max_drawdown': ((1 + returns_comp).cumprod() / (1 + returns_comp).cumprod().expanding().max() - 1).min() if not returns_comp.empty else np.nan
                                         }
                                         
-                                        # Fetch fundamental data
                                         info_comp = ticker_comp.info
                                         fund_metrics = AnalisadorIndividualAtivos.calcular_features_fundamentalistas_expandidas(ticker_comp)
                                         
@@ -3590,22 +3549,19 @@ def aba_analise_individual():
                                              comp_data[metric] = fund_metrics.get(metric, np.nan)
 
                                         comparison_data[asset_comp] = comp_data
-                            except Exception as e:
-                                print(f"  ⚠️ Error fetching data for {asset_comp} during clustering: {str(e)[:50]}")
+                            except Exception:
                                 continue
                 
                 # Perform clustering if enough data was collected
                 if len(comparison_data) > 5:
                     df_comparacao = pd.DataFrame(comparison_data).T
                     
-                    # Perform clustering and PCA
                     resultado_pca, pca, kmeans = AnalisadorIndividualAtivos.realizar_clusterizacao_pca(
                         df_comparacao,
-                        n_clusters=5 # Standard number of clusters
+                        n_clusters=5 
                     )
                     
                     if resultado_pca is not None:
-                        # PCA Plot (3D or 2D based on number of components)
                         if 'PC3' in resultado_pca.columns:
                             fig_pca = px.scatter_3d(
                                 resultado_pca,
@@ -3626,7 +3582,6 @@ def aba_analise_individual():
                         fig_pca.update_layout(**obter_template_grafico(), height=600)
                         st.plotly_chart(fig_pca, use_container_width=True)
                         
-                        # Identify cluster and similar assets for the selected asset
                         if ativo_selecionado in resultado_pca.index:
                             cluster_ativo = resultado_pca.loc[ativo_selecionado, 'Cluster']
                             ativos_similares_df = resultado_pca[resultado_pca['Cluster'] == cluster_ativo]
@@ -3637,9 +3592,8 @@ def aba_analise_individual():
                             
                             if ativos_similares:
                                 st.markdown(f"#### Outros Ativos no Cluster {cluster_ativo}:")
-                                st.write(", ".join([a.replace('.SA', '') for a in ativos_similares[:15]])) # Show top 15 similar
+                                st.write(", ".join([a.replace('.SA', '') for a in ativos_similares[:15]]))
                         
-                        # Explained Variance Ratio Plot
                         st.markdown("#### Variância Explicada por Componente Principal")
                         var_exp = pca.explained_variance_ratio_ * 100
                         
@@ -3663,7 +3617,6 @@ def aba_analise_individual():
             st.error(f"Erro ao analisar o ativo {ativo_selecionado}: {str(e)}")
             import traceback
             st.error(f"Traceback: {traceback.format_exc()}")
-
 def main():
     """Função principal com estrutura de 4 abas (Sidebar removida)"""
     
