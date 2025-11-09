@@ -3491,7 +3491,7 @@ def aba_analise_individual():
                 st.info("Comparando este ativo com outros similares usando K-means + PCA...")
                 
                 # --- OTIMIZAÇÃO DE VELOCIDADE 2: Reduzir o número de ativos de comparação ---
-                max_assets_for_clustering = 20 # Reduz de 50 para 20
+                max_assets_for_clustering = 100 # Reduz de 50 para 20
                 
                 # (O restante do código de amostragem de ativos de comparação, coleta de dados
                 # de 2 anos, PCA e plotagem permanece inalterado)
