@@ -2171,52 +2171,8 @@ def configurar_pagina():
         </style>
     """, unsafe_allow_html=True)
 
-import streamlit as st
-import pandas as pd # Necessário para a tabela
-
 def aba_introducao():
     """Aba 1: Introdução e Metodologia"""
-    
-    # INJEÇÃO DE ESTILOS CSS PARA TEMA CLARO (BRANCO) E DESTAQUES (CIANO)
-    st.markdown("""
-    <style>
-        /* Define fundo claro para o app e texto escuro geral (preto) */
-        .stApp {
-            background-color: #FFFFFF;
-            color: #111111; /* Preto para o texto principal */
-        }
-        /* Assegura que o texto dentro das colunas seja preto */
-        .stMarkdown {
-            color: #111111;
-        }
-        /* Define cor para títulos e subtítulos */
-        h1, h2, h3, h4, h5, h6 {
-            color: #111111; /* Preto para títulos */
-        }
-        /* Estilo para a caixa informativa (com borda de destaque Ciano) */
-        .info-box {
-            border-left: 5px solid #00BCD4; /* Cor de destaque: Ciano/Teal */
-            background-color: #F8F8F8; /* Fundo levemente cinza para a caixa */
-            padding: 15px;
-            border-radius: 8px;
-            color: #111111;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-        /* Estilo para o texto forte (strong) - o principal destaque em cor */
-        strong {
-            color: #00BCD4 !important; /* Cor de destaque: Ciano/Teal */
-        }
-        /* Assegura que bullets e texto dentro de listas sejam pretos */
-        ul li {
-            color: #111111;
-        }
-        /* Estilo para a caixa st.info */
-        .stAlert {
-            background-color: #E0F7FA;
-            color: #00BCD4;
-        }
-    </style>
-    """, unsafe_allow_html=True)
     
     st.markdown("## Bem-vindo ao Sistema de Portfólio Adaptativo")
     
@@ -2238,18 +2194,18 @@ def aba_introducao():
         
         - **Análise de Perfil do Investidor:**
           - Questionário rigoroso baseado em normas CVM.
-          - Avaliação da <strong>tolerância ao risco</strong> e definição do <strong>horizonte temporal</strong>.
+          - Avaliação da tolerância ao risco e definição do horizonte temporal.
           - Análise da experiência e conhecimento do mercado.
         
         - **Coleta e Processamento de Dados:**
           - Consolidação de dados históricos de preços.
-          - Mais de 30 <strong>indicadores técnicos</strong> e 20+ <strong>métricas fundamentalistas</strong>.
+          - Mais de 30 indicadores técnicos e 20+ métricas fundamentalistas.
           - Dados macroeconômicos, volume e liquidez.
         
         - **Engenharia de Features Avançada:**
           - **Indicadores Técnicos Sophisticados:** RSI, MACD, Bollinger, Stochastic, ADX, ATR, CCI, Williams %R, OBV, MFI, Ichimoku, Keltner, Donchian.
-          - **Fatores:** <strong>Smart Beta Factors</strong> (Qualidade, Valor, Momentum).
-          - **Modelagem:** <strong>Volatilidade</strong> (GARCH/EGARCH), correlações, Lags, estatísticas rolling e codificação temporal.
+          - **Fatores:** Smart Beta Factors (Qualidade, Valor, Momentum).
+          - **Modelagem:** Volatilidade (GARCH/EGARCH), correlações, Lags, estatísticas rolling e codificação temporal.
         """)
     
     with col2:
@@ -2260,20 +2216,20 @@ def aba_introducao():
         - **Machine Learning Ensemble:**
             - Combinação de modelos robustos: XGBoost, LightGBM, CatBoost, Random Forest, Extra Trees.
             - Inclusão de métodos clássicos: KNN, SVC, Regressão Logística, Gaussian Naive Bayes.
-            - **Ajuste:** Otimização Optuna para <strong>hyperparameter tuning automático</strong>.
-            - **Ponderação:** Ensemble inteligente baseado em <strong>AUC-ROC</strong>.
+            - **Ajuste:** Otimização Optuna para hyperparameter tuning automático.
+            - **Ponderação:** Ensemble inteligente baseado em AUC-ROC.
         
         - **Modelagem Estatística e Séries Temporais:**
             - Utilização de modelos como ARIMA, SARIMA, VAR e Prophet.
-            - Ensemble de modelos para <strong>previsões de preços mais estáveis</strong>.
+            - Ensemble de modelos para previsões de preços mais estáveis.
 
         - **Otimização de Portfólio (Teoria Moderna):**
-            - Traçado da <strong>Fronteira Eficiente</strong> (Markowitz + GARCH).
-            - Maximização do <strong>Sharpe Ratio</strong> e Minimização da Volatilidade.
-            - Otimização de <strong>CVaR</strong> (*Conditional Value at Risk*).
+            - Traçado da Fronteira Eficiente (Markowitz + GARCH).
+            - Maximização do Sharpe Ratio e Minimização da Volatilidade.
+            - Otimização de CVaR (*Conditional Value at Risk*).
             - Restrições de peso rigorosas (10-30% por ativo).
         
-        - **Governança de Modelo:** Monitoramento contínuo de <strong>AUC-ROC</strong>, Precision, Recall, F1-Score, com <strong>alertas automáticos</strong> para degradação e *drift*.
+        - **Governança de Modelo:** Monitoramento contínuo de AUC-ROC, Precision, Recall, F1-Score, com alertas automáticos para degradação e *drift*.
         """)
     
     st.markdown("---")
@@ -2292,35 +2248,35 @@ def aba_introducao():
     with col1:
         st.markdown("""
         **Score de Performance (até 40%)**
-        - <strong>Sharpe Ratio</strong> histórico.
+        - Sharpe Ratio histórico.
         - Retorno anualizado ajustado ao risco.
-        - <strong>Drawdown máximo</strong>.
+        - Drawdown máximo.
         """)
     
     with col2:
         st.markdown("""
         **Score Fundamentalista (até 50%)**
-        - <strong>Qualidade</strong>: ROE, margens, ROIC.
-        - <strong>Valor</strong>: P/L, P/VP baixos.
-        - <strong>Crescimento</strong>: Receita, Lucros.
+        - Qualidade: ROE, margens, ROIC.
+        - Valor: P/L, P/VP baixos.
+        - Crescimento: Receita, Lucros.
         - Saúde financeira: Dívida/Patrimônio, Liquidez.
         """)
     
     with col3:
         st.markdown("""
         **Score Técnico (até 50%)**
-        - Indicadores de <strong>Momentum</strong> (MACD, RSI).
-        - <strong>Volatilidade</strong> (Bandas de Bollinger, ATR).
-        - <strong>Tendência</strong> (ADX, Médias Móveis).
+        - Indicadores de Momentum (MACD, RSI).
+        - Volatilidade (Bandas de Bollinger, ATR).
+        - Tendência (ADX, Médias Móveis).
         - Padrões de preço.
         """)
     
     with col4:
         st.markdown("""
         **Score de Machine Learning (até 30%)**
-        - <strong>Probabilidade de alta</strong> prevista pelo ensemble ponderado por AUC.
+        - Probabilidade de alta prevista pelo ensemble ponderado por AUC.
         - Confiança do modelo (AUC-ROC médio).
-        - <strong>Validação cruzada temporal</strong>.
+        - Validação cruzada temporal.
         """)
     
     st.markdown("---")
@@ -2347,9 +2303,9 @@ def aba_introducao():
     <div class="info-box">
     <p>O sistema garante ativamente a <strong>diversificação</strong> e o <strong>gerenciamento de risco</strong> da sua carteira:</p>
     <ul>
-        <li>Alocação limitada a, no máximo, <strong>2 ativos por setor</strong>.</li>
-        <li>Priorização de ativos de segmentos diferentes para <strong>reduzir risco de concentração</strong>.</li>
-        <li>Utilização da modelagem de <strong>volatilidade GARCH</strong> e otimização de <strong>CVaR</strong> (*Conditional Value at Risk*) para máxima robustez.</li>
+        <li>Alocação limitada a, no máximo, 2 ativos por setor.</li>
+        <li>Priorização de ativos de segmentos diferentes para reduzir risco de concentração.</li>
+        <li>Utilização da modelagem de volatilidade GARCH e otimização de CVaR (*Conditional Value at Risk*) para máxima robustez.</li>
     </ul>
     </div>
     """, unsafe_allow_html=True)
@@ -2360,10 +2316,10 @@ def aba_introducao():
     
     st.info("""
     **Navegue pelas abas acima para:**
-    1. <strong>Seleção de Ativos</strong>: Escolha entre Ibovespa, setores específicos, número fixo ou todos os ativos disponíveis.
-    2. <strong>Construtor de Portfólio</strong>: Responda o questionário para definir seu perfil e gerar seu portfólio otimizado.
-    3. <strong>Análise Individual</strong>: Explore ativos isolados com análise técnica e fundamentalista completa, incluindo M.L. e Clusterização.
-    4. <strong>Governança de Modelo</strong>: Monitore a performance dos modelos ML e receba alertas.
+    1. **Seleção de Ativos**: Escolha entre Ibovespa, setores específicos, número fixo ou todos os ativos disponíveis.
+    2. **Construtor de Portfólio**: Responda o questionário para definir seu perfil e gerar seu portfólio otimizado.
+    3. **Análise Individual**: Explore ativos isolados com análise técnica e fundamentalista completa, incluindo M.L. e Clusterização.
+    4. **Governança de Modelo**: Monitore a performance dos modelos ML e receba alertas.
     """)
 
 def aba_selecao_ativos():
