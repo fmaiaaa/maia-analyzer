@@ -2082,7 +2082,7 @@ class AnalisadorIndividualAtivos:
 def configurar_pagina():
     """Configura página Streamlit"""
     st.set_page_config(
-        page_title="Portfolio AutoML Elite",
+        page_title="Sistema de Portfólio Adaptativo",
         page_icon="📈",
         layout="wide",
         initial_sidebar_state="expanded"
@@ -2171,14 +2171,17 @@ def configurar_pagina():
         </style>
     """, unsafe_allow_html=True)
 
+import streamlit as st
+import pandas as pd # Necessário para a tabela
+
 def aba_introducao():
     """Aba 1: Introdução e Metodologia"""
     
-    st.markdown("## 📚 Bem-vindo ao Sistema AutoML de Otimização de Portfólio")
+    st.markdown("## Bem-vindo ao Sistema de Portfólio Adaptativo")
     
     st.markdown("""
     <div class="info-box">
-    <h3>🎯 O que este sistema faz?</h3>
+    <h3>O que este sistema faz?</h3>
     <p>Este é um sistema avançado de construção e otimização de portfólios de investimento que utiliza 
     <strong>Machine Learning</strong>, <strong>modelagem estatística</strong> e <strong>teoria moderna de portfólio</strong> 
     para criar carteiras personalizadas baseadas no seu perfil de risco e objetivos.</p>
@@ -2188,66 +2191,35 @@ def aba_introducao():
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("### 🔬 Metodologia Científica")
+        st.markdown("### Metodologia Científica")
         st.markdown("""
-        **1. Análise de Perfil do Investidor**
-        - Questionário baseado em normas CVM
-        - Avaliação de tolerância ao risco
-        - Definição de horizonte temporal
-        - Análise de experiência e conhecimento
+        O processo se inicia com uma **Análise Detalhada do Perfil do Investidor**, utilizando um questionário rigoroso (baseado em normas CVM) para avaliar sua tolerância ao risco, definir o horizonte temporal dos investimentos e entender sua experiência.
         
-        **2. Coleta e Processamento de Dados**
-        - Dados históricos de preços (máximo disponível)
-        - Indicadores técnicos (30+ indicadores com a lib `ta`)
-        - Fundamentos financeiros (20+ métricas expandidas)
-        - Dados macroeconômicos (correlações)
-        - Volume e liquidez
+        Em seguida, realizamos a **Coleta e Processamento de Dados**, consolidando dados históricos de preços, mais de 30 indicadores técnicos, 20+ métricas fundamentalistas, dados macroeconômicos essenciais, e informações detalhadas de volume e liquidez dos ativos. 
         
-        **3. Engenharia de Features**
-        - Indicadores técnicos avançados: RSI, MACD, Bollinger, Stochastic, ADX, ATR, CCI, Williams %R, OBV, MFI, Ichimoku, Keltner, Donchian
-        - Indicadores fundamentalistas detalhados
-        - Smart Beta Factors: Qualidade, Valor, Momentum
-        - Modelagem de volatilidade (GARCH/EGARCH) e correlações
-        - Lags e estatísticas rolling de preço e volume
-        - Codificação temporal (dia da semana, mês, etc.)
+        Finalmente, aplicamos a **Engenharia de Features**, transformando os dados brutos em variáveis preditivas avançadas. Isso inclui indicadores técnicos sofisticados (RSI, MACD, Bollinger, Stochastic, ADX, ATR, CCI, Williams %R, OBV, MFI, Ichimoku, Keltner, Donchian), a extração de indicadores fundamentalistas detalhados, a incorporação de Smart Beta Factors (Qualidade, Valor, Momentum), a modelagem de volatilidade (GARCH/EGARCH) e correlações, além de incluir lags, estatísticas rolling e codificação temporal.
         """)
     
     with col2:
-        st.markdown("### 🤖 Tecnologias Utilizadas")
+        st.markdown("### Tecnologias Utilizadas")
         st.markdown("""
-        **Machine Learning Ensemble**
-        - XGBoost, LightGBM, CatBoost, Random Forest, Extra Trees, KNN, SVC, Logistic Regression, Gaussian Naive Bayes
-        - Otimização Optuna (Opcional): Hyperparameter tuning automático
-        - Ponderação por AUC-ROC: Ensemble inteligente
+        Para as previsões, empregamos um poderoso **Machine Learning Ensemble**, que combina modelos robustos como XGBoost, LightGBM, CatBoost, Random Forest e Extra Trees, juntamente com métodos tradicionais como KNN, SVC, Regressão Logística e Gaussian Naive Bayes. A otimização Optuna é utilizada para ajuste automático dos hiperparâmetros, e a ponderação final é feita de forma inteligente com base no AUC-ROC.
         
-        **Modelagem Estatística e Séries Temporais**
-        - ARIMA, SARIMA, VAR, Prophet
-        - Ensemble de modelos estatísticos para previsão de preços
+        Complementamos isso com **Modelagem Estatística e Séries Temporais** (ARIMA, SARIMA, VAR, Prophet) para criar um ensemble de previsões de preços mais estável, e **Modelagem de Volatilidade** usando GARCH(1,1) / EGARCH.
         
-        **Modelagem de Volatilidade**
-        - GARCH(1,1) / EGARCH: Modelagem de volatilidade condicional
-        - Previsão de volatilidade futura
+        A **Otimização de Portfólio** aplica a Teoria de Markowitz para traçar a Fronteira Eficiente (ajustada com GARCH), maximizar o Sharpe Ratio e minimizar a volatilidade. Otimizamos também o CVaR (*Conditional Value at Risk*) e aplicamos restrições rigorosas de peso (10-30% por ativo).
         
-        **Otimização de Portfólio**
-        - Teoria de Markowitz: Fronteira eficiente com GARCH
-        - Maximização de Sharpe Ratio
-        - Minimização de volatilidade
-        - Otimização de CVaR (Conditional Value at Risk)
-        - Restrições de peso (10-30% por ativo)
-        
-        **Governança de Modelo**
-        - Monitoramento de AUC-ROC, Precision, Recall, F1-Score
-        - Alertas de degradação e drift
+        A **Governança de Modelo** garante a robustez do sistema através do monitoramento contínuo de métricas como AUC-ROC, Precision, Recall, F1-Score, com alertas automáticos para degradação ou *drift* do modelo.
         """)
     
     st.markdown("---")
     
-    st.markdown("### 📊 Como Funciona a Seleção dos 5 Ativos?")
+    st.markdown("### Como Funciona a Seleção dos 5 Ativos?")
     
     st.markdown("""
     <div class="info-box">
     <h4>Sistema de Pontuação Multi-Fator Adaptativo</h4>
-    <p>O sistema utiliza um <strong>score composto</strong> que combina múltiplas dimensões de análise, com <strong>ponderações adaptativas</strong> ao seu perfil:</p>
+    <p>O sistema ranqueia os ativos com maior potencial de retorno ajustado ao risco através de um <strong>score composto</strong> que combina múltiplas dimensões de análise, com <strong>ponderações adaptativas</strong> ao seu perfil de investidor.</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -2255,41 +2227,31 @@ def aba_introducao():
     
     with col1:
         st.markdown("""
-        **📈 Score de Performance (até 40%)**
-        - Sharpe Ratio histórico
-        - Retorno anualizado ajustado ao risco
-        - Drawdown máximo
+        **Score de Performance (até 40%)**
+        Este score avalia o histórico do ativo focando na qualidade do seu retorno. Analisamos o *Sharpe Ratio* histórico, o retorno anualizado ajustado ao risco e o *Drawdown* máximo, garantindo que o ativo entregue retornos consistentes.
         """)
     
     with col2:
         st.markdown("""
-        **💼 Score Fundamentalista (até 50%)**
-        - Qualidade: ROE, margens, ROIC
-        - Valor: P/L, P/VP baixos
-        - Crescimento: Receita, Lucros
-        - Saúde financeira: Dívida/Patrimônio, Liquidez
+        **Score Fundamentalista (até 50%)**
+        Focado na saúde e valor da empresa, este score avalia a Qualidade (ROE, margens, ROIC), o Valor (P/L, P/VP baixos) e o Crescimento (Receita, Lucros), além da Saúde Financeira (Dívida/Patrimônio, Liquidez).
         """)
     
     with col3:
         st.markdown("""
-        **🔧 Score Técnico (até 50%)**
-        - Indicadores de Momentum (MACD, RSI)
-        - Volatilidade (Bandas de Bollinger, ATR)
-        - Tendência (ADX, Médias Móveis)
-        - Padrões de preço
+        **Score Técnico (até 50%)**
+        Esta dimensão foca na dinâmica de mercado e preço. Analisa Indicadores de Momentum (MACD, RSI), Volatilidade (Bandas de Bollinger, ATR) e Tendência (ADX, Médias Móveis), identificando padrões de preço.
         """)
     
     with col4:
         st.markdown("""
-        **🤖 Score de Machine Learning (até 30%)**
-        - Probabilidade de alta prevista pelo ensemble ponderado por AUC
-        - Confiança do modelo (AUC-ROC médio)
-        - Validação cruzada temporal
+        **Score de Machine Learning (até 30%)**
+        Este é um indicador preditivo que mede a probabilidade de alta futura prevista pelo ensemble. É ponderado pela confiança do modelo (AUC-ROC médio) e validado por um rigoroso processo de validação cruzada temporal.
         """)
     
     st.markdown("---")
     
-    st.markdown("### ⚖️ Ponderação Adaptativa por Perfil")
+    st.markdown("### Ponderação Adaptativa por Perfil")
     
     perfil_table = pd.DataFrame({
         'Perfil': ['Conservador', 'Intermediário', 'Moderado', 'Moderado-Arrojado', 'Avançado'],
@@ -2305,23 +2267,17 @@ def aba_introducao():
     
     st.markdown("---")
     
-    st.markdown("### 🎯 Diversificação Setorial e de Risco")
+    st.markdown("### Diversificação Setorial e de Risco")
     
     st.markdown("""
     <div class="info-box">
-    <p>O sistema garante <strong>diversificação</strong> e <strong>gerenciamento de risco</strong>:</p>
-    <ul>
-        <li>Máximo de 2 ativos por setor (quando possível)</li>
-        <li>Prioriza ativos de setores diferentes</li>
-        <li>Reduz risco de concentração</li>
-        <li>Modelagem de volatilidade GARCH e otimização de CVaR para robustez</li>
-    </ul>
+    <p>O sistema garante ativamente a <strong>diversificação</strong> e o <strong>gerenciamento de risco</strong> da sua carteira. A alocação é pensada para limitar a, no máximo, 2 ativos por setor (sempre que a disponibilidade permitir), priorizando ativos de segmentos diferentes para reduzir o risco de concentração. Utilizamos a modelagem de volatilidade GARCH e a otimização de CVaR (*Conditional Value at Risk*) como pilares para assegurar a máxima robustez da carteira em diferentes cenários.</p>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("---")
     
-    st.markdown("### 🚀 Próximos Passos")
+    st.markdown("### Próximos Passos")
     
     st.info("""
     **Navegue pelas abas acima para:**
