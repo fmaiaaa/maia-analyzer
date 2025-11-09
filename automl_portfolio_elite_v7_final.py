@@ -1435,7 +1435,7 @@ class OtimizadorPortfolioAvancado:
             return {ativo: 1.0 / self.num_ativos for ativo in self.returns.columns}
     
 # =============================================================================
-# CLASSE PRINCIPAL: CONSTRUTOR DE PORTFÓLIO AUTOML (com LGBM Único)
+# CLASSE PRINCIPAL: CONSTRUTOR DE PORTFÓLIO AUTOML (VERSÃO FINAL E CORRIGIDA)
 # =============================================================================
 
 class ConstrutorPortfolioAutoML:
@@ -1546,7 +1546,7 @@ class ConstrutorPortfolioAutoML:
                     if f_macro in self.dados_macro and not self.dados_macro[f_macro].empty:
                         df[f'macro_{f_macro.lower()}'] = self.dados_macro[f_macro].reindex(df.index, method='ffill')
             
-            # 2. Modelos Estatísticos (Ensemble - mantém a lógica original)
+            # 2. Modelos Estatísticos 
             if 'Close' in df.columns and len(df) >= 100:
                 try:
                     close_series = df['Close']
@@ -1587,7 +1587,7 @@ class ConstrutorPortfolioAutoML:
                 
                 # Otimização Optuna (Se ativada)
                 if otimizar:
-                    # Usa o método existente (agora contido na classe EnsembleML reduzida)
+                    # Usa o método _otimizar_lightgbm da classe EnsembleML (assumida como redefinida)
                     best_params = EnsembleML._otimizar_lightgbm(X, y)
                     lgbm_model = lgb.LGBMClassifier(**best_params, random_state=42, verbose=-1, objective='binary', metric='auc')
                     print(f"    ✓ {simbolo.replace('.SA', '')}: LGBM Otimizado por Optuna")
@@ -1596,16 +1596,15 @@ class ConstrutorPortfolioAutoML:
                 lgbm_model.fit(X, y)
                 self.modelos_ml[simbolo] = lgbm_model
 
-                # 3.3. Validação Cruzada (2 Folds para velocidade, usando TimeSeriesSplit)
+                # 3.3. Validação Cruzada (2 Folds para velocidade)
                 tscv = TimeSeriesSplit(n_splits=2)
                 auc_scores_cv = cross_val_score(
                     lgbm_model, X, y, cv=tscv, scoring='roc_auc', error_score='raise'
                 )
                 auc_score_cv = np.mean(auc_scores_cv) if len(auc_scores_cv) > 0 else 0.5
-                self.auc_scores[simbolo] = {'lightgbm': auc_score_cv} # Armazenar o score do modelo único
+                self.auc_scores[simbolo] = {'lightgbm': auc_score_cv} 
 
                 # 3.4. Previsão final
-                # A previsão é feita na linha de features anterior ao início do horizonte de lookback
                 last_features = df[features_para_treino].iloc[[-dias_lookback_ml]]
                 proba_final = lgbm_model.predict_proba(last_features)[:, 1][0]
                 
@@ -1617,14 +1616,232 @@ class ConstrutorPortfolioAutoML:
                 }
 
             except Exception as e:
-                # print(f"  ✗ Erro ML em {simbolo}: {str(e)}")
                 self.predicoes_ml[simbolo] = {'predicted_proba_up': 0.5, 'auc_roc_score': np.nan}
 
         print(f"✓ Modelo LightGBM treinado para {len(self.predicoes_ml)} ativos")
+
+    def pontuar_e_selecionar_ativos(self, horizonte_tempo: str):
+        """Pontua e ranqueia ativos usando sistema multi-fator (Perf, Fund, Tech, ML) e diversificação."""
+        
+        if horizonte_tempo == "CURTO PRAZO":
+            WEIGHT_PERF, WEIGHT_FUND, WEIGHT_TECH = 0.40, 0.10, 0.20
+        elif horizonte_tempo == "LONGO PRAZO":
+            WEIGHT_PERF, WEIGHT_FUND, WEIGHT_TECH = 0.40, 0.50, 0.10
+        else:
+            WEIGHT_PERF, WEIGHT_FUND, WEIGHT_TECH = 0.40, 0.30, 0.30
+
+        final_ml_weight = WEIGHT_ML
+        total_non_ml_weight = WEIGHT_PERF + WEIGHT_FUND + WEIGHT_TECH
+        
+        scale_factor = (1.0 - final_ml_weight) / total_non_ml_weight if total_non_ml_weight > 0 else 0
+        WEIGHT_PERF *= scale_factor
+        WEIGHT_FUND *= scale_factor
+        WEIGHT_TECH *= scale_factor
+
+        self.pesos_atuais = {
+            'Performance': WEIGHT_PERF,
+            'Fundamentos': WEIGHT_FUND,
+            'Técnicos': WEIGHT_TECH,
+            'ML': final_ml_weight
+        }
+        
+        combinado = self.dados_performance.join(self.dados_fundamentalistas, how='inner').copy()
+        
+        for asset in combinado.index:
+            if asset in self.dados_por_ativo and 'rsi_14' in self.dados_por_ativo[asset].columns:
+                df = self.dados_por_ativo[asset]
+                combinado.loc[asset, 'rsi_current'] = df['rsi_14'].iloc[-1]
+                combinado.loc[asset, 'macd_current'] = df['macd'].iloc[-1]
+                combinado.loc[asset, 'bb_position_current'] = df['bb_position'].iloc[-1]
+
+            if asset in self.predicoes_ml:
+                ml_info = self.predicoes_ml[asset]
+                combinado.loc[asset, 'ML_Proba'] = ml_info.get('predicted_proba_up', 0.5)
+                combinado.loc[asset, 'ML_Confidence'] = ml_info.get('auc_roc_score', 0.5)
+
+        scores = pd.DataFrame(index=combinado.index)
+        
+        scores['performance_score'] = EngenheiroFeatures._normalizar(combinado.get('sharpe', pd.Series(0, index=combinado.index)), maior_melhor=True) * WEIGHT_PERF
+        
+        pe_score = EngenheiroFeatures._normalizar(combinado.get('pe_ratio', pd.Series(combinado['pe_ratio'].median(), index=combinado.index)), maior_melhor=False)
+        roe_score = EngenheiroFeatures._normalizar(combinado.get('roe', pd.Series(combinado['roe'].median(), index=combinado.index)), maior_melhor=True)
+        scores['fundamental_score'] = (pe_score * 0.5 + roe_score * 0.5) * WEIGHT_FUND
+        
+        rsi_norm = EngenheiroFeatures._normalizar(combinado.get('rsi_current', pd.Series(50, index=combinado.index)), maior_melhor=False)
+        macd_norm = EngenheiroFeatures._normalizar(combinado.get('macd_current', pd.Series(0, index=combinado.index)), maior_melhor=True)
+        scores['technical_score'] = (rsi_norm * 0.5 + macd_norm * 0.5) * WEIGHT_TECH
+
+        ml_proba_norm = EngenheiroFeatures._normalizar(combinado.get('ML_Proba', pd.Series(0.5, index=combinado.index)), maior_melhor=True)
+        ml_confidence_norm = EngenheiroFeatures._normalizar(combinado.get('ML_Confidence', pd.Series(0.5, index=combinado.index)), maior_melhor=True)
+        scores['ml_score_weighted'] = (ml_proba_norm * 0.6 + ml_confidence_norm * 0.4) * final_ml_weight
+        
+        scores['total_score'] = scores['performance_score'] + scores['fundamental_score'] + scores['technical_score'] + scores['ml_score_weighted']
+        
+        self.scores_combinados = scores.join(combinado).sort_values('total_score', ascending=False)
+        
+        ranked_assets = self.scores_combinados.index.tolist()
+        final_portfolio = []
+        selected_sectors = set()
+        num_assets_to_select = min(NUM_ATIVOS_PORTFOLIO, len(ranked_assets))
+
+        for asset in ranked_assets:
+            sector = self.dados_fundamentalistas.loc[asset, 'sector'] if asset in self.dados_fundamentalistas.index and 'sector' in self.dados_fundamentalistas.columns else 'Unknown'
+            
+            if sector not in selected_sectors or len(final_portfolio) < num_assets_to_select:
+                final_portfolio.append(asset)
+                selected_sectors.add(sector)
+            
+            if len(final_portfolio) >= num_assets_to_select:
+                break
+        
+        self.ativos_selecionados = final_portfolio
+        return self.ativos_selecionados
+        
+    def otimizar_alocacao(self, nivel_risco: str):
+        """Otimiza alocação de capital usando Markowitz/CVaR com volatilidades GARCH."""
+        
+        if not self.ativos_selecionados or len(self.ativos_selecionados) < 1:
+            self.metodo_alocacao_atual = "ERRO: Ativos Insuficientes"
+            return {}
+        
+        available_assets_returns = {s: self.dados_por_ativo[s]['returns']
+                                    for s in self.ativos_selecionados if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s]}
+        
+        final_returns_df = pd.DataFrame(available_assets_returns).dropna()
+        
+        if final_returns_df.shape[0] < 50:
+            weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
+            self.metodo_alocacao_atual = 'PESOS IGUAIS (Dados insuficientes)'
+            return self._formatar_alocacao(weights)
+
+        garch_vols_filtered = {asset: self.volatilidades_garch.get(asset, final_returns_df[asset].std() * np.sqrt(252))
+                               for asset in final_returns_df.columns}
+
+        optimizer = OtimizadorPortfolioAvancado(final_returns_df, garch_vols=garch_vols_filtered)
+        
+        strategy = 'MaxSharpe' 
+        if 'CONSERVADOR' in nivel_risco or 'INTERMEDIÁRIO' in nivel_risco:
+            strategy = 'MinVolatility'
+        elif 'AVANÇADO' in nivel_risco:
+            strategy = 'CVaR' 
+            
+        weights = optimizer.otimizar(estrategia=strategy)
+        self.metodo_alocacao_atual = f'{strategy} (GARCH/Histórico)'
+        
+        return self._formatar_alocacao(weights)
+        
+    def _formatar_alocacao(self, weights: dict) -> dict:
+        """Formata os pesos em valores monetários e garante a normalização."""
+        if not weights or sum(weights.values()) == 0:
+            return {}
+            
+        total_weight = sum(weights.values())
+        return {
+            s: {
+                'weight': w / total_weight,
+                'amount': self.valor_investimento * (w / total_weight)
+            }
+            for s, w in weights.items() if s in self.ativos_selecionados
+        }
     
-    # ... (Os outros métodos da classe permanecem inalterados) ...
-    # coletar_e_processar_dados, pontuar_e_selecionar_ativos, etc.
-# ... (FIM da classe ConstrutorPortfolioAutoML) ...
+    def calcular_metricas_portfolio(self):
+        """Calcula métricas consolidadas do portfólio (Retorno, Vol, Sharpe, Max Drawdown)."""
+        
+        if not self.alocacao_portfolio: return {}
+        
+        weights_dict = {s: data['weight'] for s, data in self.alocacao_portfolio.items()}
+        returns_df_raw = {s: self.dados_por_ativo[s]['returns'] 
+                          for s in weights_dict.keys() if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s]}
+        
+        returns_df = pd.DataFrame(returns_df_raw).dropna()
+        if returns_df.empty: return {}
+        
+        weights = np.array([weights_dict[s] for s in returns_df.columns])
+        weights = weights / np.sum(weights) 
+        
+        portfolio_returns = (returns_df * weights).sum(axis=1)
+        
+        annual_return = portfolio_returns.mean() * 252
+        annual_volatility = portfolio_returns.std() * np.sqrt(252)
+        sharpe_ratio = (annual_return - TAXA_LIVRE_RISCO) / annual_volatility if annual_volatility > 0 else 0
+        
+        cumulative_portfolio_returns = (1 + portfolio_returns).cumprod()
+        running_max_portfolio = cumulative_portfolio_returns.expanding().max()
+        max_drawdown = ((cumulative_portfolio_returns - running_max_portfolio) / running_max_portfolio).min()
+        
+        self.metricas_portfolio = {
+            'annual_return': annual_return,
+            'annual_volatility': annual_volatility,
+            'sharpe_ratio': sharpe_ratio,
+            'max_drawdown': max_drawdown,
+            'total_investment': self.valor_investimento
+        }
+        
+        return self.metricas_portfolio
+    
+    def gerar_justificativas(self):
+        """Gera justificativas textuais para seleção e performance dos ativos."""
+        
+        self.justificativas_selecao = {}
+        for simbolo in self.ativos_selecionados:
+            justification = []
+            
+            perf = self.dados_performance.loc[simbolo] if simbolo in self.dados_performance.index else {}
+            justification.append(f"Perf: Sharpe {perf.get('sharpe', np.nan):.3f}, Retorno {perf.get('retorno_anual', np.nan)*100:.2f}%, Vol. {self.volatilidades_garch.get(simbolo, perf.get('volatilidade_anual', np.nan))*100:.2f}% (GARCH/Hist.)")
+            
+            fund = self.dados_fundamentalistas.loc[simbolo] if simbolo in self.dados_fundamentalistas.index else {}
+            justification.append(f"Fund: P/L {fund.get('pe_ratio', np.nan):.2f}, ROE {fund.get('roe', np.nan):.2f}%")
+            
+            if simbolo in self.predicoes_ml:
+                ml = self.predicoes_ml[simbolo]
+                proba_up = ml.get('predicted_proba_up', 0.5)
+                auc_score = ml.get('auc_roc_score', np.nan)
+                auc_str = f"{auc_score:.3f}" if not pd.isna(auc_score) else "N/A"
+                justification.append(f"ML: Prob. Alta {proba_up*100:.1f}% (AUC {auc_str})")
+            
+            if simbolo in self.predicoes_estatisticas:
+                stat_pred = self.predicoes_estatisticas[simbolo]
+                forecast_price = stat_pred.get('forecast')
+                current_price = stat_pred.get('current_price')
+                
+                if forecast_price is not None and current_price is not None and not np.isnan(forecast_price) and current_price != 0:
+                    pred_change_pct = ((forecast_price - current_price) / current_price) * 100
+                    justification.append(f"Estatístico: Prev. Preço R${forecast_price:.2f} ({pred_change_pct:.2f}%)")
+                
+            self.justificativas_selecao[simbolo] = " | ".join(justification)
+        
+        return self.justificativas_selecao
+        
+    def executar_pipeline(self, simbolos_customizados: list, perfil_inputs: dict, otimizar_ml: bool = False) -> bool:
+        """Executa pipeline completo: Coleta -> Modelagem -> Pontuação -> Otimização."""
+        
+        self.perfil_dashboard = perfil_inputs
+        ml_lookback_days = perfil_inputs.get('ml_lookback_days', LOOKBACK_ML)
+        nivel_risco = perfil_inputs.get('risk_level', 'MODERADO')
+        horizonte_tempo = perfil_inputs.get('time_horizon', 'MÉDIO PRAZO')
+        
+        # 1. Coleta de dados
+        if not self.coletar_e_processar_dados(simbolos_customizados): return False
+        
+        # 2. Volatilidades GARCH
+        self.calcular_volatilidades_garch()
+        
+        # 3. Treinamento ML e Estatístico
+        self.treinar_modelos_ensemble(dias_lookback_ml=ml_lookback_days, otimizar=otimizar_ml)
+        
+        # 4. Pontuação e seleção
+        self.pontuar_e_selecionar_ativos(horizonte_tempo=horizonte_tempo)
+        
+        # 5. Otimização de alocação
+        self.otimizar_alocacao(nivel_risco=nivel_risco)
+        
+        # 6. Métricas e Justificativas
+        self.calcular_metricas_portfolio()
+        self.gerar_justificativas()
+        
+        print("\n✅ Pipeline de Otimização AutoML Concluído!")
+        
+        return True
 
 # =============================================================================
 # CLASSE: ANALISADOR INDIVIDUAL DE ATIVOS
