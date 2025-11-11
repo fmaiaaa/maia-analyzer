@@ -2913,8 +2913,9 @@ def coletar_ativo_unico_gcs(ativo_selecionado: str):
         st.error(f"Erro no carregamento sob demanda do GCS: {str(e)}")
         return None, None
     
+
 # =============================================================================
-# FUNÇÃO: INTERFACE STREAMLIT - ABA ANÁLISE INDIVIDUAL (APENAS GCS)
+# FUNÇÃO: INTERFACE STREAMLIT - ABA ANÁLISE INDIVIDUAL (APENAS GCS E INDEPENDENTE)
 # =============================================================================
 
 def aba_analise_individual():
@@ -2922,21 +2923,24 @@ def aba_analise_individual():
     
     st.markdown("## 🔍 Análise Individual Completa de Ativos (APENAS GCS)")
     
-    # ⚠️ VERIFICAÇÃO CRÍTICA: Depende da execução da Aba 3 (Construtor de Portfólio)
-    if 'builder' not in st.session_state or st.session_state.builder is None:
-        st.warning("⚠️ Por favor, execute o **'Construtor de Portfólio'** (Aba 3) primeiro para carregar os dados do GCS/CSV para a análise.")
-        return
-
-    builder = st.session_state.builder
-    
-    # 1. Determina ativos disponíveis (apenas aqueles que foram carregados com sucesso do GCS)
-    ativos_disponiveis = sorted(builder.ativos_sucesso) 
+    # --- 1. Determina Ativos Disponíveis ---
+    # Usa a lista pré-selecionada, ou o Ibovespa como fallback.
+    if 'ativos_para_analise' in st.session_state and st.session_state.ativos_para_analise:
+        ativos_disponiveis = st.session_state.ativos_para_analise
+    else:
+        ativos_disponiveis = ATIVOS_IBOVESPA 
+        if not ativos_disponiveis:
+            ativos_disponiveis = TODOS_ATIVOS 
             
     if not ativos_disponiveis:
-        st.error("Nenhum ativo disponível para análise. O Construtor não encontrou ativos válidos no GCS.")
+        st.error("Nenhum ativo disponível para análise. Verifique as configurações ou selecione ativos.")
         return
 
-    # 2. Interface de Seleção
+    # Garante que temos um ativo selecionado para começar
+    if 'individual_asset_select' not in st.session_state and ativos_disponiveis:
+        st.session_state.individual_asset_select = ativos_disponiveis[0]
+
+    # --- 2. Interface de Seleção ---
     col1, col2 = st.columns([3, 1])
     
     with col1:
@@ -2955,41 +2959,40 @@ def aba_analise_individual():
         st.info("👆 Selecione um ativo e clique em 'Analisar Ativo' para começar a análise completa.")
         return
     
+    # --- 3. Execução da Análise (Com Coleta Sob Demanda do GCS) ---
     with st.spinner(f"Analisando {ativo_selecionado} (Dados do GCS)..."):
         try:
             df_completo = None
             features_fund = None
-
-            # 3.1. Tenta usar o cache (se a Aba 3 foi rodada)
-            if 'builder' in st.session_state and st.session_state.builder is not None:
+            builder_existe = 'builder' in st.session_state and st.session_state.builder is not None
+            
+            # Tenta usar o cache
+            if builder_existe and ativo_selecionado in st.session_state.builder.dados_por_ativo:
                 builder = st.session_state.builder
+                df_completo_cache = builder.dados_por_ativo[ativo_selecionado].copy().dropna()
+                features_fund = builder.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
                 
-                # Checa se o ativo está no cache
-                if ativo_selecionado in builder.dados_por_ativo:
-                    # Se está no cache, usa os dados pré-carregados
-                    df_completo_cache = builder.dados_por_ativo[ativo_selecionado].copy().dropna()
-                    features_fund = builder.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
-                    
-                    if not df_completo_cache.empty:
-                        df_completo = df_completo_cache
-                    else:
-                        # Cache estava vazio, coleta sob demanda
-                        st.info("Cache vazio. Coletando dados sob demanda do GCS.")
-                        df_completo, features_fund = coletar_ativo_unico_gcs(ativo_selecionado)
+                if not df_completo_cache.empty:
+                    df_completo = df_completo_cache
                 else:
-                    # Ativo não estava na lista da Aba 3, coleta sob demanda
-                    st.info("Coletando dados sob demanda do GCS.")
+                    # Cache estava vazio, coleta sob demanda
+                    st.info("Cache vazio para este ativo. Coletando dados sob demanda do GCS.")
                     df_completo, features_fund = coletar_ativo_unico_gcs(ativo_selecionado)
             else:
-                # 3.2. Carregamento inicial se a Aba 3 nunca foi rodada
-                st.info("Construtor não executado. Coletando dados sob demanda do GCS.")
+                # Cache não existe ou o ativo não foi carregado, coleta sob demanda
+                if builder_existe:
+                    st.info("Ativo não carregado no Construtor. Coletando sob demanda do GCS.")
+                else:
+                    st.info("Construtor não executado. Coletando dados sob demanda do GCS.")
+                    
                 df_completo, features_fund = coletar_ativo_unico_gcs(ativo_selecionado)
             
             # ⚠️ VERIFICAÇÃO FINAL APÓS TENTATIVAS DE CACHE E SOB DEMANDA
             if df_completo is None or df_completo.empty or 'Close' not in df_completo.columns:
-                st.error(f"❌ Não foi possível obter dados (Histórico/Features) válidos do GCS para **{ativo_selecionado.replace('.SA', '')}**.")
+                st.error(f"❌ Não foi possível obter dados (Histórico/Features) válidos do GCS para **{ativo_selecionado.replace('.SA', '')}**. Verifique a URL do GCS.")
                 return
-            # 4. Exibição nas Abas (Código de visualização inalterado a partir daqui)
+
+            # O restante do código de exibição das abas continua aqui...
             tab1, tab2, tab3, tab4, tab5 = st.tabs([
                 "📊 Visão Geral",
                 "📈 Análise Técnica",
@@ -3144,14 +3147,12 @@ def aba_analise_individual():
                 
                 col1.metric("Dividend Yield", f"{features_fund.get('div_yield', np.nan):.2f}%" if not pd.isna(features_fund.get('div_yield')) else "N/A")
                 col2.metric("Payout Ratio", f"{features_fund.get('payout_ratio', np.nan):.2f}%" if not pd.isna(features_fund.get('payout_ratio')) else "N/A")
-                # ⚠️ Nota: 'five_year_avg_div_yield' não estava na sua lista de CSVs ETL, mas mantido para contexto:
                 col3.metric("DY Médio 5A", "N/A" ) 
                 
                 st.markdown("#### Crescimento")
                 col1, col2, col3 = st.columns(3)
                 col1.metric("Cresc. Receita", f"{features_fund.get('revenue_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('revenue_growth')) else "N/A")
                 col2.metric("Cresc. Lucros", f"{features_fund.get('earnings_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('earnings_growth')) else "N/A")
-                # ⚠️ Nota: 'earnings_quarterly_growth' não estava na sua lista de CSVs ETL, mas mantido para contexto:
                 col3.metric("Cresc. Lucros (Q)", "N/A")
 
                 st.markdown("#### Saúde Financeira")
@@ -3159,13 +3160,11 @@ def aba_analise_individual():
                 col1.metric("Dívida/Patrimônio", f"{features_fund.get('debt_to_equity', np.nan):.2f}" if not pd.isna(features_fund.get('debt_to_equity')) else "N/A")
                 col2.metric("Current Ratio", f"{features_fund.get('current_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('current_ratio')) else "N/A")
                 col3.metric("Quick Ratio", f"{features_fund.get('quick_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('quick_ratio')) else "N/A")
-                # ⚠️ Nota: 'free_cashflow' não estava na sua lista de CSVs ETL, mas mantido para contexto:
                 col4.metric("Fluxo de Caixa Livre", "N/A")
                 
                 st.markdown("---")
                 st.markdown("#### Todos os Fundamentos Disponíveis")
                 
-                # Filtra métricas fundamentais para exibição (usando apenas o que está no cache)
                 df_fund_display = pd.DataFrame({
                     'Métrica': list(features_fund.keys()),
                     'Valor': [f"{v:.4f}" if isinstance(v, (int, float)) and not pd.isna(v) else str(v) for v in features_fund.values()]
@@ -3174,10 +3173,11 @@ def aba_analise_individual():
                 st.dataframe(df_fund_display, use_container_width=True, hide_index=True)
             
             with tab4:
-                # ⚠️ NOVO: Usa a previsão ML que JÁ FOI CALCULADA no Construtor
+                # ... (Machine Learning) ...
                 st.markdown("### Análise de Machine Learning (Dados do Construtor)")
                 
-                if ativo_selecionado in builder.predicoes_ml and not pd.isna(builder.predicoes_ml[ativo_selecionado].get('predicted_proba_up')):
+                # A partir daqui, o builder precisa ser usado apenas para ML (ou o fallback)
+                if builder_existe and ativo_selecionado in builder.predicoes_ml and not pd.isna(builder.predicoes_ml[ativo_selecionado].get('predicted_proba_up')):
                     ml_data = builder.predicoes_ml[ativo_selecionado]
                     proba_final = ml_data.get('predicted_proba_up', 0.5)
                     auc_medio = ml_data.get('auc_roc_score', np.nan)
@@ -3190,10 +3190,9 @@ def aba_analise_individual():
                     col3.metric("Nº Features Usadas", len(df_completo.columns) - 4) # Estima features
 
                 else:
-                    st.warning("Dados ML indisponíveis. Recalculando ML...")
+                    st.warning("Dados ML indisponíveis no cache. Calculando ML sob demanda...")
                     
-                    # CÓDIGO DE FALLBACK ML RÁPIDO (Se o builder falhou)
-                    # Prepare data for ML (lógica copiada da sua versão original)
+                    # CÓDIGO DE FALLBACK ML RÁPIDO (Recalcula ML, assumindo df_completo tem as features)
                     features_from_eng = [col for col in df_completo.columns if col not in ['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'log_returns']] 
                     features_from_eng = [f for f in features_from_eng if pd.api.types.is_numeric_dtype(df_completo[f])] 
                     final_features_for_ml = features_from_eng
@@ -3228,21 +3227,26 @@ def aba_analise_individual():
                         except Exception as e:
                             st.warning(f"Falha no recálculo ML do ativo: {str(e)}")
                     else:
-                        st.warning("Dados insuficientes ou classe única encontrada para análise ML detalhada (mínimo de 100 dias com features válidas).")
+                        st.warning("Dados insuficientes para análise ML detalhada sob demanda.")
             
             with tab5:
                 # ... (Clusterização) ...
                 st.markdown("### Clusterização e Análise de Similaridade (Otimizada)")
                 
-                st.info("Comparando este ativo com outros similares usando K-means + PCA (os dados de comparação ainda usam yfinance para ativos não selecionados).")
+                # A clusterização ainda usará o cache do builder (se existir) ou falhará.
+                # Para uma solução 100% GCS independente, todos os ATIVOS_IBOVESPA teriam que ser carregados
+                # sob demanda aqui, o que é lento. Mantemos a lógica original com a checagem de existência.
                 
-                # ⚠️ Clusterização: O código de clusterização ABAIXO ainda utiliza YFINANCE
-                # para buscar dados de comparação de outros ativos (o que pode falhar em ativos como ALOS3.SA)
-                # Para uma solução 100% GCS, todos os ATIVOS_IBOVESPA precisariam estar no cache.
+                if not builder_existe:
+                    st.warning("A Clusterização está desabilitada se o 'Construtor de Portfólio' não for executado, pois requer a comparação de múltiplos ativos. Por favor, execute a Aba 3 para habilitar.")
+                    return # Sai da aba 5 se o builder não existe
                 
-                max_assets_for_clustering = 82 # Limite otimizado
+                # Se o builder existe, o código original de Clusterização que usa o cache continua...
+                # ⚠️ Lógica original de Clusterização (dependente do cache/builder)
                 
                 assets_to_cluster = []
+                # ... (Lógica de seleção de assets_to_cluster inalterada) ...
+                
                 if 'sector' in features_fund and features_fund['sector'] != 'Unknown':
                     sector_assets = ATIVOS_POR_SETOR.get(features_fund['sector'], [])
                     
@@ -3250,58 +3254,30 @@ def aba_analise_individual():
                         assets_to_cluster.append(ativo_selecionado)
                     
                     other_sector_assets = [a for a in sector_assets if a != ativo_selecionado]
+                    max_assets_for_clustering = 82
                     assets_to_cluster.extend(other_sector_assets[:max_assets_for_clustering - len(assets_to_cluster)])
                 
-                if len(assets_to_cluster) < max_assets_for_clustering:
-                    if ativo_selecionado not in assets_to_cluster:
-                        assets_to_cluster.append(ativo_selecionado)
-                    
-                    other_assets = [a for a in ATIVOS_IBOVESPA if a not in assets_to_cluster]
-                    assets_to_cluster.extend(other_assets[:max_assets_for_clustering - len(assets_to_cluster)])
-                    
-                comparison_data = {}
-                if len(assets_to_cluster) > 5:
-                    with st.spinner(f"Coletando dados para {len(assets_to_cluster)} ativos de comparação... (Pode usar Yfinance/Cache)"):
-                        for asset_comp in assets_to_cluster:
-                            
-                            # TENTA LER DO CACHE PRIMEIRO
-                            if asset_comp in builder.dados_performance.index and 'sharpe' in builder.dados_performance.columns:
-                                comp_data = {
-                                    'retorno_anual': builder.dados_performance.loc[asset_comp, 'retorno_anual'],
-                                    'volatilidade_anual': builder.dados_performance.loc[asset_comp, 'volatilidade_anual'],
-                                    'sharpe': builder.dados_performance.loc[asset_comp, 'sharpe'],
-                                    'max_drawdown': builder.dados_performance.loc[asset_comp, 'max_drawdown']
-                                }
-                                # Tenta pegar fundamentos do cache
-                                if asset_comp in builder.dados_fundamentalistas.index:
-                                     fund_metrics = builder.dados_fundamentalistas.loc[asset_comp].to_dict()
-                                     for metric in ['pe_ratio', 'pb_ratio', 'roe', 'debt_to_equity', 'revenue_growth']:
-                                         comp_data[metric] = fund_metrics.get(metric, np.nan)
-                                
-                                comparison_data[asset_comp] = comp_data
-                                continue
+                if len(assets_to_cluster) < 5:
+                    st.warning("Dados insuficientes para realizar a clusterização e análise de similaridade.")
+                    return
 
-                            # FALLBACK: Se o ativo de comparação não foi processado (NÃO RECOMENDADO)
-                            try:
-                                ticker_comp = yf.Ticker(asset_comp)
-                                hist_comp = ticker_comp.history(period='2y') 
-                                
-                                if not hist_comp.empty:
-                                    returns_comp = hist_comp['Close'].pct_change().dropna()
-                                    if len(returns_comp) > 50: 
-                                        comp_data = {
-                                            'retorno_anual': returns_comp.mean() * 252,
-                                            'volatilidade_anual': returns_comp.std() * np.sqrt(252),
-                                            'sharpe': (returns_comp.mean() * 252 - TAXA_LIVRE_RISCO) / (returns_comp.std() * np.sqrt(252)) if returns_comp.std() > 0 else 0,
-                                            'max_drawdown': ((1 + returns_comp).cumprod() / (1 + returns_comp).cumprod().expanding().max() - 1).min() if not returns_comp.empty else np.nan
-                                        }
-                                        info_comp = ticker_comp.info
-                                        fund_metrics = AnalisadorIndividualAtivos.calcular_features_fundamentalistas_expandidas(ticker_comp)
-                                        for metric in ['pe_ratio', 'pb_ratio', 'roe', 'debt_to_equity', 'revenue_growth']:
-                                             comp_data[metric] = fund_metrics.get(metric, np.nan)
-                                        comparison_data[asset_comp] = comp_data
-                            except Exception:
-                                continue
+                comparison_data = {}
+                with st.spinner("Comparando ativos no cache do Construtor..."):
+                    for asset_comp in assets_to_cluster:
+                        if asset_comp in builder.dados_performance.index and 'sharpe' in builder.dados_performance.columns:
+                            comp_data = {
+                                'retorno_anual': builder.dados_performance.loc[asset_comp, 'retorno_anual'],
+                                'volatilidade_anual': builder.dados_performance.loc[asset_comp, 'volatilidade_anual'],
+                                'sharpe': builder.dados_performance.loc[asset_comp, 'sharpe'],
+                                'max_drawdown': builder.dados_performance.loc[asset_comp, 'max_drawdown']
+                            }
+                            if asset_comp in builder.dados_fundamentalistas.index:
+                                fund_metrics = builder.dados_fundamentalistas.loc[asset_comp].to_dict()
+                                for metric in ['pe_ratio', 'pb_ratio', 'roe', 'debt_to_equity', 'revenue_growth']:
+                                    comp_data[metric] = fund_metrics.get(metric, np.nan)
+                            
+                            comparison_data[asset_comp] = comp_data
+
                 
                 if len(comparison_data) > 5:
                     df_comparacao = pd.DataFrame(comparison_data).T
@@ -3313,7 +3289,6 @@ def aba_analise_individual():
                     
                     if resultado_pca is not None:
                         # ... (O código de visualização do Cluster e Variância Explicada permanece inalterado) ...
-                        
                         if 'PC3' in resultado_pca.columns:
                             fig_pca = px.scatter_3d(
                                 resultado_pca, x='PC1', y='PC2', z='PC3', color='Cluster',
