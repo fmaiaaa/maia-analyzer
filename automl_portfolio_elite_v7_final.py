@@ -678,13 +678,23 @@ class EngenheiroFeatures:
 # FUNÇÃO AUXILIAR: COLETA ROBusta
 # =============================================================================
 
-def coletar_historico_ativo_robusto(ticker, periodo, min_dias_historico, max_retries=3, initial_delay=1):
+def coletar_historico_ativo_robusto(ticker, periodo, min_dias_historico, max_retries=3, initial_delay=3):
     """
-    Coleta dados históricos do ativo usando yfinance.download com retentativas 
-    e validação de tamanho mínimo, sem depender de Streamlit.
+    Coleta dados históricos do ativo usando yfinance (priorizando yf.Ticker().history()) 
+    com retentativas, delay ajustado para cloud e validação de tamanho mínimo.
     
+    Args:
+        ticker (str): Símbolo do ativo (ex: 'PETR4').
+        periodo (str): Período de coleta (ex: 'max', '5y').
+        min_dias_historico (int): Mínimo de dias para considerar o histórico válido.
+        max_retries (int): Número máximo de tentativas.
+        initial_delay (int): Atraso inicial em segundos (aumentado para 3s para Cloud).
+        
     Retorna: (DataFrame com histórico, mensagem_de_erro)
     """
+    import yfinance as yf
+    import time
+    
     simbolo_completo = ticker if ticker.endswith('.SA') else f"{ticker}.SA"
     
     # Define um mínimo flexível de dias para aceitar dados (e.g., 70% do ideal)
@@ -692,26 +702,46 @@ def coletar_historico_ativo_robusto(ticker, periodo, min_dias_historico, max_ret
     
     for attempt in range(max_retries):
         try:
-            # yf.download é mais robusto para a coleta pura de histórico
-            hist = yf.download(
-                simbolo_completo,
-                period=periodo,
-                progress=False,
-                timeout=10 # Aumenta o timeout
-            )
+            hist = None
             
-            if hist.empty or len(hist) < min_dias_flexivel:
+            # Tenta 1: Usar yf.Ticker().history() (Mais robusto para sessões longas)
+            try:
+                ticker_obj = yf.Ticker(simbolo_completo)
+                hist = ticker_obj.history(
+                    period=periodo,
+                    interval="1d",
+                    auto_adjust=True,
+                    back_adjust=False,
+                    timeout=15 
+                )
+            except Exception:
+                # Se falhar, hist será None, e passaremos para o fallback.
+                pass
+            
+            # Tenta 2: Fallback para yf.download se o Ticker().history falhou ou retornou pouco
+            if hist is None or hist.empty or len(hist) < 5: 
+                 hist = yf.download(
+                    simbolo_completo,
+                    period=periodo,
+                    progress=False,
+                    timeout=10 # Mantido o timeout original
+                    # headers={'User-Agent': 'Mozilla/5.0'} <-- Removido o argumento problemático
+                )
+            
+            if hist is None or hist.empty or len(hist) < min_dias_flexivel:
                 if attempt < max_retries - 1:
+                    print(f"  [Tentativa {attempt+1}] Sem dados suficientes para {simbolo_completo}. Esperando {initial_delay * (2 ** attempt)}s...")
                     time.sleep(initial_delay * (2 ** attempt)) # Exponential backoff
                     continue
                 else:
-                    return None, f"Sem dados históricos suficientes ({len(hist)} dias, min: {min_dias_flexivel})"
+                    return None, f"Sem dados históricos suficientes ({len(hist) if hist is not None else 0} dias, min: {min_dias_flexivel})"
             
             # Sucesso
             return hist, None
             
         except Exception as e:
             if attempt < max_retries - 1:
+                print(f"  [Tentativa {attempt+1}] Erro temporário para {simbolo_completo}. Esperando {initial_delay * (2 ** attempt)}s...")
                 time.sleep(initial_delay * (2 ** attempt)) # Exponential backoff
                 continue
             else:
