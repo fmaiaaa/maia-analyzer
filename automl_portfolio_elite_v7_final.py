@@ -460,169 +460,74 @@ def obter_template_grafico() -> dict:
 class EngenheiroFeatures:
     """Calcula indicadores técnicos e fundamentalistas com máxima profundidade"""
     
+# DENTRO DA CLASSE ENGENHEIRO DE FEATURES
+
     @staticmethod
     def calcular_indicadores_tecnicos(hist: pd.DataFrame) -> pd.DataFrame:
         """
-        Calcula indicadores técnicos completos e features temporais em um DataFrame
-        histórico (Open, High, Low, Close, Volume).
+        Calcula indicadores técnicos simplificados (similar ao p_a) 
+        para otimizar o tempo, mantendo a compatibilidade do scoring.
         """
         df = hist.copy()
         
-        # --- Retornos e Volatilidade ---
+        # --- 1. Retornos e Volatilidade (BASE) ---
         df['returns'] = df['Close'].pct_change()
         df['log_returns'] = np.log(df['Close'] / df['Close'].shift(1))
+        # Volatilidade anualizada (janela de 20 dias - MANTIDO como 'volatility_20')
         df['volatility_20'] = df['returns'].rolling(window=20).std() * np.sqrt(252)
-        df['volatility_60'] = df['returns'].rolling(window=60).std() * np.sqrt(252)
-        df['volatility_252'] = df['returns'].rolling(window=252).std() * np.sqrt(252)
         
-        # --- Médias Móveis (SMA, EMA, WMA) ---
-        for periodo in [5, 10, 20, 50, 100, 200]:
-            df[f'sma_{periodo}'] = SMAIndicator(close=df['Close'], window=periodo).sma_indicator()
-            df[f'ema_{periodo}'] = EMAIndicator(close=df['Close'], window=periodo).ema_indicator()
-            
-            # WMA (Weighted Moving Average)
-            weights = np.arange(1, periodo + 1)
-            # Aplicamos a ponderação à janela deslizante de preço de fechamento
-            df[f'wma_{periodo}'] = df['Close'].rolling(periodo).apply(
-                lambda x: np.dot(x, weights) / weights.sum(), raw=True
-            )
+        # --- 2. Médias Móveis (SMA 50 e 200 - Essenciais) ---
+        df['sma_50'] = df['Close'].rolling(window=50).mean()
+        df['sma_200'] = df['Close'].rolling(window=200).mean()
         
-        # --- Hull Moving Average (HMA) ---
-        for periodo in [20, 50]:
-            # HMA = WMA(2*WMA(n/2) - WMA(n), sqrt(n))
-            # 1. WMA de metade do período
-            weights_half = np.arange(1, periodo // 2 + 1)
-            wma_half_series = df['Close'].rolling(periodo // 2).apply(
-                lambda x: np.dot(x, weights_half) / weights_half.sum(), raw=True
-            )
-            
-            # 2. WMA do período completo
-            weights_full = np.arange(1, periodo + 1)
-            wma_full_series = df['Close'].rolling(periodo).apply(
-                lambda x: np.dot(x, weights_full) / weights_full.sum(), raw=True
-            )
-            
-            # 3. Calcula HMA final
-            raw_hma = 2 * wma_half_series - wma_full_series
-            df[f'hma_{periodo}'] = raw_hma.rolling(int(np.sqrt(periodo))).mean()
+        # --- 3. Momentum (RSI e MACD - Essenciais para Scoring) ---
         
-        # --- Razões e Cruzamentos ---
-        df['price_sma20_ratio'] = df['Close'] / df['sma_20']
-        df['price_sma50_ratio'] = df['Close'] / df['sma_50']
-        df['price_sma200_ratio'] = df['Close'] / df['sma_200']
-        df['sma20_sma50_cross'] = (df['sma_20'] > df['sma_50']).astype(int)
-        df['sma50_sma200_cross'] = (df['sma_50'] > df['sma_200']).astype(int)
-        df['death_cross'] = (df['Close'] < df['sma_200']).astype(int)
+        # RSI (14 períodos - Renomeado para 'rsi_14' para compatibilidade)
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        df['rsi_14'] = 100 - (100 / (1 + (gain / loss)))
         
-        # --- Momentum (RSI, Stoch, Williams %R, MACD) ---
-        for periodo in [7, 14, 21, 28]:
-            df[f'rsi_{periodo}'] = RSIIndicator(close=df['Close'], window=periodo).rsi()
-            
-        stoch = StochasticOscillator(high=df['High'], low=df['Low'], close=df['Close'], window=14, smooth_window=3)
-        df['stoch_k'] = stoch.stoch()
-        df['stoch_d'] = stoch.stoch_signal()
+        # MACD (12, 26, 9 - Renomeado para 'macd' e componentes para compatibilidade)
+        ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
+        ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
+        df['macd'] = ema_12 - ema_26 
+        df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
+        df['macd_diff'] = df['macd'] - df['macd_signal'] # Usado em algumas features avançadas originais
         
-        df['williams_r'] = WilliamsRIndicator(high=df['High'], low=df['Low'], close=df['Close'], lbp=14).williams_r()
+        # Momentum (10 períodos - p_a usa 10)
+        df['momentum_10'] = df['Close'] / df['Close'].shift(10) - 1
         
-        macd = MACD(close=df['Close'], window_slow=26, window_fast=12, window_sign=9)
-        df['macd'] = macd.macd()
-        df['macd_signal'] = macd.macd_signal()
-        df['macd_diff'] = macd.macd_diff()
+        # --- 4. Indicadores Necessários para o CORE PIPELINE (Drawdown e BBands) ---
         
-        macd_alt = MACD(close=df['Close'], window_slow=35, window_fast=5, window_sign=5)
-        df['macd_alt'] = macd_alt.macd()
-        
-        # --- Volatilidade (Bollinger, Keltner, Donchian, ATR, ADX, CCI) ---
-        bb = BollingerBands(close=df['Close'], window=20, window_dev=2)
-        df['bb_middle'] = bb.bollinger_mavg()
-        df['bb_upper'] = bb.bollinger_hband()
-        df['bb_lower'] = bb.bollinger_lband()
-        df['bb_width'] = bb.bollinger_wband()
-        df['bb_position'] = (df['Close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
-        df['bb_pband'] = bb.bollinger_pband()
-        
-        kc = KeltnerChannel(high=df['High'], low=df['Low'], close=df['Close'], window=20, window_atr=10)
-        df['kc_upper'] = kc.keltner_channel_hband()
-        df['kc_lower'] = kc.keltner_channel_lband()
-        df['kc_middle'] = kc.keltner_channel_mband()
-        df['kc_width'] = (df['kc_upper'] - df['kc_lower']) / df['kc_middle']
-        
-        dc = DonchianChannel(high=df['High'], low=df['Low'], close=df['Close'], window=20)
-        df['dc_upper'] = dc.donchian_channel_hband()
-        df['dc_lower'] = dc.donchian_channel_lband()
-        df['dc_middle'] = dc.donchian_channel_mband()
-        
-        atr = AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'], window=14)
-        df['atr'] = atr.average_true_range()
-        df['atr_percent'] = (df['atr'] / df['Close']) * 100
-        
-        adx = ADXIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=14)
-        df['adx'] = adx.adx()
-        df['adx_pos'] = adx.adx_pos()
-        df['adx_neg'] = adx.adx_neg()
-        
-        df['cci'] = CCIIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=20).cci()
-        
-        # --- Momentum (ROC) ---
-        df['momentum_10'] = ROCIndicator(close=df['Close'], window=10).roc()
-        df['momentum_20'] = ROCIndicator(close=df['Close'], window=20).roc()
-        df['momentum_60'] = ROCIndicator(close=df['Close'], window=60).roc()
-        
-        # --- Volume ---
-        df['obv'] = OnBalanceVolumeIndicator(close=df['Close'], volume=df['Volume']).on_balance_volume()
-        df['cmf'] = ChaikinMoneyFlowIndicator(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume'], window=20).chaikin_money_flow()
-        df['mfi'] = MFIIndicator(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume'], window=14).money_flow_index()
-        df['vwap'] = VolumeWeightedAveragePrice(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume']).volume_weighted_average_price()
-        
-        # --- Features Avançadas (Drawdown, Lags, Rolling Stats) ---
+        # Drawdown (Necessário para cálculo de Max Drawdown)
         cumulative_returns = (1 + df['returns']).cumprod()
         running_max = cumulative_returns.expanding().max()
         df['drawdown'] = (cumulative_returns - running_max) / running_max
         df['max_drawdown_252'] = df['drawdown'].rolling(252).min()
         
-        # Lags
-        for lag in [1, 5, 10, 20, 60]:
-            df[f'close_lag_{lag}'] = df['Close'].shift(lag)
-            df[f'returns_lag_{lag}'] = df['returns'].shift(lag)
-            df[f'volume_lag_{lag}'] = df['Volume'].shift(lag)
+        # Bandas de Bollinger (Apenas os componentes necessários para 'bb_position')
+        bb_window = 20
+        df['bb_middle'] = df['Close'].rolling(window=bb_window).mean()
+        bb_std = df['Close'].rolling(window=bb_window).std()
+        df['bb_upper'] = df['bb_middle'] + 2 * bb_std
+        df['bb_lower'] = df['bb_middle'] - 2 * bb_std
+        # Coluna crítica para o Scoring: bb_position
+        df['bb_position'] = (df['Close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
         
-        # Rolling statistics
-        for window in [5, 20, 60]:
-            df[f'returns_mean_{window}'] = df['returns'].rolling(window).mean()
-            df[f'returns_std_{window}'] = df['returns'].rolling(window).std()
-            df[f'returns_skew_{window}'] = df['returns'].rolling(window).skew()
-            df[f'returns_kurt_{window}'] = df['returns'].rolling(window).kurt()
-            df[f'volume_mean_{window}'] = df['Volume'].rolling(window).mean()
-            df[f'volume_std_{window}'] = df['Volume'].rolling(window).std()
-        
-        # Autocorrelation
-        for lag in [1, 5, 10]:
-            df[f'autocorr_{lag}'] = df['returns'].rolling(60).apply(lambda x: x.autocorr(lag=lag), raw=False)
-        
-        # Price patterns
-        df['higher_high'] = ((df['High'] > df['High'].shift(1)) & (df['High'].shift(1) > df['High'].shift(2))).astype(int)
-        df['lower_low'] = ((df['Low'] < df['Low'].shift(1)) & (df['Low'].shift(1) < df['Low'].shift(2))).astype(int)
-        
-        # Temporal encoding
-        df['day_of_week'] = df.index.dayofweek
-        df['month'] = df.index.month
-        df['quarter'] = df.index.quarter
-        df['day_of_month'] = df.index.day
-        # isocalendar() retorna uma tupla (ano, semana, dia), pegamos o segundo elemento
-        df['week_of_year'] = df.index.isocalendar().week.astype(int)
-        
-        # --- Imputação Estratégica (NOVO) ---
-        # 1. Preenche NaN com o valor anterior mais recente (útil para SMA/EMA/MACD que só aparecem depois do lookback)
-        df_imputed = df.fillna(method='ffill')
-        
-        # 2. Preenche quaisquer NaNs restantes (geralmente nos primeiros dias da série) com zero ou um valor neutro
-        df_imputed = df_imputed.fillna(0.0) # Imputa o resto com 0 (features de momentum/osciladores devem ser 0 quando não calculáveis)
-        
-        # 3. Garante que os retornos (returns) e lags sejam preenchidos com 0.0, exceto o primeiro
-        df_imputed['returns'] = df['returns'].fillna(0.0)
-        
-        # O df.dropna() é removido e substituído por uma imputação
-        return df_imputed.dropna() # Mantém apenas para remover linhas que são NaN *em todas* as colunas (muito improvável, mas seguro)
+        # --- 5. Features Temporais (Necessárias para ML) ---
+        if not df.index.empty:
+            df['day_of_week'] = df.index.dayofweek
+            df['month'] = df.index.month
+            df['quarter'] = df.index.quarter
+            df['day_of_month'] = df.index.day
+            df['week_of_year'] = df.index.isocalendar().week.astype(int)
+            
+        # Garante que a coluna 'Volume' está presente
+        if 'Volume' not in df.columns and 'Volume' in hist.columns:
+            df['Volume'] = hist['Volume'].reindex(df.index)
+            
+        return df.dropna()
     
     @staticmethod
     def calcular_features_fundamentalistas(info: dict) -> dict:
@@ -678,75 +583,78 @@ class EngenheiroFeatures:
 # FUNÇÃO AUXILIAR: COLETA ROBusta
 # =============================================================================
 
-def coletar_historico_ativo_robusto(ticker, periodo, min_dias_historico, max_retries=3, initial_delay=3):
+# FUNÇÃO AUXILIAR: COLETA ROBusta E RESILIENTE (VERSÃO p_a ADAPTADA)
+def coletar_historico_ativo_robusto(ticker, periodo, min_dias_historico, max_retries=3, initial_delay=3): # Delay aumentado para Cloud
     """
-    Coleta dados históricos do ativo usando yfinance (priorizando yf.Ticker().history()) 
-    com retentativas, delay ajustado para cloud e validação de tamanho mínimo.
+    Coleta dados históricos do ativo usando yfinance com retentativas, 
+    variações de ticker e validação de tamanho mínimo.
     
-    Args:
-        ticker (str): Símbolo do ativo (ex: 'PETR4').
-        periodo (str): Período de coleta (ex: 'max', '5y').
-        min_dias_historico (int): Mínimo de dias para considerar o histórico válido.
-        max_retries (int): Número máximo de tentativas.
-        initial_delay (int): Atraso inicial em segundos (aumentado para 3s para Cloud).
-        
     Retorna: (DataFrame com histórico, mensagem_de_erro)
     """
     import yfinance as yf
     import time
     
+    def get_ticker_variations_b3(symbol):
+        """ Gera variações do ticker para aumentar chance de sucesso. """
+        variations = [symbol]
+        if symbol.endswith('.SA'):
+            base = symbol[:-3]
+            variations.append(base)
+            variations.append(base + '.SAO')
+        else:
+            if len(symbol) <= 6 and not symbol.endswith(('.L', '.PA', '.NY')):
+                variations.append(symbol + '.SA')
+                variations.append(symbol + '.SAO')
+        
+        # Remove duplicatas e garante que o original está no início
+        return list(dict.fromkeys(variations))
+
     simbolo_completo = ticker if ticker.endswith('.SA') else f"{ticker}.SA"
-    
-    # Define um mínimo flexível de dias para aceitar dados (e.g., 70% do ideal)
     min_dias_flexivel = max(180, int(min_dias_historico * 0.7))
     
     for attempt in range(max_retries):
-        try:
-            hist = None
-            
-            # Tenta 1: Usar yf.Ticker().history() (Mais robusto para sessões longas)
+        found_valid_data = False
+        last_error = "Coleta não tentada."
+        
+        for attempt_ticker in get_ticker_variations_b3(simbolo_completo):
             try:
-                ticker_obj = yf.Ticker(simbolo_completo)
+                # Prioriza yf.Ticker().history() (mais robusto)
+                ticker_obj = yf.Ticker(attempt_ticker)
                 hist = ticker_obj.history(
                     period=periodo,
                     interval="1d",
                     auto_adjust=True,
-                    back_adjust=False,
                     timeout=15 
                 )
-            except Exception:
-                # Se falhar, hist será None, e passaremos para o fallback.
-                pass
-            
-            # Tenta 2: Fallback para yf.download se o Ticker().history falhou ou retornou pouco
-            if hist is None or hist.empty or len(hist) < 5: 
-                 hist = yf.download(
-                    simbolo_completo,
-                    period=periodo,
-                    progress=False,
-                    timeout=10 # Mantido o timeout original
-                    # headers={'User-Agent': 'Mozilla/5.0'} <-- Removido o argumento problemático
-                )
-            
-            if hist is None or hist.empty or len(hist) < min_dias_flexivel:
-                if attempt < max_retries - 1:
-                    print(f"  [Tentativa {attempt+1}] Sem dados suficientes para {simbolo_completo}. Esperando {initial_delay * (2 ** attempt)}s...")
-                    time.sleep(initial_delay * (2 ** attempt)) # Exponential backoff
-                    continue
-                else:
-                    return None, f"Sem dados históricos suficientes ({len(hist) if hist is not None else 0} dias, min: {min_dias_flexivel})"
-            
-            # Sucesso
-            return hist, None
-            
-        except Exception as e:
-            if attempt < max_retries - 1:
-                print(f"  [Tentativa {attempt+1}] Erro temporário para {simbolo_completo}. Esperando {initial_delay * (2 ** attempt)}s...")
-                time.sleep(initial_delay * (2 ** attempt)) # Exponential backoff
-                continue
-            else:
-                return None, f"Erro na coleta após {max_retries} tentativas: {str(e)[:50]}"
                 
+                # Fallback para yf.download se o Ticker().history falhar ou retornar pouco
+                if hist.empty or len(hist) < 5: 
+                    hist = yf.download(
+                        attempt_ticker,
+                        period=periodo,
+                        progress=False,
+                        timeout=10
+                    )
+
+                if not hist.empty and len(hist) >= min_dias_flexivel:
+                    found_valid_data = True
+                    break
+                    
+            except Exception as e:
+                last_error = str(e)
+                continue
+
+        if found_valid_data:
+            return hist, None
+        
+        if attempt < max_retries - 1:
+            delay = initial_delay * (2 ** attempt)
+            print(f"  [Tentativa {attempt+1}] Falha em {simbolo_completo}. Esperando {delay}s...")
+            time.sleep(delay)
+            continue
+        else:
+            return None, f"Erro na coleta após {max_retries} tentativas: {last_error[:50]}"
+            
     return None, "Falha desconhecida na coleta."
 
 
@@ -1902,89 +1810,21 @@ class AnalisadorIndividualAtivos:
     
     @staticmethod
     def calcular_todos_indicadores_tecnicos(hist: pd.DataFrame) -> pd.DataFrame:
-        """Calcula TODOS os indicadores técnicos possíveis para engenharia massiva de features."""
-        df = hist.copy()
+        """
+        [ATUALIZAR] Redireciona para a função de engenharia de features simplificada 
+        para consistência e velocidade em todas as abas.
+        """
+        # Chama a função de engenharia de features simplificada (o que era o EngenheiroFeatures)
+        df = EngenheiroFeatures.calcular_indicadores_tecnicos(hist)
         
-        # --- Retornos e Volatilidade ---
-        df['returns'] = df['Close'].pct_change()
-        df['log_returns'] = np.log(df['Close'] / df['Close'].shift(1))
-        df['volatility_20'] = df['returns'].rolling(window=20).std() * np.sqrt(252)
-        df['volatility_60'] = df['returns'].rolling(window=60).std() * np.sqrt(252)
+        # Adiciona o volume de volta (se EngenheiroFeatures não o fez)
+        if 'Volume' not in df.columns and 'Volume' in hist.columns:
+             df['Volume'] = hist['Volume'].reindex(df.index)
         
-        # --- Médias Móveis (SMA, EMA) ---
-        for periodo in [5, 10, 20, 50, 100, 200]:
-            df[f'sma_{periodo}'] = SMAIndicator(close=df['Close'], window=periodo).sma_indicator()
+        # Renomeia colunas para os nomes esperados pela aba de análise individual do p_a
+        # O p_a original usava 'RSI' e 'MACD', mas o complexo usa 'rsi_14' e 'macd'.
+        # Mantenha os nomes do complexo para evitar refatorar a Aba 4 inteira.
         
-        for periodo in [9, 12, 26, 50, 200]:
-            df[f'ema_{periodo}'] = EMAIndicator(close=df['Close'], window=periodo).ema_indicator()
-        
-        # --- Momentum / Força ---
-        for periodo in [7, 14, 21, 28]:
-            df[f'rsi_{periodo}'] = RSIIndicator(close=df['Close'], window=periodo).rsi()
-            
-        stoch = StochasticOscillator(high=df['High'], low=df['Low'], close=df['Close'], window=14, smooth_window=3)
-        df['stoch_k'] = stoch.stoch()
-        df['stoch_d'] = stoch.stoch_signal()
-        
-        df['williams_r'] = WilliamsRIndicator(high=df['High'], low=df['Low'], close=df['Close'], lbp=14).williams_r()
-        
-        macd = MACD(close=df['Close'], window_slow=26, window_fast=12, window_sign=9)
-        df['macd'] = macd.macd()
-        df['macd_signal'] = macd.macd_signal()
-        df['macd_histogram'] = macd.macd_diff()
-        
-        macd_alt = MACD(close=df['Close'], window_slow=35, window_fast=5, window_sign=5)
-        df['macd_alt'] = macd_alt.macd()
-        
-        # --- Volatilidade ---
-        bb = BollingerBands(close=df['Close'], window=20, window_dev=2)
-        df['bb_middle'] = bb.bollinger_mavg()
-        df['bb_upper'] = bb.bollinger_hband()
-        df['bb_lower'] = bb.bollinger_lband()
-        df['bb_width'] = bb.bollinger_wband()
-        df['bb_position'] = (df['Close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
-        df['bb_pband'] = bb.bollinger_pband()
-        
-        atr = AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'], window=14)
-        df['atr'] = atr.average_true_range()
-        df['atr_percent'] = (df['atr'] / df['Close']) * 100
-        
-        # ADX e CCI
-        adx = ADXIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=14)
-        df['adx'] = adx.adx()
-        df['adx_pos'] = adx.adx_pos()
-        df['adx_neg'] = adx.adx_neg()
-        df['cci'] = CCIIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=20).cci()
-        
-        # ROC e Momentum
-        df['roc_12'] = ROCIndicator(close=df['Close'], window=12).roc()
-        df['roc_20'] = ROCIndicator(close=df['Close'], window=20).roc()
-        df['momentum_10'] = df['Close'] / df['Close'].shift(10) - 1
-        df['momentum_20'] = df['Close'] / df['Close'].shift(20) - 1
-        
-        # --- Ichimoku Cloud (Componentes) ---
-        high_9 = df['High'].rolling(window=9).max()
-        low_9 = df['Low'].rolling(window=9).min()
-        df['tenkan_sen'] = (high_9 + low_9) / 2
-        high_26 = df['High'].rolling(window=26).max()
-        low_26 = df['Low'].rolling(window=26).min()
-        df['kijun_sen'] = (high_26 + low_26) / 2
-        df['senkou_span_a'] = ((df['tenkan_sen'] + df['kijun_sen']) / 2).shift(26)
-        high_52 = df['High'].rolling(window=52).max()
-        low_52 = df['Low'].rolling(window=52).min()
-        df['senkou_span_b'] = ((high_52 + low_52) / 2).shift(26)
-        df['chikou_span'] = df['Close'].shift(-26)
-        
-        # --- Volume ---
-        df['vwap'] = VolumeWeightedAveragePrice(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume']).volume_weighted_average_price()
-        df['cmf_20'] = ChaikinMoneyFlowIndicator(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume'], window=20).chaikin_money_flow()
-        df['mfi_14'] = MFIIndicator(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume'], window=14).money_flow_index()
-        df['obv'] = OnBalanceVolumeIndicator(close=df['Close'], volume=df['Volume']).on_balance_volume()
-        
-        # Parabolic SAR (Simplificado - usar rolling mean é uma simplificação para feature engineering)
-        df['sar_proxy'] = df['Close'].rolling(window=5).mean()
-        
-        # Remove colunas inteiramente NaN (causadas por janelas de lookback longas)
         return df.dropna(axis=1, how='all')
     
     @staticmethod
