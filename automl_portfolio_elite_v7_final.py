@@ -116,7 +116,7 @@ TAXA_LIVRE_RISCO = 0.1075
 LOOKBACK_ML = 30
 
 
-
+GCS_METADATA_COLS = ['sharpe_ratio', 'annual_return', 'annual_volatility', 'max_drawdown', 'sector', 'industry', 'garch_volatility']
 # =============================================================================
 # 2. PONDERAÇÕES E REGRAS DE OTIMIZAÇÃO
 # =============================================================================
@@ -625,7 +625,9 @@ class ColetorDadosGCS(object):
     """Coleta dados de mercado de arquivos CSV individuais no GCS."""
     
     # 🚨 Variáveis de Classe: As colunas que NÃO são features técnicas temporais/rolling
-    cols_performance_and_meta = ['sharpe_ratio', 'annual_return', 'annual_volatility', 'max_drawdown', 'sector', 'industry', 'garch_volatility']
+    # Usa a constante GCS_METADATA_COLS como base. 'ticker' é incluído aqui.
+    cols_performance_and_meta = GCS_METADATA_COLS + ['ticker'] 
+    
     # Colunas de features de retorno para validação
     cols_time_series = ['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'log_returns']
 
@@ -663,10 +665,10 @@ class ColetorDadosGCS(object):
 
             # --- 1. PREPARAÇÃO E ARMAZENAMENTO DO HISTÓRICO (Features Temporais e Técnicas) ---
             
-            # Colunas temporais são todas as colunas que não são métricas estáticas (fund_*) ou de performance/meta
-            cols_estaticas = [c for c in df_ativo.columns if c.startswith('fund_') or c in self.cols_performance_and_meta]
+            # Filtra colunas que começam com 'fund_' ou que são fixas (incluindo 'ticker')
+            cols_to_drop = [c for c in df_ativo.columns if c.startswith('fund_') or c in self.cols_performance_and_meta]
             
-            df_ativo_history = df_ativo.drop(columns=cols_estaticas, errors='ignore').copy()
+            df_ativo_history = df_ativo.drop(columns=cols_to_drop, errors='ignore').copy()
             
             # Remove o nível 'ticker' do MultiIndex para o dicionário de histórico
             if isinstance(df_ativo_history.index, pd.MultiIndex):
@@ -677,7 +679,7 @@ class ColetorDadosGCS(object):
             
             # --- 2. EXTRAÇÃO DOS FUNDAMENTOS E MÉTRICAS DA ÚLTIMA LINHA ---
             
-            # Pega a última linha para extrair os metadados estáticos (Sharpe, P/L, ROE, etc. são repetidos em todas as linhas)
+            # Pega a última linha para extrair os metadados estáticos
             if isinstance(df_ativo.index, pd.MultiIndex):
                  last_row = df_ativo.loc[(df_ativo.index.get_level_values('Date')[-1], simbolo)]
             else:
@@ -2628,43 +2630,53 @@ def aba_construtor_portfolio():
                     """, unsafe_allow_html=True)
 
 # =============================================================================
-# FUNÇÃO AUXILIAR: COLETAR DADOS DE UM ÚNICO ATIVO DO GCS
+# FUNÇÃO AUXILIAR: COLETAR DADOS DE UM ÚNICO ATIVO DO GCS (CORRIGIDO)
 # =============================================================================
 
 def coletar_ativo_unico_gcs(ativo_selecionado: str):
-    """Cria uma instância do coletor GCS e carrega dados de um único ativo."""
+    """Carrega dados de um único ativo do GCS, separa histórico e fundamentos."""
+    
+    # ⚠️ REQUER: A constante global GCS_METADATA_COLS
+    
     try:
-        # Usa ColetorDadosGCS para extrair dados
-        coletor_rapido = ColetorDadosGCS()
-        simbolos = [ativo_selecionado]
-        
-        # Simula a coleta para apenas um ativo, ignorando o requisito NUM_ATIVOS_PORTFOLIO
-        
-        # CHAMA A FUNÇÃO DE CARREGAMENTO INDIVIDUAL (Requer carregar dados e features)
         df_ativo = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, ativo_selecionado)
         
         MIN_DIAS_HISTORICO_FLEXIVEL = max(180, int(MIN_DIAS_HISTORICO * 0.7))
         
         if df_ativo.empty or 'Close' not in df_ativo.columns or len(df_ativo) < MIN_DIAS_HISTORICO_FLEXIVEL:
-            st.error(f"❌ Dados insuficientes/inválidos no GCS para {ativo_selecionado.replace('.SA', '')}")
             return None, None
             
         # 1. Armazena Histórico/Features
-        cols_to_drop = [c for c in df_ativo.columns if c.startswith('fund_') or c in coletor_rapido.cols_fixed]
+        # CORREÇÃO: Usa a constante global GCS_METADATA_COLS
+        cols_to_drop = [c for c in df_ativo.columns if c.startswith('fund_') or c in GCS_METADATA_COLS or c == 'ticker']
+        
         hist = df_ativo.drop(columns=cols_to_drop, errors='ignore').dropna(how='all')
         
-        # 2. Extrai Fundamentos
-        last_row = df_ativo.iloc[-1]
+        # Remove o nível 'ticker' se houver MultiIndex
+        if isinstance(hist.index, pd.MultiIndex):
+            hist = hist.droplevel('ticker')
+        
+        # 2. Extrai Fundamentos (da última linha)
+        
+        if isinstance(df_ativo.index, pd.MultiIndex):
+             # Acessa a última linha do MultiIndex
+             last_row = df_ativo.loc[(df_ativo.index.get_level_values('Date')[-1], ativo_selecionado)]
+        else:
+             last_row = df_ativo.iloc[-1]
+             
+        # A. Fundamentos (Colunas fund_*)
         fund_data = last_row.filter(regex='^fund_').to_dict()
         fund_data = {k.replace('fund_', ''): v for k, v in fund_data.items()}
-        fund_data['sector'] = last_row.get('sector', 'Unknown')
-        fund_data['industry'] = last_row.get('industry', 'Unknown')
+        
+        # B. Métricas de Performance e Setor (Colunas não-prefixadas)
+        for col_meta in GCS_METADATA_COLS:
+            fund_data[col_meta] = last_row.get(col_meta, np.nan)
         
         # Retorna Histórico e Fundamentos (como dicionário)
         return hist, fund_data
         
     except Exception as e:
-        st.error(f"Erro no carregamento sob demanda do GCS: {str(e)}")
+        # st.error(f"Erro no carregamento sob demanda do GCS: {str(e)}") # Comentado para evitar erro em cascata
         return None, None
     
 
