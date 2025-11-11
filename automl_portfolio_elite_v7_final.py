@@ -729,17 +729,20 @@ def carregar_dados_ativo_gcs_csv(base_url: str, ticker: str) -> pd.DataFrame:
 # CLASSE: COLETOR DE DADOS GCS (SUBSTITUI O COLETORDADOS ORIGINAL)
 # =============================================================================
 
-class ColetorDadosGCS(object): # Não herda de ColetorDados, pois a estrutura de coleta é totalmente diferente
+class ColetorDadosGCS(object):
     """Coleta dados de mercado de arquivos CSV individuais no GCS."""
     
+    # 🚨 CORREÇÃO: Variável de Classe para acesso estático sem self.
+    cols_fixed = ['sharpe_ratio', 'annual_return', 'annual_volatility', 'max_drawdown', 'sector', 'industry', 'ticker', 'garch_volatility']
+
     def __init__(self, periodo=PERIODO_DADOS):
         self.periodo = periodo
         self.dados_por_ativo = {}
         self.dados_fundamentalistas = pd.DataFrame()
         self.ativos_sucesso = []
-        self.dados_macro = {} # Mantido vazio
+        self.dados_macro = {} 
         self.metricas_performance = pd.DataFrame()
-        self.volatilidades_garch_raw = {} # Novo: guarda o GARCH lido do arquivo
+        self.volatilidades_garch_raw = {}
 
     def coletar_e_processar_dados(self, simbolos: list) -> bool:
         """Carrega o DataFrame individual de cada ativo do GCS (CSV via HTTP) e reestrutura."""
