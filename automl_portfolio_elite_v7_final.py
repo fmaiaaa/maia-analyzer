@@ -2636,8 +2636,6 @@ def aba_construtor_portfolio():
 def coletar_ativo_unico_gcs(ativo_selecionado: str):
     """Carrega dados de um único ativo do GCS, separa histórico e fundamentos."""
     
-    # ⚠️ REQUER: A constante global GCS_METADATA_COLS
-    
     try:
         df_ativo = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, ativo_selecionado)
         
@@ -2659,7 +2657,6 @@ def coletar_ativo_unico_gcs(ativo_selecionado: str):
         # 2. Extrai Fundamentos (da última linha)
         
         if isinstance(df_ativo.index, pd.MultiIndex):
-             # Acessa a última linha do MultiIndex
              last_row = df_ativo.loc[(df_ativo.index.get_level_values('Date')[-1], ativo_selecionado)]
         else:
              last_row = df_ativo.iloc[-1]
@@ -2669,14 +2666,21 @@ def coletar_ativo_unico_gcs(ativo_selecionado: str):
         fund_data = {k.replace('fund_', ''): v for k, v in fund_data.items()}
         
         # B. Métricas de Performance e Setor (Colunas não-prefixadas)
+        # Garante que as colunas críticas ausentes em fund_data sejam capturadas diretamente se existirem no CSV
         for col_meta in GCS_METADATA_COLS:
+            # Esta linha já adiciona sharpe, garch_vol, etc.
             fund_data[col_meta] = last_row.get(col_meta, np.nan)
+        
+        # CORREÇÃO ADICIONAL: Garante que BETA seja capturado, pois não está em GCS_METADATA_COLS mas está na lista de colunas fund_
+        fund_data['beta'] = fund_data.get('beta', last_row.get('fund_beta', np.nan)) 
+        
+        fund_data['sector'] = last_row.get('sector', 'Unknown')
+        fund_data['industry'] = last_row.get('industry', 'Unknown')
         
         # Retorna Histórico e Fundamentos (como dicionário)
         return hist, fund_data
         
     except Exception as e:
-        # st.error(f"Erro no carregamento sob demanda do GCS: {str(e)}") # Comentado para evitar erro em cascata
         return None, None
     
 
@@ -2777,11 +2781,15 @@ def aba_analise_individual():
                 variacao_dia = df_completo['returns'].iloc[-1] * 100 if not df_completo.empty and 'returns' in df_completo.columns else np.nan
                 volume_medio = df_completo['Volume'].mean() if not df_completo.empty and 'Volume' in df_completo.columns else np.nan
                 
+                # Leitura do Beta (garantido pelo get)
+                beta_val = features_fund.get('beta', np.nan)
+                
                 col1.metric("Preço Atual", f"R$ {preco_atual:.2f}" if not np.isnan(preco_atual) else "N/A", f"{variacao_dia:+.2f}%" if not np.isnan(variacao_dia) else "N/A")
                 col2.metric("Volume Médio", f"{volume_medio:,.0f}" if not np.isnan(volume_medio) else "N/A")
                 col3.metric("Setor", features_fund.get('sector', 'N/A'))
                 col4.metric("Indústria", features_fund.get('industry', 'N/A'))
-                col5.metric("Beta", f"{features_fund.get('beta', np.nan):.2f}" if not np.isnan(features_fund.get('beta')) else "N/A")
+                # Garante que o Beta é lido do dicionário features_fund (onde está agora)
+                col5.metric("Beta", f"{beta_val:.2f}" if not pd.isna(beta_val) else "N/A")
                 
                 # Candlestick chart with Volume (Code unchanged)
                 if not df_completo.empty and 'Open' in df_completo.columns and 'Volume' in df_completo.columns:
@@ -2920,19 +2928,21 @@ def aba_analise_individual():
                 # ⚠️ CORREÇÃO DY Médio 5A: Não está no seu ETL. Mantido como N/A.
                 col3.metric("DY Médio 5A", "N/A" ) 
                 
+                # --- Crescimento ---
                 st.markdown("#### Crescimento")
                 col1, col2, col3 = st.columns(3)
                 col1.metric("Cresc. Receita", f"{features_fund.get('revenue_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('revenue_growth')) else "N/A")
-                col2.metric("Cresc. Lucros", f"{features_fund.get('earnings_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('earnings_growth')) else "N/A")
-                # ⚠️ CORREÇÃO Cresc. Lucros (Q): Não está no seu ETL. Mantido como N/A.
-                col3.metric("Cresc. Lucros (Q)", "N/A")
-        
+                col2.metric("Cresc. Lucros (Anual)", f"{features_fund.get('earnings_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('earnings_growth')) else "N/A")
+                # Exibição do Crescimento trimestral (ainda N/A, pois não está no ETL)
+                col3.metric("Cresc. Lucros (Q)", "N/A") 
+
+                # --- Saúde Financeira ---
                 st.markdown("#### Saúde Financeira")
                 col1, col2, col3, col4 = st.columns(4)
                 col1.metric("Dívida/Patrimônio", f"{features_fund.get('debt_to_equity', np.nan):.2f}" if not pd.isna(features_fund.get('debt_to_equity')) else "N/A")
                 col2.metric("Current Ratio", f"{features_fund.get('current_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('current_ratio')) else "N/A")
                 col3.metric("Quick Ratio", f"{features_fund.get('quick_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('quick_ratio')) else "N/A")
-                # ⚠️ CORREÇÃO Fluxo de Caixa Livre: Não está no seu ETL. Mantido como N/A.
+                # Exibição do Fluxo de Caixa Livre (ainda N/A, pois não está no ETL)
                 col4.metric("Fluxo de Caixa Livre", "N/A")
                 
                 st.markdown("---")
