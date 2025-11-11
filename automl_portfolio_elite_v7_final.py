@@ -2874,6 +2874,46 @@ def aba_construtor_portfolio():
                     """, unsafe_allow_html=True)
 
 # =============================================================================
+# FUNÇÃO AUXILIAR: COLETAR DADOS DE UM ÚNICO ATIVO DO GCS
+# =============================================================================
+
+def coletar_ativo_unico_gcs(ativo_selecionado: str):
+    """Cria uma instância do coletor GCS e carrega dados de um único ativo."""
+    try:
+        # Usa ColetorDadosGCS para extrair dados
+        coletor_rapido = ColetorDadosGCS()
+        simbolos = [ativo_selecionado]
+        
+        # Simula a coleta para apenas um ativo, ignorando o requisito NUM_ATIVOS_PORTFOLIO
+        
+        # CHAMA A FUNÇÃO DE CARREGAMENTO INDIVIDUAL (Requer carregar dados e features)
+        df_ativo = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, ativo_selecionado)
+        
+        MIN_DIAS_HISTORICO_FLEXIVEL = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+        
+        if df_ativo.empty or 'Close' not in df_ativo.columns or len(df_ativo) < MIN_DIAS_HISTORICO_FLEXIVEL:
+            st.error(f"❌ Dados insuficientes/inválidos no GCS para {ativo_selecionado.replace('.SA', '')}")
+            return None, None
+            
+        # 1. Armazena Histórico/Features
+        cols_to_drop = [c for c in df_ativo.columns if c.startswith('fund_') or c in coletor_rapido.cols_fixed]
+        hist = df_ativo.drop(columns=cols_to_drop, errors='ignore').dropna(how='all')
+        
+        # 2. Extrai Fundamentos
+        last_row = df_ativo.iloc[-1]
+        fund_data = last_row.filter(regex='^fund_').to_dict()
+        fund_data = {k.replace('fund_', ''): v for k, v in fund_data.items()}
+        fund_data['sector'] = last_row.get('sector', 'Unknown')
+        fund_data['industry'] = last_row.get('industry', 'Unknown')
+        
+        # Retorna Histórico e Fundamentos (como dicionário)
+        return hist, fund_data
+        
+    except Exception as e:
+        st.error(f"Erro no carregamento sob demanda do GCS: {str(e)}")
+        return None, None
+    
+# =============================================================================
 # FUNÇÃO: INTERFACE STREAMLIT - ABA ANÁLISE INDIVIDUAL (APENAS GCS)
 # =============================================================================
 
@@ -2915,37 +2955,40 @@ def aba_analise_individual():
         st.info("👆 Selecione um ativo e clique em 'Analisar Ativo' para começar a análise completa.")
         return
     
-    # 3. Execução da Análise (Usando Cache do GCS)
     with st.spinner(f"Analisando {ativo_selecionado} (Dados do GCS)..."):
         try:
-            # 3.1. Obtenção de Dados Históricos (Preços + Features Técnicas)
-            # hist já contém todas as features técnicas (rsi_14, macd, etc.) calculadas pelo EngenheiroFeatures no Construtor
-            hist = builder.dados_por_ativo.get(ativo_selecionado)
+            df_completo = None
+            features_fund = None
+
+            # 3.1. Tenta usar o cache (se a Aba 3 foi rodada)
+            if 'builder' in st.session_state and st.session_state.builder is not None:
+                builder = st.session_state.builder
+                
+                # Checa se o ativo está no cache
+                if ativo_selecionado in builder.dados_por_ativo:
+                    # Se está no cache, usa os dados pré-carregados
+                    df_completo_cache = builder.dados_por_ativo[ativo_selecionado].copy().dropna()
+                    features_fund = builder.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
+                    
+                    if not df_completo_cache.empty:
+                        df_completo = df_completo_cache
+                    else:
+                        # Cache estava vazio, coleta sob demanda
+                        st.info("Cache vazio. Coletando dados sob demanda do GCS.")
+                        df_completo, features_fund = coletar_ativo_unico_gcs(ativo_selecionado)
+                else:
+                    # Ativo não estava na lista da Aba 3, coleta sob demanda
+                    st.info("Coletando dados sob demanda do GCS.")
+                    df_completo, features_fund = coletar_ativo_unico_gcs(ativo_selecionado)
+            else:
+                # 3.2. Carregamento inicial se a Aba 3 nunca foi rodada
+                st.info("Construtor não executado. Coletando dados sob demanda do GCS.")
+                df_completo, features_fund = coletar_ativo_unico_gcs(ativo_selecionado)
             
-            # 3.2. Obtenção de Dados Fundamentalistas (Cache)
-            features_fund_df = builder.dados_fundamentalistas.loc[ativo_selecionado]
-            # Converte a Série fundamentalista em um dicionário (removendo prefixos 'fund_' que já foram removidos na extração)
-            features_fund = features_fund_df.to_dict()
-            
-            # 3.3. Validação
-            if hist is None or hist.empty or 'Close' not in hist.columns:
-                st.error(f"❌ Dados históricos (preços e features) de **{ativo_selecionado.replace('.SA', '')}** não foram carregados corretamente pelo GCS/Construtor.")
+            # ⚠️ VERIFICAÇÃO FINAL APÓS TENTATIVAS DE CACHE E SOB DEMANDA
+            if df_completo is None or df_completo.empty or 'Close' not in df_completo.columns:
+                st.error(f"❌ Não foi possível obter dados (Histórico/Features) válidos do GCS para **{ativo_selecionado.replace('.SA', '')}**.")
                 return
-            
-            # 3.4. Prepara o DataFrame Completo para as Visualizações
-            # O AnalisadorIndividualAtivos.calcular_todos_indicadores_tecnicos é chamado novamente aqui
-            # para garantir que as features do seu CSV estejam completas e prontas.
-            # No entanto, para otimização e assumindo que o ETL é completo, usamos a cópia do cache.
-            # Como as visualizações (RSI, MACD, Candlestick) requerem as colunas originais:
-            
-            # Garante que o df_completo é a versão mais limpa e completa
-            df_completo = hist.copy().dropna()
-            
-            # Se for necessário recalcular as features para o TAB2 (Análise Técnica) 
-            # (Remover o comentário se as features no cache 'hist' não estiverem completas):
-            # df_completo = AnalisadorIndividualAtivos.calcular_todos_indicadores_tecnicos(hist.loc[:, ['Open', 'High', 'Low', 'Close', 'Volume']].dropna())
-
-
             # 4. Exibição nas Abas (Código de visualização inalterado a partir daqui)
             tab1, tab2, tab3, tab4, tab5 = st.tabs([
                 "📊 Visão Geral",
