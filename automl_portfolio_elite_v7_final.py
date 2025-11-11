@@ -692,83 +692,6 @@ class EngenheiroFeatures:
             # Normalização invertida (quanto menor, melhor)
             return (max_val - serie) / (max_val - min_val)
 
-# =============================================================================
-# FUNÇÃO AUXILIAR: COLETA ROBusta
-# =============================================================================
-
-# FUNÇÃO AUXILIAR: COLETA ROBusta E RESILIENTE (VERSÃO p_a ADAPTADA)
-def coletar_historico_ativo_robusto(ticker, periodo, min_dias_historico, max_retries=3, initial_delay=5): # Delay aumentado para Cloud
-    """
-    Coleta dados históricos do ativo usando yfinance com retentativas, 
-    variações de ticker e validação de tamanho mínimo.
-    
-    Retorna: (DataFrame com histórico, mensagem_de_erro)
-    """
-    import yfinance as yf
-    import time
-    
-    def get_ticker_variations_b3(symbol):
-        """ Gera variações do ticker para aumentar chance de sucesso. """
-        variations = [symbol]
-        if symbol.endswith('.SA'):
-            base = symbol[:-3]
-            variations.append(base)
-            variations.append(base + '.SAO')
-        else:
-            if len(symbol) <= 6 and not symbol.endswith(('.L', '.PA', '.NY')):
-                variations.append(symbol + '.SA')
-                variations.append(symbol + '.SAO')
-        
-        # Remove duplicatas e garante que o original está no início
-        return list(dict.fromkeys(variations))
-
-    simbolo_completo = ticker if ticker.endswith('.SA') else f"{ticker}.SA"
-    min_dias_flexivel = max(180, int(min_dias_historico * 0.7))
-    
-    for attempt in range(max_retries):
-        found_valid_data = False
-        last_error = "Coleta não tentada."
-        
-        for attempt_ticker in get_ticker_variations_b3(simbolo_completo):
-            try:
-                # Prioriza yf.Ticker().history() (mais robusto)
-                ticker_obj = yf.Ticker(attempt_ticker)
-                hist = ticker_obj.history(
-                    period=periodo,
-                    interval="1d",
-                    auto_adjust=True,
-                    timeout=15 
-                )
-                
-                # Fallback para yf.download se o Ticker().history falhar ou retornar pouco
-                if hist.empty or len(hist) < 5: 
-                    hist = yf.download(
-                        attempt_ticker,
-                        period=periodo,
-                        progress=False,
-                        timeout=10
-                    )
-
-                if not hist.empty and len(hist) >= min_dias_flexivel:
-                    found_valid_data = True
-                    break
-                    
-            except Exception as e:
-                last_error = str(e)
-                continue
-
-        if found_valid_data:
-            return hist, None
-        
-        if attempt < max_retries - 1:
-            delay = initial_delay * (2 ** attempt)
-            print(f"  [Tentativa {attempt+1}] Falha em {simbolo_completo}. Esperando {delay}s...")
-            time.sleep(delay)
-            continue
-        else:
-            return None, f"Erro na coleta após {max_retries} tentativas: {last_error[:50]}"
-            
-    return None, "Falha desconhecida na coleta."
 
 
 # =============================================================================
@@ -778,23 +701,27 @@ def coletar_historico_ativo_robusto(ticker, periodo, min_dias_historico, max_ret
 def carregar_dados_ativo_gcs_csv(base_url: str, ticker: str) -> pd.DataFrame:
     """Carrega o DataFrame de um único ativo (ticker) via URL pública do GCS (formato CSV)."""
     
-    # Monta o URL completo (ex: https://storage.googleapis.com/.../AALR3.SA.csv)
     file_name = f"{ticker}.csv"
     full_url = f"{base_url}{file_name}"
     
     try:
-        # Usa pandas.read_csv diretamente do endpoint HTTP
         df_ativo = pd.read_csv(full_url)
         
         # Garante que 'Date' é o índice e um datetime
         if 'Date' in df_ativo.columns:
             df_ativo = df_ativo.set_index('Date')
-        df_ativo.index = pd.to_datetime(df_ativo.index)
-
+            
+        # ⚠️ NOVO: Converte o índice para datetime e remove a informação de fuso horário
+        df_ativo.index = pd.to_datetime(df_ativo.index, utc=True).tz_convert(None) 
+        
+        # ⚠️ NOVO: Garante que colunas numéricas (exceto strings) sejam lidas como float (trata erros como NaN)
+        for col in df_ativo.columns:
+            if col not in ['ticker', 'sector', 'industry']:
+                df_ativo[col] = pd.to_numeric(df_ativo[col], errors='coerce')
+        
         return df_ativo
 
     except Exception as e:
-        # Erro de leitura pode ser 404 (arquivo não existe) ou erro de parse
         # print(f"❌ Erro ao carregar {ticker} via CSV/HTTP: {e}")
         return pd.DataFrame()
     
@@ -851,17 +778,20 @@ class ColetorDadosGCS(object): # Não herda de ColetorDados, pois a estrutura de
             self.dados_por_ativo[simbolo] = df_ativo_history
             self.ativos_sucesso.append(simbolo)
             
-            # --- 2. EXTRAÇÃO DE MÉTRICAS FIXAS (ÚLTIMA LINHA) ---
+            # ⚠️ CORREÇÃO PRINCIPAL AQUI:
+            # Não use fillna(0) para não mascarar métricas nulas do ETL como zero, mas use o fallback .get()
+            last_row = df_ativo.iloc[-1] 
             
-            last_row = df_ativo.iloc[-1]
-            
-            # A. Fundamentos e Setor (Remove prefixo 'fund_')
-            fund_data = last_row.filter(regex='^(fund_|sector|industry)').to_dict()
+            # A. Fundamentos e Setor (Trata strings separadamente)
+            fund_data = last_row.filter(regex='^fund_').to_dict()
             fund_data = {k.replace('fund_', ''): v for k, v in fund_data.items()}
+            # Garante que setor e indústria (strings) são extraídos corretamente ou são 'Unknown'
+            fund_data['sector'] = last_row.get('sector', 'Unknown')
+            fund_data['industry'] = last_row.get('industry', 'Unknown')
             fund_data['Ticker'] = simbolo
             lista_fundamentalistas.append(fund_data)
             
-            # B. Métricas de Performance
+            # B. Métricas de Performance (Usa get com fallback np.nan)
             metricas[simbolo] = {
                 'retorno_anual': last_row.get('annual_return', np.nan),
                 'volatilidade_anual': last_row.get('annual_volatility', np.nan),
@@ -869,7 +799,7 @@ class ColetorDadosGCS(object): # Não herda de ColetorDados, pois a estrutura de
                 'max_drawdown': last_row.get('max_drawdown', np.nan)
             }
             
-            # C. Volatilidade GARCH
+            # C. Volatilidade GARCH (Usa get com fallback np.nan)
             garch_vols[simbolo] = last_row.get('garch_volatility', np.nan)
             
         # --- 3. FINALIZAÇÃO E POPULAÇÃO DOS ATRIBUTOS ---
