@@ -103,7 +103,7 @@ warnings.filterwarnings('ignore')
 # =============================================================================
 
 # Período de coleta de dados. 'max' indica o máximo disponível no yfinance.
-PERIODO_DADOS = 'max'
+PERIODO_DADOS = '5y'
 # Mínimo de dias úteis para considerar um histórico válido (aprox. 1 ano)
 MIN_DIAS_HISTORICO = 252
 # Número de ativos a serem selecionados para compor o portfólio final
