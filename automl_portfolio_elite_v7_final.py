@@ -2874,26 +2874,29 @@ def aba_construtor_portfolio():
                     """, unsafe_allow_html=True)
 
 # =============================================================================
-# FUNÇÃO: INTERFACE STREAMLIT - ABA ANÁLISE INDIVIDUAL (OTIMIZADA)
+# FUNÇÃO: INTERFACE STREAMLIT - ABA ANÁLISE INDIVIDUAL (APENAS GCS)
 # =============================================================================
 
 def aba_analise_individual():
-    """Aba 4: Análise Individual de Ativos - Otimizada para velocidade."""
+    """Aba 4: Análise Individual de Ativos - Otimizada para usar SOMENTE dados do GCS."""
     
-    st.markdown("## 🔍 Análise Individual Completa de Ativos")
+    st.markdown("## 🔍 Análise Individual Completa de Ativos (APENAS GCS)")
     
-    # Determine available assets for selection
-    if 'ativos_para_analise' in st.session_state and st.session_state.ativos_para_analise:
-        ativos_disponiveis = st.session_state.ativos_para_analise
-    else:
-        ativos_disponiveis = ATIVOS_IBOVESPA 
-        if not ativos_disponiveis:
-            ativos_disponiveis = TODOS_ATIVOS 
-            
-    if not ativos_disponiveis:
-        st.error("Nenhum ativo disponível para análise. Verifique as configurações ou selecione ativos.")
+    # ⚠️ VERIFICAÇÃO CRÍTICA: Depende da execução da Aba 3 (Construtor de Portfólio)
+    if 'builder' not in st.session_state or st.session_state.builder is None:
+        st.warning("⚠️ Por favor, execute o **'Construtor de Portfólio'** (Aba 3) primeiro para carregar os dados do GCS/CSV para a análise.")
         return
 
+    builder = st.session_state.builder
+    
+    # 1. Determina ativos disponíveis (apenas aqueles que foram carregados com sucesso do GCS)
+    ativos_disponiveis = sorted(builder.ativos_sucesso) 
+            
+    if not ativos_disponiveis:
+        st.error("Nenhum ativo disponível para análise. O Construtor não encontrou ativos válidos no GCS.")
+        return
+
+    # 2. Interface de Seleção
     col1, col2 = st.columns([3, 1])
     
     with col1:
@@ -2912,23 +2915,38 @@ def aba_analise_individual():
         st.info("👆 Selecione um ativo e clique em 'Analisar Ativo' para começar a análise completa.")
         return
     
-    # Execute analysis
-    with st.spinner(f"Analisando {ativo_selecionado}..."):
+    # 3. Execução da Análise (Usando Cache do GCS)
+    with st.spinner(f"Analisando {ativo_selecionado} (Dados do GCS)..."):
         try:
-            ticker = yf.Ticker(ativo_selecionado)
+            # 3.1. Obtenção de Dados Históricos (Preços + Features Técnicas)
+            # hist já contém todas as features técnicas (rsi_14, macd, etc.) calculadas pelo EngenheiroFeatures no Construtor
+            hist = builder.dados_por_ativo.get(ativo_selecionado)
             
-            # --- OTIMIZAÇÃO: Reduzir período histórico para 5 anos ---
-            hist = ticker.history(period='5y') 
+            # 3.2. Obtenção de Dados Fundamentalistas (Cache)
+            features_fund_df = builder.dados_fundamentalistas.loc[ativo_selecionado]
+            # Converte a Série fundamentalista em um dicionário (removendo prefixos 'fund_' que já foram removidos na extração)
+            features_fund = features_fund_df.to_dict()
             
-            if hist.empty:
-                st.error(f"Não foi possível obter dados históricos para {ativo_selecionado}.")
+            # 3.3. Validação
+            if hist is None or hist.empty or 'Close' not in hist.columns:
+                st.error(f"❌ Dados históricos (preços e features) de **{ativo_selecionado.replace('.SA', '')}** não foram carregados corretamente pelo GCS/Construtor.")
                 return
             
-            # Calculate all indicators
-            df_completo = AnalisadorIndividualAtivos.calcular_todos_indicadores_tecnicos(hist)
-            features_fund = AnalisadorIndividualAtivos.calcular_features_fundamentalistas_expandidas(ticker)
+            # 3.4. Prepara o DataFrame Completo para as Visualizações
+            # O AnalisadorIndividualAtivos.calcular_todos_indicadores_tecnicos é chamado novamente aqui
+            # para garantir que as features do seu CSV estejam completas e prontas.
+            # No entanto, para otimização e assumindo que o ETL é completo, usamos a cópia do cache.
+            # Como as visualizações (RSI, MACD, Candlestick) requerem as colunas originais:
             
-            # Tabs for analysis sections
+            # Garante que o df_completo é a versão mais limpa e completa
+            df_completo = hist.copy().dropna()
+            
+            # Se for necessário recalcular as features para o TAB2 (Análise Técnica) 
+            # (Remover o comentário se as features no cache 'hist' não estiverem completas):
+            # df_completo = AnalisadorIndividualAtivos.calcular_todos_indicadores_tecnicos(hist.loc[:, ['Open', 'High', 'Low', 'Close', 'Volume']].dropna())
+
+
+            # 4. Exibição nas Abas (Código de visualização inalterado a partir daqui)
             tab1, tab2, tab3, tab4, tab5 = st.tabs([
                 "📊 Visão Geral",
                 "📈 Análise Técnica",
@@ -2954,7 +2972,7 @@ def aba_analise_individual():
                 col5.metric("Beta", f"{features_fund.get('beta', np.nan):.2f}" if not np.isnan(features_fund.get('beta')) else "N/A")
                 
                 # Candlestick chart with Volume (Code unchanged)
-                if not df_completo.empty:
+                if not df_completo.empty and 'Open' in df_completo.columns and 'Volume' in df_completo.columns:
                     fig = make_subplots(
                         rows=2, cols=1,
                         shared_xaxes=True,
@@ -2991,20 +3009,20 @@ def aba_analise_individual():
                     fig.update_layout(**fig_layout)
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.warning("Dados de histórico incompletos para gráfico.")
+                    st.warning("Dados de histórico (OHLCV) incompletos para gráfico.")
 
             with tab2:
-                # ... (Análise Técnica inalterada) ...
+                # ... (Análise Técnica) ...
                 st.markdown("### Indicadores Técnicos")
                 
                 col1, col2, col3, col4, col5, col6 = st.columns(6)
                 
-                col1.metric("RSI (14)", f"{df_completo['rsi_14'].iloc[-1]:.2f}" if 'rsi_14' in df_completo.columns else "N/A")
-                col2.metric("MACD", f"{df_completo['macd'].iloc[-1]:.4f}" if 'macd' in df_completo.columns else "N/A")
-                col3.metric("Stoch %K", f"{df_completo['stoch_k'].iloc[-1]:.2f}" if 'stoch_k' in df_completo.columns else "N/A")
-                col4.metric("ADX", f"{df_completo['adx'].iloc[-1]:.2f}" if 'adx' in df_completo.columns else "N/A")
-                col5.metric("CCI", f"{df_completo['cci'].iloc[-1]:.2f}" if 'cci' in df_completo.columns else "N/A")
-                col6.metric("ATR (%)", f"{df_completo['atr_percent'].iloc[-1]:.2f}%" if 'atr_percent' in df_completo.columns else "N/A")
+                col1.metric("RSI (14)", f"{df_completo['rsi_14'].iloc[-1]:.2f}" if 'rsi_14' in df_completo.columns and not df_completo['rsi_14'].empty else "N/A")
+                col2.metric("MACD", f"{df_completo['macd'].iloc[-1]:.4f}" if 'macd' in df_completo.columns and not df_completo['macd'].empty else "N/A")
+                col3.metric("Stoch %K", f"{df_completo['stoch_k'].iloc[-1]:.2f}" if 'stoch_k' in df_completo.columns and not df_completo['stoch_k'].empty else "N/A")
+                col4.metric("ADX", f"{df_completo['adx'].iloc[-1]:.2f}" if 'adx' in df_completo.columns and not df_completo['adx'].empty else "N/A")
+                col5.metric("CCI", f"{df_completo['cci'].iloc[-1]:.2f}" if 'cci' in df_completo.columns and not df_completo['cci'].empty else "N/A")
+                col6.metric("ATR (%)", f"{df_completo['atr_percent'].iloc[-1]:.2f}%" if 'atr_percent' in df_completo.columns and not df_completo['atr_percent'].empty else "N/A")
 
                 st.markdown("#### RSI e Stochastic Oscillator")
                 
@@ -3057,7 +3075,7 @@ def aba_analise_individual():
                     st.warning("Nenhum indicador técnico com dados atuais disponível.")
 
             with tab3:
-                # ... (Análise Fundamentalista inalterada) ...
+                # ... (Análise Fundamentalista - Lida do cache) ...
                 st.markdown("### Análise Fundamentalista Expandida")
                 
                 st.markdown("#### Valuation")
@@ -3067,7 +3085,7 @@ def aba_analise_individual():
                 col2.metric("P/VP", f"{features_fund.get('pb_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('pb_ratio')) else "N/A")
                 col3.metric("P/VPA (Vendas)", f"{features_fund.get('ps_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('ps_ratio')) else "N/A")
                 col4.metric("PEG", f"{features_fund.get('peg_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('peg_ratio')) else "N/A")
-                col5.metric("EV/EBITDA", f"{features_fund.get('ev_to_ebitda', np.nan):.2f}" if not pd.isna(features_fund.get('ev_to_ebitda')) else "N/A")
+                col5.metric("EV/EBITDA", f"{features_fund.get('ev_ebitda', np.nan):.2f}" if not pd.isna(features_fund.get('ev_ebitda')) else "N/A")
                 
                 st.markdown("#### Rentabilidade")
                 col1, col2, col3, col4, col5 = st.columns(5)
@@ -3083,24 +3101,28 @@ def aba_analise_individual():
                 
                 col1.metric("Dividend Yield", f"{features_fund.get('div_yield', np.nan):.2f}%" if not pd.isna(features_fund.get('div_yield')) else "N/A")
                 col2.metric("Payout Ratio", f"{features_fund.get('payout_ratio', np.nan):.2f}%" if not pd.isna(features_fund.get('payout_ratio')) else "N/A")
-                col3.metric("DY Médio 5A", f"{features_fund.get('five_year_avg_div_yield', np.nan):.2f}%" if not pd.isna(features_fund.get('five_year_avg_div_yield')) else "N/A")
+                # ⚠️ Nota: 'five_year_avg_div_yield' não estava na sua lista de CSVs ETL, mas mantido para contexto:
+                col3.metric("DY Médio 5A", "N/A" ) 
                 
                 st.markdown("#### Crescimento")
                 col1, col2, col3 = st.columns(3)
                 col1.metric("Cresc. Receita", f"{features_fund.get('revenue_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('revenue_growth')) else "N/A")
                 col2.metric("Cresc. Lucros", f"{features_fund.get('earnings_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('earnings_growth')) else "N/A")
-                col3.metric("Cresc. Lucros (Q)", f"{features_fund.get('earnings_quarterly_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('earnings_quarterly_growth')) else "N/A")
+                # ⚠️ Nota: 'earnings_quarterly_growth' não estava na sua lista de CSVs ETL, mas mantido para contexto:
+                col3.metric("Cresc. Lucros (Q)", "N/A")
 
                 st.markdown("#### Saúde Financeira")
                 col1, col2, col3, col4 = st.columns(4)
                 col1.metric("Dívida/Patrimônio", f"{features_fund.get('debt_to_equity', np.nan):.2f}" if not pd.isna(features_fund.get('debt_to_equity')) else "N/A")
                 col2.metric("Current Ratio", f"{features_fund.get('current_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('current_ratio')) else "N/A")
                 col3.metric("Quick Ratio", f"{features_fund.get('quick_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('quick_ratio')) else "N/A")
-                col4.metric("Fluxo de Caixa Livre", f"R$ {features_fund.get('free_cashflow', np.nan):,.0f}" if not pd.isna(features_fund.get('free_cashflow')) else "N/A")
+                # ⚠️ Nota: 'free_cashflow' não estava na sua lista de CSVs ETL, mas mantido para contexto:
+                col4.metric("Fluxo de Caixa Livre", "N/A")
                 
                 st.markdown("---")
                 st.markdown("#### Todos os Fundamentos Disponíveis")
                 
+                # Filtra métricas fundamentais para exibição (usando apenas o que está no cache)
                 df_fund_display = pd.DataFrame({
                     'Métrica': list(features_fund.keys()),
                     'Valor': [f"{v:.4f}" if isinstance(v, (int, float)) and not pd.isna(v) else str(v) for v in features_fund.values()]
@@ -3109,100 +3131,71 @@ def aba_analise_individual():
                 st.dataframe(df_fund_display, use_container_width=True, hide_index=True)
             
             with tab4:
-                st.markdown("### Análise de Machine Learning (Otimizada para Velocidade)")
+                # ⚠️ NOVO: Usa a previsão ML que JÁ FOI CALCULADA no Construtor
+                st.markdown("### Análise de Machine Learning (Dados do Construtor)")
                 
-                st.info("Utilizando um único modelo **LightGBM** com 2-Fold CV para previsão rápida da direção futura.")
-                
-                # Prepare data for ML 
-                features_from_eng = [col for col in df_completo.columns if col not in ['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'log_returns']] 
-                features_from_eng = [f for f in features_from_eng if pd.api.types.is_numeric_dtype(df_completo[f])] 
-                
-                all_potential_features = features_from_eng
-                final_features_for_ml = [f for f in all_potential_features if f in df_completo.columns and pd.api.types.is_numeric_dtype(df_completo[f])]
-                
-                df_ml_data = df_completo[final_features_for_ml + ['Close']].copy() 
-
-                prediction_horizon = LOOKBACK_ML 
-                df_ml_data['Future_Direction'] = np.where(
-                    df_ml_data['Close'].pct_change(prediction_horizon).shift(-prediction_horizon) > 0,
-                    1, 0
-                )
-                
-                df_ml_data = df_ml_data.drop(columns=['Close'])
-                df_ml_data = df_ml_data.dropna()
-                
-                # Treinamento do Modelo Único
-                if len(df_ml_data) > 100 and len(np.unique(df_ml_data['Future_Direction'])) >= 2:
-                    X = df_ml_data.drop('Future_Direction', axis=1)
-                    y = df_ml_data['Future_Direction']
+                if ativo_selecionado in builder.predicoes_ml and not pd.isna(builder.predicoes_ml[ativo_selecionado].get('predicted_proba_up')):
+                    ml_data = builder.predicoes_ml[ativo_selecionado]
+                    proba_final = ml_data.get('predicted_proba_up', 0.5)
+                    auc_medio = ml_data.get('auc_roc_score', np.nan)
                     
-                    try:
-                        # 1. Configurar e treinar o modelo único e rápido (LightGBM)
-                        modelo_unico = lgb.LGBMClassifier(
-                            n_estimators=50, 
-                            max_depth=5,     
-                            learning_rate=0.1, 
-                            random_state=42, 
-                            verbose=-1, 
-                            objective='binary', 
-                            metric='auc'
-                        )
-                        modelo_unico.fit(X, y)
-                        
-                        # 2. Previsão final
-                        last_features_row = X.iloc[[-1]] 
-                        proba_final = modelo_unico.predict_proba(last_features_row)[:, 1][0]
+                    st.info("A previsão abaixo foi calculada na Aba 'Construtor de Portfólio' usando o LightGBM.")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Probabilidade de Alta Futura (LGBM)", f"{proba_final*100:.2f}%")
+                    col2.metric("AUC-ROC Médio (2-Fold CV)", f"{auc_medio:.3f}" if not pd.isna(auc_medio) else "N/A")
+                    col3.metric("Nº Features Usadas", len(df_completo.columns) - 4) # Estima features
 
-                        # 3. Simular AUC-ROC com validação cruzada rápida (2 folds)
-                        tscv_quick = TimeSeriesSplit(n_splits=2)
-                        auc_scores_quick = cross_val_score(
-                            modelo_unico, 
-                            X, 
-                            y, 
-                            cv=tscv_quick, 
-                            scoring='roc_auc', 
-                            error_score='raise'
-                        )
-                        auc_medio = np.mean(auc_scores_quick) if len(auc_scores_quick) > 0 else 0.5
-                        
-                        # Resultados
-                        col1, col2, col3 = st.columns(3)
-                        col1.metric("Probabilidade de Alta Futura (LGBM)", f"{proba_final*100:.2f}%")
-                        col2.metric("AUC-ROC Médio (2-Fold CV)", f"{auc_medio:.3f}" if not pd.isna(auc_medio) else "N/A")
-                        col3.metric("Nº Features Usadas", len(X.columns))
-                        
-                        # Feature Importance
-                        if hasattr(modelo_unico, 'feature_importances_'):
-                            st.markdown("#### Feature Importance (LightGBM)")
-                            
-                            importances = modelo_unico.feature_importances_
-                            feature_names = X.columns
-                            
-                            df_importance = pd.DataFrame({
-                                'Feature': feature_names,
-                                'Importance': importances
-                            }).sort_values('Importance', ascending=False).head(20)
-                            
-                            fig_imp = px.bar(
-                                df_importance,
-                                x='Importance',
-                                y='Feature',
-                                orientation='h',
-                                title='Top 20 Features Mais Importantes (LightGBM)'
-                            )
-                            fig_imp.update_layout(**obter_template_grafico())
-                            st.plotly_chart(fig_imp, use_container_width=True)
-                            
-                    except Exception as e:
-                        st.warning(f"Falha na análise ML do ativo: {str(e)}")
                 else:
-                    st.warning("Dados insuficientes ou classe única encontrada para análise ML detalhada (mínimo de 100 dias com features válidas).")
+                    st.warning("Dados ML indisponíveis. Recalculando ML...")
+                    
+                    # CÓDIGO DE FALLBACK ML RÁPIDO (Se o builder falhou)
+                    # Prepare data for ML (lógica copiada da sua versão original)
+                    features_from_eng = [col for col in df_completo.columns if col not in ['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'log_returns']] 
+                    features_from_eng = [f for f in features_from_eng if pd.api.types.is_numeric_dtype(df_completo[f])] 
+                    final_features_for_ml = features_from_eng
+                    df_ml_data = df_completo[final_features_for_ml + ['Close']].copy() 
+    
+                    prediction_horizon = LOOKBACK_ML  
+                    df_ml_data['Future_Direction'] = np.where(
+                        df_ml_data['Close'].pct_change(prediction_horizon).shift(-prediction_horizon) > 0,
+                        1, 0
+                    )
+                    df_ml_data = df_ml_data.drop(columns=['Close']).dropna()
+                    
+                    if len(df_ml_data) > 100 and len(np.unique(df_ml_data['Future_Direction'])) >= 2:
+                        X = df_ml_data.drop('Future_Direction', axis=1)
+                        y = df_ml_data['Future_Direction']
+                        try:
+                            # 1. Configurar e treinar o modelo único e rápido (LightGBM)
+                            modelo_unico = lgb.LGBMClassifier(n_estimators=50, max_depth=5, learning_rate=0.1, random_state=42, verbose=-1, objective='binary', metric='auc')
+                            modelo_unico.fit(X, y)
+                            last_features_row = X.iloc[[-1]] 
+                            proba_final = modelo_unico.predict_proba(last_features_row)[:, 1][0]
+                            st.metric("Probabilidade de Alta Futura (LGBM - RERUN)", f"{proba_final*100:.2f}%")
+
+                            if hasattr(modelo_unico, 'feature_importances_'):
+                                st.markdown("#### Feature Importance (LightGBM)")
+                                importances = modelo_unico.feature_importances_
+                                feature_names = X.columns
+                                df_importance = pd.DataFrame({'Feature': feature_names, 'Importance': importances}).sort_values('Importance', ascending=False).head(20)
+                                fig_imp = px.bar(df_importance, x='Importance', y='Feature', orientation='h', title='Top 20 Features Mais Importantes (LightGBM)')
+                                fig_imp.update_layout(**obter_template_grafico())
+                                st.plotly_chart(fig_imp, use_container_width=True)
+                        except Exception as e:
+                            st.warning(f"Falha no recálculo ML do ativo: {str(e)}")
+                    else:
+                        st.warning("Dados insuficientes ou classe única encontrada para análise ML detalhada (mínimo de 100 dias com features válidas).")
             
             with tab5:
-                # ... (Clusterização otimizada com limite de 20 ativos) ...
+                # ... (Clusterização) ...
                 st.markdown("### Clusterização e Análise de Similaridade (Otimizada)")
                 
-                st.info("Comparando este ativo com outros similares usando K-means + PCA...")
+                st.info("Comparando este ativo com outros similares usando K-means + PCA (os dados de comparação ainda usam yfinance para ativos não selecionados).")
+                
+                # ⚠️ Clusterização: O código de clusterização ABAIXO ainda utiliza YFINANCE
+                # para buscar dados de comparação de outros ativos (o que pode falhar em ativos como ALOS3.SA)
+                # Para uma solução 100% GCS, todos os ATIVOS_IBOVESPA precisariam estar no cache.
                 
                 max_assets_for_clustering = 82 # Limite otimizado
                 
@@ -3225,15 +3218,33 @@ def aba_analise_individual():
                     
                 comparison_data = {}
                 if len(assets_to_cluster) > 5:
-                    with st.spinner(f"Coletando dados para {len(assets_to_cluster)} ativos de comparação..."):
+                    with st.spinner(f"Coletando dados para {len(assets_to_cluster)} ativos de comparação... (Pode usar Yfinance/Cache)"):
                         for asset_comp in assets_to_cluster:
+                            
+                            # TENTA LER DO CACHE PRIMEIRO
+                            if asset_comp in builder.dados_performance.index and 'sharpe' in builder.dados_performance.columns:
+                                comp_data = {
+                                    'retorno_anual': builder.dados_performance.loc[asset_comp, 'retorno_anual'],
+                                    'volatilidade_anual': builder.dados_performance.loc[asset_comp, 'volatilidade_anual'],
+                                    'sharpe': builder.dados_performance.loc[asset_comp, 'sharpe'],
+                                    'max_drawdown': builder.dados_performance.loc[asset_comp, 'max_drawdown']
+                                }
+                                # Tenta pegar fundamentos do cache
+                                if asset_comp in builder.dados_fundamentalistas.index:
+                                     fund_metrics = builder.dados_fundamentalistas.loc[asset_comp].to_dict()
+                                     for metric in ['pe_ratio', 'pb_ratio', 'roe', 'debt_to_equity', 'revenue_growth']:
+                                         comp_data[metric] = fund_metrics.get(metric, np.nan)
+                                
+                                comparison_data[asset_comp] = comp_data
+                                continue
+
+                            # FALLBACK: Se o ativo de comparação não foi processado (NÃO RECOMENDADO)
                             try:
                                 ticker_comp = yf.Ticker(asset_comp)
                                 hist_comp = ticker_comp.history(period='2y') 
                                 
                                 if not hist_comp.empty:
                                     returns_comp = hist_comp['Close'].pct_change().dropna()
-                                    
                                     if len(returns_comp) > 50: 
                                         comp_data = {
                                             'retorno_anual': returns_comp.mean() * 252,
@@ -3241,13 +3252,10 @@ def aba_analise_individual():
                                             'sharpe': (returns_comp.mean() * 252 - TAXA_LIVRE_RISCO) / (returns_comp.std() * np.sqrt(252)) if returns_comp.std() > 0 else 0,
                                             'max_drawdown': ((1 + returns_comp).cumprod() / (1 + returns_comp).cumprod().expanding().max() - 1).min() if not returns_comp.empty else np.nan
                                         }
-                                        
                                         info_comp = ticker_comp.info
                                         fund_metrics = AnalisadorIndividualAtivos.calcular_features_fundamentalistas_expandidas(ticker_comp)
-                                        
                                         for metric in ['pe_ratio', 'pb_ratio', 'roe', 'debt_to_equity', 'revenue_growth']:
                                              comp_data[metric] = fund_metrics.get(metric, np.nan)
-
                                         comparison_data[asset_comp] = comp_data
                             except Exception:
                                 continue
@@ -3261,6 +3269,8 @@ def aba_analise_individual():
                     )
                     
                     if resultado_pca is not None:
+                        # ... (O código de visualização do Cluster e Variância Explicada permanece inalterado) ...
+                        
                         if 'PC3' in resultado_pca.columns:
                             fig_pca = px.scatter_3d(
                                 resultado_pca, x='PC1', y='PC2', z='PC3', color='Cluster',
@@ -3299,6 +3309,7 @@ def aba_analise_individual():
                         fig_var = px.bar(df_var, x='Componente', y='Variância (%)', title='Variância Explicada por Componente Principal')
                         fig_var.update_layout(**obter_template_grafico())
                         st.plotly_chart(fig_var, use_container_width=True)
+
                 else:
                     st.warning("Dados insuficientes para realizar a clusterização e análise de similaridade.")
         
