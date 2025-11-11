@@ -105,13 +105,13 @@ warnings.filterwarnings('ignore')
 # Período de coleta de dados. 'max' indica o máximo disponível no yfinance.
 PERIODO_DADOS = 'max'
 # Mínimo de dias úteis para considerar um histórico válido (aprox. 1 ano)
-MIN_DIAS_HISTORICO = 252
+MIN_DIAS_HISTORICO = 126
 # Número de ativos a serem selecionados para compor o portfólio final
 NUM_ATIVOS_PORTFOLIO = 5
 # Taxa Livre de Risco (e.g., CDI/SELIC anualizada) usada no cálculo do Sharpe Ratio
 TAXA_LIVRE_RISCO = 0.1075
 # Janela de lookback (dias) para a previsão dos modelos de Machine Learning
-LOOKBACK_ML = 30
+LOOKBACK_ML = 20
 
 # =============================================================================
 # 2. PONDERAÇÕES E REGRAS DE OTIMIZAÇÃO
@@ -476,7 +476,7 @@ class EngenheiroFeatures:
         df['volatility_252'] = df['returns'].rolling(window=252).std() * np.sqrt(252)
         
         # --- Médias Móveis (SMA, EMA, WMA) ---
-        for periodo in [5, 10, 20, 50, 100, 200]:
+        for periodo in [5, 10, 20, 50, 100]:
             df[f'sma_{periodo}'] = SMAIndicator(close=df['Close'], window=periodo).sma_indicator()
             df[f'ema_{periodo}'] = EMAIndicator(close=df['Close'], window=periodo).ema_indicator()
             
@@ -509,10 +509,10 @@ class EngenheiroFeatures:
         # --- Razões e Cruzamentos ---
         df['price_sma20_ratio'] = df['Close'] / df['sma_20']
         df['price_sma50_ratio'] = df['Close'] / df['sma_50']
-        df['price_sma200_ratio'] = df['Close'] / df['sma_200']
+        df['price_sma200_ratio'] = df['Close'] / df['sma_100']
         df['sma20_sma50_cross'] = (df['sma_20'] > df['sma_50']).astype(int)
-        df['sma50_sma200_cross'] = (df['sma_50'] > df['sma_200']).astype(int)
-        df['death_cross'] = (df['Close'] < df['sma_200']).astype(int)
+        df['sma50_sma200_cross'] = (df['sma_50'] > df['sma_100']).astype(int)
+        df['death_cross'] = (df['Close'] < df['sma_100']).astype(int)
         
         # --- Momentum (RSI, Stoch, Williams %R, MACD) ---
         for periodo in [7, 14, 21, 28]:
@@ -578,7 +578,7 @@ class EngenheiroFeatures:
         cumulative_returns = (1 + df['returns']).cumprod()
         running_max = cumulative_returns.expanding().max()
         df['drawdown'] = (cumulative_returns - running_max) / running_max
-        df['max_drawdown_252'] = df['drawdown'].rolling(252).min()
+        df['max_drawdown_252'] = df['drawdown'].rolling(126).min()
         
         # Lags
         for lag in [1, 5, 10, 20, 60]:
@@ -597,7 +597,7 @@ class EngenheiroFeatures:
         
         # Autocorrelation
         for lag in [1, 5, 10]:
-            df[f'autocorr_{lag}'] = df['returns'].rolling(60).apply(lambda x: x.autocorr(lag=lag), raw=False)
+            df[f'autocorr_{lag}'] = df['returns'].rolling(30).apply(lambda x: x.autocorr(lag=lag), raw=False)
         
         # Price patterns
         df['higher_high'] = ((df['High'] > df['High'].shift(1)) & (df['High'].shift(1) > df['High'].shift(2))).astype(int)
@@ -677,7 +677,7 @@ def coletar_historico_ativo_robusto(ticker, periodo, min_dias_historico, max_ret
     simbolo_completo = ticker if ticker.endswith('.SA') else f"{ticker}.SA"
     
     # Define um mínimo flexível de dias para aceitar dados (e.g., 70% do ideal)
-    min_dias_flexivel = max(180, int(min_dias_historico * 0.7))
+    min_dias_flexivel = max(100, int(min_dias_historico * 0.7))
     
     for attempt in range(max_retries):
         try:
