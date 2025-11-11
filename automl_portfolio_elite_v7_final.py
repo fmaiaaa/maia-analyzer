@@ -471,8 +471,6 @@ def obter_template_grafico() -> dict:
         'colorway': ['#2c3e50', '#7f8c8d', '#3498db', '#e74c3c', '#27ae60']
     }
 
-# ... (código antes de EngenheiroFeatures inalterado)
-
 # =============================================================================
 # CLASSE: ENGENHEIRO DE FEATURES
 # =============================================================================
@@ -563,6 +561,61 @@ def carregar_dados_ativo_gcs_csv(base_url: str, ticker: str) -> pd.DataFrame:
     except Exception as e:
         # print(f"❌ Erro ao carregar {ticker} via CSV/HTTP: {e}")
         return pd.DataFrame()
+
+
+# =============================================================================
+# FUNÇÃO AUXILIAR: COLETA DE DADOS INDIVIDUAIS DO GCS (SOB DEMANDA)
+# =============================================================================
+
+# NOTA: Esta lista de colunas estáticas deve ser mantida sincronizada com o ETL
+# e a lista "cols_performance_and_meta" da classe ColetorDadosGCS
+COLUNAS_ESTATICAS = ['sharpe_ratio', 'annual_return', 'annual_volatility', 'max_drawdown', 'sector', 'industry', 'garch_volatility']
+
+def coletar_ativo_unico_gcs(ativo_selecionado: str):
+    """Cria uma instância do coletor GCS e carrega dados de um único ativo."""
+    try:
+        # CHAMA A FUNÇÃO DE CARREGAMENTO INDIVIDUAL (Requer carregar dados e features)
+        df_ativo = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, ativo_selecionado)
+        
+        MIN_DIAS_HISTORICO_FLEXIVEL = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+        
+        if df_ativo.empty or 'Close' not in df_ativo.columns or len(df_ativo) < MIN_DIAS_HISTORICO_FLEXIVEL:
+            # Retorna None e None se os dados forem insuficientes/inválidos
+            return None, None
+            
+        # --- 1. Armazena Histórico/Features ---
+        
+        # Colunas que começam com 'fund_' ou que são colunas de metadados
+        cols_estaticas = [c for c in df_ativo.columns if c.startswith('fund_') or c in COLUNAS_ESTATICAS or c == 'ticker']
+        
+        # Armazena apenas a parte temporal/técnica
+        hist = df_ativo.drop(columns=cols_estaticas, errors='ignore').dropna(how='all')
+        
+        # Remove o nível 'ticker' se houver MultiIndex
+        if isinstance(hist.index, pd.MultiIndex):
+            hist = hist.droplevel('ticker')
+        
+        # --- 2. Extrai Fundamentos (da última linha) ---
+        
+        if isinstance(df_ativo.index, pd.MultiIndex):
+             last_row = df_ativo.loc[(df_ativo.index.get_level_values('Date')[-1], ativo_selecionado)]
+        else:
+             last_row = df_ativo.iloc[-1]
+             
+        # A. Fundamentos (Colunas fund_*)
+        fund_data = last_row.filter(regex='^fund_').to_dict()
+        fund_data = {k.replace('fund_', ''): v for k, v in fund_data.items()}
+        
+        # B. Métricas de Performance e Setor (Colunas não-prefixadas)
+        for col in COLUNAS_ESTATICAS:
+            fund_data[col] = last_row.get(col, np.nan)
+        
+        # Retorna Histórico e Fundamentos (como dicionário)
+        return hist, fund_data
+        
+    except Exception as e:
+        # st.error(f"Erro no carregamento sob demanda do GCS: {str(e)}") # Comentado para evitar erro em cascata
+        return None, None
     
 # =============================================================================
 # CLASSE: COLETOR DE DADOS GCS (AJUSTADO PARA O FORMATO ETL)
@@ -571,7 +624,7 @@ def carregar_dados_ativo_gcs_csv(base_url: str, ticker: str) -> pd.DataFrame:
 class ColetorDadosGCS(object):
     """Coleta dados de mercado de arquivos CSV individuais no GCS."""
     
-    # 🚨 Colunas de metadados / performance (não prefixadas com fund_)
+    # 🚨 Variáveis de Classe: As colunas que NÃO são features técnicas temporais/rolling
     cols_performance_and_meta = ['sharpe_ratio', 'annual_return', 'annual_volatility', 'max_drawdown', 'sector', 'industry', 'garch_volatility']
     # Colunas de features de retorno para validação
     cols_time_series = ['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'log_returns']
@@ -1598,181 +1651,33 @@ class ConstrutorPortfolioAutoML:
         
         return True
 
-# =============================================================================
-# CLASSE: ANALISADOR INDIVIDUAL DE ATIVOS
-# =============================================================================
-
-# Certifique-se de que as seguintes importações estão no topo do seu arquivo:
-# import numpy as np
-# import pandas as pd
-# import ta
-# from ta.trend import SMAIndicator, EMAIndicator, MACD, ADXIndicator, CCIIndicator
-# from ta.momentum import RSIIndicator, StochasticOscillator, ROCIndicator, WilliamsRIndicator
-# from ta.volatility import BollingerBands, AverageTrueRange
-# from ta.volume import ChaikinMoneyFlowIndicator, MFIIndicator, OnBalanceVolumeIndicator, VolumeWeightedAveragePrice
-# from sklearn.preprocessing import StandardScaler
-# from sklearn.decomposition import PCA
-# from sklearn.cluster import KMeans
-
 class AnalisadorIndividualAtivos:
     """Análise completa de ativos individuais com máximo de features"""
     
     @staticmethod
     def calcular_todos_indicadores_tecnicos(hist: pd.DataFrame) -> pd.DataFrame:
-        """Calcula TODOS os indicadores técnicos possíveis para engenharia massiva de features."""
+        """
+        [CORREÇÃO] Este método foi modificado para remover a lógica de cálculo duplicada.
+        O pipeline principal (aba_analise_individual) agora usa as colunas já presentes
+        no df_completo lido do GCS.
+        """
         df = hist.copy()
         
-        # --- Retornos e Volatilidade ---
-        df['returns'] = df['Close'].pct_change()
-        df['log_returns'] = np.log(df['Close'] / df['Close'].shift(1))
-        df['volatility_20'] = df['returns'].rolling(window=20).std() * np.sqrt(252)
-        df['volatility_60'] = df['returns'].rolling(window=60).std() * np.sqrt(252)
+        # Manter apenas as colunas essenciais para o gráfico Candlestick
+        if 'Open' not in df.columns or 'High' not in df.columns or 'Low' not in df.columns or 'Close' not in df.columns or 'Volume' not in df.columns:
+            # Fallback para criar as colunas de preços caso a leitura tenha sido problemática
+            df_reconstructed = df.filter(regex='^Open$|^High$|^Low$|^Close$|^Volume$').copy()
+            return df_reconstructed
         
-        # --- Médias Móveis (SMA, EMA) ---
-        for periodo in [5, 10, 20, 50, 100, 200]:
-            df[f'sma_{periodo}'] = SMAIndicator(close=df['Close'], window=periodo).sma_indicator()
-        
-        for periodo in [9, 12, 26, 50, 200]:
-            df[f'ema_{periodo}'] = EMAIndicator(close=df['Close'], window=periodo).ema_indicator()
-        
-        # --- Momentum / Força ---
-        for periodo in [7, 14, 21, 28]:
-            df[f'rsi_{periodo}'] = RSIIndicator(close=df['Close'], window=periodo).rsi()
-            
-        stoch = StochasticOscillator(high=df['High'], low=df['Low'], close=df['Close'], window=14, smooth_window=3)
-        df['stoch_k'] = stoch.stoch()
-        df['stoch_d'] = stoch.stoch_signal()
-        
-        df['williams_r'] = WilliamsRIndicator(high=df['High'], low=df['Low'], close=df['Close'], lbp=14).williams_r()
-        
-        macd = MACD(close=df['Close'], window_slow=26, window_fast=12, window_sign=9)
-        df['macd'] = macd.macd()
-        df['macd_signal'] = macd.macd_signal()
-        df['macd_histogram'] = macd.macd_diff()
-        
-        macd_alt = MACD(close=df['Close'], window_slow=35, window_fast=5, window_sign=5)
-        df['macd_alt'] = macd_alt.macd()
-        
-        # --- Volatilidade ---
-        bb = BollingerBands(close=df['Close'], window=20, window_dev=2)
-        df['bb_middle'] = bb.bollinger_mavg()
-        df['bb_upper'] = bb.bollinger_hband()
-        df['bb_lower'] = bb.bollinger_lband()
-        df['bb_width'] = bb.bollinger_wband()
-        df['bb_position'] = (df['Close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
-        df['bb_pband'] = bb.bollinger_pband()
-        
-        atr = AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'], window=14)
-        df['atr'] = atr.average_true_range()
-        df['atr_percent'] = (df['atr'] / df['Close']) * 100
-        
-        # ADX e CCI
-        adx = ADXIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=14)
-        df['adx'] = adx.adx()
-        df['adx_pos'] = adx.adx_pos()
-        df['adx_neg'] = adx.adx_neg()
-        df['cci'] = CCIIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=20).cci()
-        
-        # ROC e Momentum
-        df['roc_12'] = ROCIndicator(close=df['Close'], window=12).roc()
-        df['roc_20'] = ROCIndicator(close=df['Close'], window=20).roc()
-        df['momentum_10'] = df['Close'] / df['Close'].shift(10) - 1
-        df['momentum_20'] = df['Close'] / df['Close'].shift(20) - 1
-        
-        # --- Ichimoku Cloud (Componentes) ---
-        high_9 = df['High'].rolling(window=9).max()
-        low_9 = df['Low'].rolling(window=9).min()
-        df['tenkan_sen'] = (high_9 + low_9) / 2
-        high_26 = df['High'].rolling(window=26).max()
-        low_26 = df['Low'].rolling(window=26).min()
-        df['kijun_sen'] = (high_26 + low_26) / 2
-        df['senkou_span_a'] = ((df['tenkan_sen'] + df['kijun_sen']) / 2).shift(26)
-        high_52 = df['High'].rolling(window=52).max()
-        low_52 = df['Low'].rolling(window=52).min()
-        df['senkou_span_b'] = ((high_52 + low_52) / 2).shift(26)
-        df['chikou_span'] = df['Close'].shift(-26)
-        
-        # --- Volume ---
-        df['vwap'] = VolumeWeightedAveragePrice(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume']).volume_weighted_average_price()
-        df['cmf_20'] = ChaikinMoneyFlowIndicator(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume'], window=20).chaikin_money_flow()
-        df['mfi_14'] = MFIIndicator(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume'], window=14).money_flow_index()
-        df['obv'] = OnBalanceVolumeIndicator(close=df['Close'], volume=df['Volume']).on_balance_volume()
-        
-        # Parabolic SAR (Simplificado - usar rolling mean é uma simplificação para feature engineering)
-        df['sar_proxy'] = df['Close'].rolling(window=5).mean()
-        
-        # Remove colunas inteiramente NaN (causadas por janelas de lookback longas)
-        return df.dropna(axis=1, how='all')
-    
+        return df
+
     @staticmethod
-    def calcular_features_fundamentalistas_expandidas(ticker_obj: yf.Ticker) -> dict:
-        """Extrai o máximo de features fundamentalistas e de consenso (yfinance .info)."""
-        info = ticker_obj.info
-        
-        features = {
-            # Valuation
-            'pe_ratio': info.get('trailingPE', np.nan),
-            'forward_pe': info.get('forwardPE', np.nan),
-            'peg_ratio': info.get('pegRatio', np.nan),
-            'pb_ratio': info.get('priceToBook', np.nan),
-            'ps_ratio': info.get('priceToSalesTrailing12Months', np.nan),
-            'enterprise_value': info.get('enterpriseValue', np.nan),
-            'ev_to_revenue': info.get('enterpriseToRevenue', np.nan),
-            'ev_to_ebitda': info.get('enterpriseToEbitda', np.nan),
-            
-            # Rentabilidade (%)
-            'profit_margin': info.get('profitMargins', np.nan) * 100 if info.get('profitMargins') is not None else np.nan,
-            'operating_margin': info.get('operatingMargins', np.nan) * 100 if info.get('operatingMargins') is not None else np.nan,
-            'gross_margin': info.get('grossMargins', np.nan) * 100 if info.get('grossMargins') is not None else np.nan,
-            'roe': info.get('returnOnEquity', np.nan) * 100 if info.get('returnOnEquity') is not None else np.nan,
-            'roa': info.get('returnOnAssets', np.nan) * 100 if info.get('returnOnAssets') is not None else np.nan,
-            'roic': info.get('returnOnCapital', np.nan) * 100 if info.get('returnOnCapital') is not None else np.nan,
-            
-            # Dividendos
-            'div_yield': info.get('dividendYield', 0) * 100 if info.get('dividendYield') is not None else np.nan,
-            'payout_ratio': info.get('payoutRatio', np.nan) * 100 if info.get('payoutRatio') is not None else np.nan,
-            'five_year_avg_div_yield': info.get('fiveYearAvgDividendYield', np.nan),
-            
-            # Crescimento (%)
-            'revenue_growth': info.get('revenueGrowth', np.nan) * 100 if info.get('revenueGrowth') is not None else np.nan,
-            'earnings_growth': info.get('earningsGrowth', np.nan) * 100 if info.get('earningsGrowth') is not None else np.nan,
-            'earnings_quarterly_growth': info.get('earningsQuarterlyGrowth', np.nan) * 100 if info.get('earningsQuarterlyGrowth') is not None else np.nan,
-            
-            # Saúde Financeira
-            'current_ratio': info.get('currentRatio', np.nan),
-            'quick_ratio': info.get('quickRatio', np.nan),
-            'debt_to_equity': info.get('debtToEquity', np.nan),
-            'total_debt': info.get('totalDebt', np.nan),
-            'total_cash': info.get('totalCash', np.nan),
-            'free_cashflow': info.get('freeCashflow', np.nan),
-            'operating_cashflow': info.get('operatingCashflow', np.nan),
-            
-            # Informações Gerais
-            'market_cap': info.get('marketCap', np.nan),
-            'beta': info.get('beta', np.nan),
-            'shares_outstanding': info.get('sharesOutstanding', np.nan),
-            'float_shares': info.get('floatShares', np.nan),
-            'shares_short': info.get('sharesShort', np.nan),
-            'short_ratio': info.get('shortRatio', np.nan),
-            
-            # Setor e Indústria
-            'sector': info.get('sector', 'Unknown'),
-            'industry': info.get('industry', 'Unknown'),
-            
-            # Preço e Consenso
-            'current_price': info.get('currentPrice', np.nan),
-            'target_high_price': info.get('targetHighPrice', np.nan),
-            'target_low_price': info.get('targetLowPrice', np.nan),
-            'target_mean_price': info.get('targetMeanPrice', np.nan),
-            'recommendation': info.get('recommendationKey', 'none')
-        }
-        
-        # Limpeza final: Garante que todos os valores None/null do yfinance se tornem np.nan
-        for key, value in features.items():
-            if value is None:
-                features[key] = np.nan
-        
-        return features
+    def calcular_features_fundamentalistas_expandidas(info: dict) -> dict:
+        """
+        [CORRIGIDO] Extrai o máximo de features fundamentalistas e de consenso (yfinance .info).
+        Retorna um dicionário vazio para forçar o uso dos dados do GCS na interface.
+        """
+        return {} # Força o uso dos dados do GCS
     
     @staticmethod
     def realizar_clusterizacao_pca(dados_ativos: pd.DataFrame, n_clusters: int = 5) -> tuple[pd.DataFrame | None, PCA | None, KMeans | None]:
@@ -2970,14 +2875,15 @@ def aba_analise_individual():
                     st.warning("Nenhum indicador técnico com dados atuais disponível.")
 
             with tab3:
-                # ... (Análise Fundamentalista - Lida do cache) ...
+                # ... (código inalterado - cabeçalhos) ...
                 st.markdown("### Análise Fundamentalista Expandida")
                 
-                # ... (Valuation) ...
+                # Mapeamento de colunas do ETL: fund_pe_ratio (ETL) -> pe_ratio (Coletor) -> pe_ratio (Exibição)
+                
                 st.markdown("#### Valuation")
                 col1, col2, col3, col4, col5 = st.columns(5)
                 
-                # Mapeamento Fundamentos (sem prefixo 'fund_')
+                # Usa os nomes das colunas após a remoção do prefixo 'fund_' no ColetorDadosGCS
                 col1.metric("P/L (TTM)", f"{features_fund.get('pe_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('pe_ratio')) else "N/A")
                 col2.metric("P/VP", f"{features_fund.get('pb_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('pb_ratio')) else "N/A")
                 col3.metric("P/VPA (Vendas)", f"{features_fund.get('ps_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('ps_ratio')) else "N/A")
@@ -2989,7 +2895,7 @@ def aba_analise_individual():
                 
                 col1.metric("ROE", f"{features_fund.get('roe', np.nan):.2f}%" if not pd.isna(features_fund.get('roe')) else "N/A")
                 col2.metric("ROA", f"{features_fund.get('roa', np.nan):.2f}%" if not pd.isna(features_fund.get('roa')) else "N/A")
-                # ✅ CORREÇÃO ROIC
+                # ⚠️ CORREÇÃO ROIC: Usa a coluna 'roic' (returnOnCapital), que foi corrigida no ETL
                 col3.metric("ROIC", f"{features_fund.get('roic', np.nan):.2f}%" if not pd.isna(features_fund.get('roic')) else "N/A")
                 col4.metric("Margem Operacional", f"{features_fund.get('operating_margin', np.nan):.2f}%" if not pd.isna(features_fund.get('operating_margin')) else "N/A")
                 col5.metric("Margem Bruta", f"{features_fund.get('gross_margin', np.nan):.2f}%" if not pd.isna(features_fund.get('gross_margin')) else "N/A")
@@ -2999,23 +2905,22 @@ def aba_analise_individual():
                 
                 col1.metric("Dividend Yield", f"{features_fund.get('div_yield', np.nan):.2f}%" if not pd.isna(features_fund.get('div_yield')) else "N/A")
                 col2.metric("Payout Ratio", f"{features_fund.get('payout_ratio', np.nan):.2f}%" if not pd.isna(features_fund.get('payout_ratio')) else "N/A")
-                # ⚠️ DY Médio 5A: Não está no ETL
+                # ⚠️ CORREÇÃO DY Médio 5A: Não está no seu ETL. Mantido como N/A.
                 col3.metric("DY Médio 5A", "N/A" ) 
                 
                 st.markdown("#### Crescimento")
                 col1, col2, col3 = st.columns(3)
                 col1.metric("Cresc. Receita", f"{features_fund.get('revenue_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('revenue_growth')) else "N/A")
                 col2.metric("Cresc. Lucros", f"{features_fund.get('earnings_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('earnings_growth')) else "N/A")
-                # ⚠️ Cresc. Lucros (Q): Não está no ETL
+                # ⚠️ CORREÇÃO Cresc. Lucros (Q): Não está no seu ETL. Mantido como N/A.
                 col3.metric("Cresc. Lucros (Q)", "N/A")
-
+        
                 st.markdown("#### Saúde Financeira")
                 col1, col2, col3, col4 = st.columns(4)
-                # ✅ CORREÇÃO: Dívida/Patrimônio, Current Ratio, Quick Ratio
                 col1.metric("Dívida/Patrimônio", f"{features_fund.get('debt_to_equity', np.nan):.2f}" if not pd.isna(features_fund.get('debt_to_equity')) else "N/A")
                 col2.metric("Current Ratio", f"{features_fund.get('current_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('current_ratio')) else "N/A")
                 col3.metric("Quick Ratio", f"{features_fund.get('quick_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('quick_ratio')) else "N/A")
-                # ⚠️ Fluxo de Caixa Livre: Não está no ETL
+                # ⚠️ CORREÇÃO Fluxo de Caixa Livre: Não está no seu ETL. Mantido como N/A.
                 col4.metric("Fluxo de Caixa Livre", "N/A")
                 
                 st.markdown("---")
@@ -3023,6 +2928,7 @@ def aba_analise_individual():
                 
                 df_fund_display = pd.DataFrame({
                     'Métrica': list(features_fund.keys()),
+                    # Usa os valores do dicionário 'features_fund'
                     'Valor': [f"{v:.4f}" if isinstance(v, (int, float)) and not pd.isna(v) else str(v) for v in features_fund.values()]
                 })
                 
