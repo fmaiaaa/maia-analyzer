@@ -94,6 +94,8 @@ from tensorflow.keras.layers import LSTM, GRU, Dense, Dropout, Conv1D, MaxPoolin
 from tensorflow.keras.callbacks import EarlyStopping
 from tensorflow.keras.optimizers import Adam
 
+from google.cloud import storage
+
 # --- 10. CONFIGURATION ---
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 warnings.filterwarnings('ignore')
@@ -112,6 +114,8 @@ NUM_ATIVOS_PORTFOLIO = 5
 TAXA_LIVRE_RISCO = 0.1075
 # Janela de lookback (dias) para a previsão dos modelos de Machine Learning
 LOOKBACK_ML = 30
+
+
 
 # =============================================================================
 # 2. PONDERAÇÕES E REGRAS DE OTIMIZAÇÃO
@@ -137,6 +141,13 @@ ARQUIVO_FUNDAMENTALISTA = DATA_PATH + 'dados_fundamentalistas.parquet'
 ARQUIVO_METRICAS = DATA_PATH + 'metricas_performance.parquet'
 ARQUIVO_MACRO = DATA_PATH + 'dados_macro.parquet'
 ARQUIVO_METADATA = DATA_PATH + 'metadata.parquet'
+
+# =============================================================================
+# NOVAS CONSTANTES GCS (Preencha com seus dados)
+# =============================================================================
+GCS_BUCKET_NAME = 'meu-portfolio-dados-gratuitos'
+GCS_FILE_PATH = 'caminho/para/dados_consolidados.parquet'
+# =============================================================================
 
 # =============================================================================
 # 4. LISTAS DE ATIVOS E SETORES
@@ -227,6 +238,13 @@ DRIFT_WINDOW = 20
 # Número de desvios-padrão para simular choques em testes de estresse
 STRESS_TEST_SIGMA = 2.0
 
+# =============================================================================
+# NOVAS CONSTANTES GCS (Ajustadas para CSV individual)
+# =============================================================================
+GCS_BUCKET_NAME = 'meu-portfolio-dados-gratuitos'
+GCS_FOLDER_PATH = 'dados_financeiros_etl/'
+GCS_BASE_URL = f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{GCS_FOLDER_PATH}"
+# =============================================================================
 
 # =============================================================================
 # 6. MAPEAMENTOS DE PONTUAÇÃO DO QUESTIONÁRIO (Perfil do Investidor)
@@ -679,7 +697,7 @@ class EngenheiroFeatures:
 # =============================================================================
 
 # FUNÇÃO AUXILIAR: COLETA ROBusta E RESILIENTE (VERSÃO p_a ADAPTADA)
-def coletar_historico_ativo_robusto(ticker, periodo, min_dias_historico, max_retries=3, initial_delay=3): # Delay aumentado para Cloud
+def coletar_historico_ativo_robusto(ticker, periodo, min_dias_historico, max_retries=3, initial_delay=5): # Delay aumentado para Cloud
     """
     Coleta dados históricos do ativo usando yfinance com retentativas, 
     variações de ticker e validação de tamanho mínimo.
@@ -754,194 +772,116 @@ def coletar_historico_ativo_robusto(ticker, periodo, min_dias_historico, max_ret
 
 
 # =============================================================================
-# CLASSE: COLETOR DE DADOS (APENAS YFINANCE)
+# FUNÇÃO AUXILIAR: COLETA DE DADOS INDIVIDUAIS DO GCS (CSV via HTTP)
 # =============================================================================
 
-class ColetorDados:
-    """Coleta e processa dados de mercado com profundidade máxima, usando yfinance."""
+def carregar_dados_ativo_gcs_csv(base_url: str, ticker: str) -> pd.DataFrame:
+    """Carrega o DataFrame de um único ativo (ticker) via URL pública do GCS (formato CSV)."""
+    
+    # Monta o URL completo (ex: https://storage.googleapis.com/.../AALR3.SA.csv)
+    file_name = f"{ticker}.csv"
+    full_url = f"{base_url}{file_name}"
+    
+    try:
+        # Usa pandas.read_csv diretamente do endpoint HTTP
+        df_ativo = pd.read_csv(full_url)
+        
+        # Garante que 'Date' é o índice e um datetime
+        if 'Date' in df_ativo.columns:
+            df_ativo = df_ativo.set_index('Date')
+        df_ativo.index = pd.to_datetime(df_ativo.index)
+
+        return df_ativo
+
+    except Exception as e:
+        # Erro de leitura pode ser 404 (arquivo não existe) ou erro de parse
+        # print(f"❌ Erro ao carregar {ticker} via CSV/HTTP: {e}")
+        return pd.DataFrame()
+    
+# =============================================================================
+# CLASSE: COLETOR DE DADOS GCS (SUBSTITUI O COLETORDADOS ORIGINAL)
+# =============================================================================
+
+class ColetorDadosGCS(object): # Não herda de ColetorDados, pois a estrutura de coleta é totalmente diferente
+    """Coleta dados de mercado de arquivos CSV individuais no GCS."""
     
     def __init__(self, periodo=PERIODO_DADOS):
         self.periodo = periodo
         self.dados_por_ativo = {}
         self.dados_fundamentalistas = pd.DataFrame()
         self.ativos_sucesso = []
-        self.dados_macro = {}
-        self.metricas_performance = pd.DataFrame() # Initialize metric dataframe
-    
-    def coletar_dados_macroeconomicos(self):
-        """Coleta dados macroeconômicos (índices) para features externas, usando yfinance."""
-        print("\n📊 Coletando dados macroeconômicos...")
-        
-        try:
-            # Índices de referência
-            indices = {
-                'IBOV': '^BVSP',  # Ibovespa
-                'SP500': '^GSPC',  # S&P 500
-                'VIX': '^VIX',  # Volatility Index
-                'USD_BRL': 'BRL=X',  # Dólar
-                'GOLD': 'GC=F',  # Ouro
-                'OIL': 'CL=F'  # Petróleo WTI
-            }
-            
-            for nome, simbolo in indices.items():
-                try:
-                    ticker = yf.Ticker(simbolo)
-                    hist = ticker.history(period=self.periodo)
-                    
-                    if not hist.empty:
-                        self.dados_macro[nome] = hist['Close'].pct_change()
-                        # print(f"  ✓ {nome}: {len(hist)} dias")
-                    else:
-                        # print(f"  ⚠️ {nome}: Sem dados históricos")
-                        self.dados_macro[nome] = pd.Series()
-                except Exception as e:
-                    # print(f"  ⚠️ {nome}: Erro - {str(e)[:50]}")
-                    self.dados_macro[nome] = pd.Series()
-            
-            print(f"✓ Dados macroeconômicos coletados: {len(self.dados_macro)} indicadores")
-            
-        except Exception as e:
-            print(f"❌ Erro ao coletar dados macro: {str(e)}")
-    
-    def adicionar_correlacoes_macro(self, df, simbolo):
-        """Adiciona correlações com indicadores macroeconômicos (lógica inalterada)"""
-        if not self.dados_macro or 'returns' not in df.columns:
-            return df
-        
-        try:
-            if df['returns'].isnull().all():
-                # print(f"  ⚠️ {simbolo}: Coluna 'returns' está vazia, pulando correlações macro.")
-                return df
+        self.dados_macro = {} # Mantido vazio
+        self.metricas_performance = pd.DataFrame()
+        self.volatilidades_garch_raw = {} # Novo: guarda o GARCH lido do arquivo
 
-            for nome, serie_macro in self.dados_macro.items():
-                if serie_macro.empty or serie_macro.isnull().all():
-                    continue
-                
-                df_returns_aligned = df['returns'].reindex(df.index)
-                
-                if df_returns_aligned.isnull().all() or serie_macro.isnull().all():
-                    continue
-
-                combined_df = pd.DataFrame({
-                    'asset_returns': df_returns_aligned,
-                    'macro_returns': serie_macro.reindex(df.index)
-                }).dropna()
-
-                if len(combined_df) > 60:
-                    corr_rolling = combined_df['asset_returns'].rolling(60).corr(combined_df['macro_returns'])
-                    df[f'corr_{nome.lower()}'] = corr_rolling.reindex(df.index)
-                else:
-                    df[f'corr_{nome.lower()}'] = np.nan
-        except Exception as e:
-            print(f"  ⚠️ {simbolo}: Erro ao calcular correlações macro - {str(e)[:80]}")
-        
-        return df
-    
-    def coletar_e_processar_dados(self, simbolos):
-        """Coleta e processa dados de mercado para todos os ativos solicitados."""
-        self.ativos_sucesso = []
-        lista_fundamentalistas = []
-        
-        # 1. Coleta dados macro
-        self.coletar_dados_macroeconomicos()
+    def coletar_e_processar_dados(self, simbolos: list) -> bool:
+        """Carrega o DataFrame individual de cada ativo do GCS (CSV via HTTP) e reestrutura."""
         
         print(f"\n{'='*60}")
-        print(f"INICIANDO COLETA E PROCESSAMENTO - {len(simbolos)} ativos")
-        print(f"Período: {self.periodo} (MÁXIMO DISPONÍVEL)")
-        print(f"Mínimo de dias: {MIN_DIAS_HISTORICO}")
+        print(f"INICIANDO COLETA E PROCESSAMENTO - LEITURA GCS INDIVIDUAL (CSV)")
+        print(f"Total de ativos solicitados: {len(simbolos)}")
         print(f"{'='*60}\n")
         
-        erros_detalhados = []
-        
-        for simbolo in tqdm(simbolos, desc="📥 Coletando dados"):
-            simbolo_completo = simbolo if simbolo.endswith('.SA') else f"{simbolo}.SA"
-            
-            time.sleep(2)
-            
-            # A. Coleta histórica robusta
-            hist, erro_coleta = coletar_historico_ativo_robusto(
-                simbolo, 
-                self.periodo, 
-                MIN_DIAS_HISTORICO
-            )
-            
-            if hist is None:
-                erros_detalhados.append(f"{simbolo}: {erro_coleta}")
-                continue
-            
-            try:
-                # B. Engenharia de Features Técnicas
-                df = EngenheiroFeatures.calcular_indicadores_tecnicos(hist)
-                
-                # C. Adiciona Correlações Macro
-                df = self.adicionar_correlacoes_macro(df, simbolo_completo)
-                
-                # Revalidação de tamanho após a remoção de NaNs
-                min_dias_flexivel = max(180, int(MIN_DIAS_HISTORICO * 0.7))
-                if len(df) < min_dias_flexivel:
-                    erros_detalhados.append(f"{simbolo}: Dados insuficientes após features: {len(df)} dias")
-                    continue
-                
-                # D. Coleta de Dados Fundamentalistas (yf.Ticker().info)
-                ticker = yf.Ticker(simbolo_completo)
-                info = ticker.info
-                features_fund = EngenheiroFeatures.calcular_features_fundamentalistas(info)
-                features_fund['Ticker'] = simbolo_completo
-                lista_fundamentalistas.append(features_fund)
-                
-                # E. Sucesso - armazena dados
-                self.dados_por_ativo[simbolo_completo] = df
-                self.ativos_sucesso.append(simbolo_completo)
-                
-            except Exception as e:
-                erros_detalhados.append(f"{simbolo}: Erro no processamento - {str(e)[:50]}")
-                continue
-        
-        # Log detalhado de erros
-        if erros_detalhados:
-            print(f"\n⚠️ Ativos com problemas ({len(erros_detalhados)}):")
-            for erro in erros_detalhados[:10]:
-                print(f"  • {erro}")
-            if len(erros_detalhados) > 10:
-                print(f"  ... e mais {len(erros_detalhados) - 10} ativos")
-        
-        print(f"\n✓ Total de ativos válidos: {len(self.ativos_sucesso)} ativos")
-        
-        # 2. Validação final
-        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
-            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos coletados.")
-            print(f"    Necessário: {NUM_ATIVOS_PORTFOLIO} ativos mínimos")
-            return False
-        
-        # 3. Processamento e Escalonamento Fundamentalista
-        self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
-        self.dados_fundamentalistas = self.dados_fundamentalistas.replace([np.inf, -np.inf], np.nan)
-        
-        scaler = RobustScaler()
-        numeric_cols = self.dados_fundamentalistas.select_dtypes(include=[np.number]).columns
-        
-        for col in numeric_cols:
-            if self.dados_fundamentalistas[col].isnull().any():
-                median_val = self.dados_fundamentalistas[col].median()
-                self.dados_fundamentalistas[col] = self.dados_fundamentalistas[col].fillna(median_val)
-        
-        self.dados_fundamentalistas[numeric_cols] = scaler.fit_transform(self.dados_fundamentalistas[numeric_cols])
-
-        # 4. Cálculo de Métricas de Performance
+        self.ativos_sucesso = []
+        lista_fundamentalistas = []
         metricas = {}
-        for simbolo in self.ativos_sucesso:
-            if 'returns' in self.dados_por_ativo[simbolo] and 'drawdown' in self.dados_por_ativo[simbolo]:
-                returns = self.dados_por_ativo[simbolo]['returns']
-                volatilidade_anual = returns.std() * np.sqrt(252)
-                retorno_anual = returns.mean() * 252
-                metricas[simbolo] = {
-                    'retorno_anual': retorno_anual,
-                    'volatilidade_anual': volatilidade_anual,
-                    'sharpe': (retorno_anual - TAXA_LIVRE_RISCO) / volatilidade_anual if volatilidade_anual > 0 else 0,
-                    'max_drawdown': self.dados_por_ativo[simbolo]['drawdown'].min()
-                }
+        garch_vols = {}
 
+        for simbolo in tqdm(simbolos, desc="📥 Carregando ativos do GCS"):
+            
+            # CHAMA A FUNÇÃO DE CARREGAMENTO INDIVIDUAL
+            df_ativo = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, simbolo)
+
+            # Usando uma validação de 180 dias (0.7 * 252) conforme a lógica original
+            MIN_DIAS_HISTORICO_FLEXIVEL = max(180, int(MIN_DIAS_HISTORICO * 0.7))
+            
+            if df_ativo.empty or 'Close' not in df_ativo.columns or len(df_ativo) < MIN_DIAS_HISTORICO_FLEXIVEL:
+                continue
+
+            # --- 1. PREPARAÇÃO E ARMAZENAMENTO DO HISTÓRICO (Features Temporais) ---
+            
+            # Identifica colunas fixas/métricas para remoção
+            cols_fixed = ['sharpe_ratio', 'annual_return', 'annual_volatility', 'max_drawdown', 'sector', 'industry', 'ticker', 'garch_volatility']
+            
+            # Filtra colunas que começam com 'fund_' ou que são fixas
+            cols_to_drop = [c for c in df_ativo.columns if c.startswith('fund_') or c in cols_fixed]
+            
+            # Armazena apenas a parte temporal/técnica
+            df_ativo_history = df_ativo.drop(columns=cols_to_drop, errors='ignore').dropna(how='all')
+            self.dados_por_ativo[simbolo] = df_ativo_history
+            self.ativos_sucesso.append(simbolo)
+            
+            # --- 2. EXTRAÇÃO DE MÉTRICAS FIXAS (ÚLTIMA LINHA) ---
+            
+            last_row = df_ativo.iloc[-1]
+            
+            # A. Fundamentos e Setor (Remove prefixo 'fund_')
+            fund_data = last_row.filter(regex='^(fund_|sector|industry)').to_dict()
+            fund_data = {k.replace('fund_', ''): v for k, v in fund_data.items()}
+            fund_data['Ticker'] = simbolo
+            lista_fundamentalistas.append(fund_data)
+            
+            # B. Métricas de Performance
+            metricas[simbolo] = {
+                'retorno_anual': last_row.get('annual_return', np.nan),
+                'volatilidade_anual': last_row.get('annual_volatility', np.nan),
+                'sharpe': last_row.get('sharpe_ratio', np.nan),
+                'max_drawdown': last_row.get('max_drawdown', np.nan)
+            }
+            
+            # C. Volatilidade GARCH
+            garch_vols[simbolo] = last_row.get('garch_volatility', np.nan)
+            
+        # --- 3. FINALIZAÇÃO E POPULAÇÃO DOS ATRIBUTOS ---
+        
+        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO:
+            print(f"\n❌ ERRO: Apenas {len(self.ativos_sucesso)} ativos válidos encontrados no GCS. Necessário: {NUM_ATIVOS_PORTFOLIO}.")
+            return False
+            
+        self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
         self.metricas_performance = pd.DataFrame(metricas).T
+        self.volatilidades_garch_raw = garch_vols 
+        self.dados_macro = {} 
         
         return True
 
@@ -1515,46 +1455,39 @@ class ConstrutorPortfolioAutoML:
         self.scores_combinados = pd.DataFrame()
         
     def coletar_e_processar_dados(self, simbolos: list) -> bool:
-        """Coleta e processa dados de mercado com engenharia de features (via ColetorDados)"""
+        """[MODIFICADO] Coleta e processa dados de mercado (VIA GCS/CSV)."""
         
-        coletor = ColetorDados(periodo=self.periodo)
+        coletor = ColetorDadosGCS(periodo=self.periodo) # Usa a nova classe
+        
         if not coletor.coletar_e_processar_dados(simbolos):
             return False
         
         self.dados_por_ativo = coletor.dados_por_ativo
         self.dados_fundamentalistas = coletor.dados_fundamentalistas
         self.ativos_sucesso = coletor.ativos_sucesso
-        self.dados_macro = coletor.dados_macro
         self.dados_performance = coletor.metricas_performance
         
-        print(f"\n✓ Coleta concluída: {len(self.ativos_sucesso)} ativos válidos\n")
+        # IMPORTANTE: Carrega a volatilidade GARCH LIDA do GCS (self.volatilidades_garch_raw)
+        self.volatilidades_garch = coletor.volatilidades_garch_raw 
+        
+        print(f"\n✓ Coleta (GCS/CSV) concluída: {len(self.ativos_sucesso)} ativos válidos\n")
         return True
-    
+
     def calcular_volatilidades_garch(self):
-        """Calcula volatilidades GARCH/EGARCH para todos os ativos, com fallback."""
-        print("\n📊 Calculando volatilidades GARCH...")
+        """
+        [MODIFICADO] Apenas valida se as volatilidades foram carregadas
+        do ColetorDadosGCS, evitando o caro cálculo GARCH.
+        """
+        valid_vols = len([k for k, v in self.volatilidades_garch.items() if not np.isnan(v)])
         
-        for simbolo in tqdm(self.ativos_sucesso, desc="Modelagem GARCH"):
-            if simbolo not in self.dados_por_ativo or 'returns' not in self.dados_por_ativo[simbolo]:
-                continue
-                
-            returns = self.dados_por_ativo[simbolo]['returns']
-            
-            # Tenta GARCH
-            garch_vol = VolatilidadeGARCH.ajustar_garch(returns, tipo_modelo='GARCH')
-            
-            # Tenta EGARCH se GARCH falhar
-            if np.isnan(garch_vol):
-                garch_vol = VolatilidadeGARCH.ajustar_garch(returns, tipo_modelo='EGARCH')
-            
-            if np.isnan(garch_vol):
-                # Fallback para volatilidade histórica anualizada
-                garch_vol = returns.std() * np.sqrt(252) if not returns.isnull().all() and returns.std() > 0 else np.nan
-                
-            self.volatilidades_garch[simbolo] = garch_vol
+        if valid_vols == 0:
+             # Fallback para usar a volatilidade histórica (que está no dados_performance)
+             for ativo in self.ativos_sucesso:
+                 if ativo in self.dados_performance.index and not pd.isna(self.dados_performance.loc[ativo, 'volatilidade_anual']):
+                      self.volatilidades_garch[ativo] = self.dados_performance.loc[ativo, 'volatilidade_anual']
         
-        print(f"✓ Volatilidades GARCH calculadas para {len([k for k, v in self.volatilidades_garch.items() if not np.isnan(v)])} ativos válidos\n")
-    
+        print(f"✓ Volatilidades GARCH/Histórica carregadas para {valid_vols} ativos válidos (Leitura GCS)")
+        
     def treinar_modelos_ensemble(self, dias_lookback_ml: int = LOOKBACK_ML, otimizar: bool = False):
         """
         Treina modelos ML e estatísticos, aplicando ensemble e governança, usando APENAS LightGBM 
