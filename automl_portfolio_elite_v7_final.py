@@ -493,33 +493,30 @@ class EngenheiroFeatures:
 def carregar_dados_ativo_gcs_csv(ticker: str) -> pd.DataFrame:
     """
     Carrega o DataFrame de um único ativo diretamente do GCS usando a URI gs://.
-    Implementa autenticação via st.secrets e correção do nome do arquivo (sem .SA).
+    CORREÇÃO: FORÇA ACESSO PÚBLICO/ANÔNIMO, REMOVENDO A AUTENTICAÇÃO st.secrets.
     """
     
     # 🚨 CORREÇÃO 1: TRATAMENTO DO NOME DO ARQUIVO
-    # Remove o sufixo '.SA' do ticker para formar o nome do arquivo, 
-    # pois o GCS provavelmente salvou o arquivo como ALOS3.csv e não ALOS3.SA.csv
+    # Remove o sufixo '.SA' do ticker para formar o nome do arquivo (ALOS3 -> ALOS3.csv)
     ticker_filename = ticker.replace('.SA', '') 
     
     # Constrói a URI gs:// usando o nome do arquivo corrigido
     uri = f"gs://{GCS_BUCKET_NAME}/{GCS_FOLDER_PATH}/{ticker_filename}.csv"
     
-    # --- 🚨 CORREÇÃO 2: CONFIGURAÇÃO DE ACESSO COM SECRETS ---
-    storage_options = {}
-    
-    # Verifica se a chave do GCS existe no secrets.toml (seção [gcs])
-    if "gcs" in st.secrets: 
-        # Passa o dicionário de credenciais JSON para o gcsfs (que o pandas usa)
-        storage_options = {"token": st.secrets["gcs"]}
+    # --- 🚨 CORREÇÃO 2: REMOÇÃO DA CONFIGURAÇÃO DE ACESSO SECRETS ---
+    # Para forçar o acesso público/anônimo, removemos a lógica de st.secrets.
+    # O gcsfs tentará acessar o bucket publicamente, conforme a lógica de sucesso
+    # do seu arquivo de exemplo.
+    # storage_options = {"token": st.secrets["gcs"]} -> REMOVIDO/IGNORADO
     # --------------------------------------------------------
 
     try:
-        # Pandas (com gcsfs) lê a URI gs:// e lida com o MultiIndex e a autenticação
+        # Pandas (com gcsfs) lê a URI gs:// sem opções de armazenamento explícitas
         df_ativo = pd.read_csv(
             uri,
             index_col=['Date', 'ticker'], # Define o MultiIndex do seu ETL
-            parse_dates=True,
-            storage_options=storage_options # NOVO: Usa a autenticação segura
+            parse_dates=True
+            # NOTA: storage_options não é passado aqui, assumindo acesso público
         )
         
         # O MultiIndex do CSV pode vir com timezone e ser desserializado de forma diferente.
@@ -533,8 +530,7 @@ def carregar_dados_ativo_gcs_csv(ticker: str) -> pd.DataFrame:
         
         # Converte todas as colunas numéricas para float, tratando erros
         for col in df_ativo.columns:
-            if col not in ['sector', 'industry', 'ticker']: # 'ticker' é string/object
-                # Usa 'coerce' para transformar valores inválidos (incluindo strings) em NaN
+            if col not in ['sector', 'industry', 'ticker']: 
                 df_ativo[col] = pd.to_numeric(df_ativo[col], errors='coerce')
         
         return df_ativo
@@ -543,23 +539,22 @@ def carregar_dados_ativo_gcs_csv(ticker: str) -> pd.DataFrame:
         # Mantive a impressão detalhada do erro para o debugging final
         import traceback
         print(f"❌ Erro EXPLICITO para {ticker} ({uri}): {e}")
-        # traceback.print_exc() # Descomente se precisar da pilha de erros completa
+        # traceback.print_exc() 
         return pd.DataFrame() # Retorna um DataFrame vazio em caso de falha
 
 # =============================================================================
 # FUNÇÃO AUXILIAR: COLETA DE DADOS INDIVIDUAIS DO GCS (SOB DEMANDA)
+# REPLICADA PARA A FUNÇÃO FINAL ABAIXO
 # =============================================================================
 
-# NOTA: Esta lista de colunas estáticas deve ser mantida sincronizada com o ETL
-# e a lista "cols_performance_and_meta" da classe ColetorDadosGCS
-COLUNAS_ESTATICAS = ['sharpe_ratio', 'annual_return', 'annual_volatility', 'max_drawdown', 'sector', 'industry', 'garch_volatility']
-
+# NOTA: O código desta função não precisa ser alterado, pois ele chama a função acima corrigida.
 def coletar_ativo_unico_gcs(ativo_selecionado: str):
     """Cria uma instância do coletor GCS e carrega dados de um único ativo."""
     try:
-        # CHAMA A FUNÇÃO DE CARREGAMENTO INDIVIDUAL (Requer carregar dados e features)
+        # CHAMA A FUNÇÃO DE CARREGAMENTO INDIVIDUAL (AGORA CORRIGIDA)
         df_ativo = carregar_dados_ativo_gcs_csv(ativo_selecionado)
         
+        # ... (Restante da lógica inalterada) ...
         MIN_DIAS_HISTORICO_FLEXIVEL = max(180, int(MIN_DIAS_HISTORICO * 0.7))
         
         if df_ativo.empty or 'Close' not in df_ativo.columns or len(df_ativo) < MIN_DIAS_HISTORICO_FLEXIVEL:
@@ -599,6 +594,8 @@ def coletar_ativo_unico_gcs(ativo_selecionado: str):
     except Exception as e:
         # st.error(f"Erro no carregamento sob demanda do GCS: {str(e)}") # Comentado para evitar erro em cascata
         return None, None
+
+# ... (restante do código)
     
 # =============================================================================
 # CLASSE: COLETOR DE DADOS GCS (AJUSTADO PARA O FORMATO ETL)
