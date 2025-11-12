@@ -493,18 +493,33 @@ class EngenheiroFeatures:
 def carregar_dados_ativo_gcs_csv(ticker: str) -> pd.DataFrame:
     """
     Carrega o DataFrame de um único ativo diretamente do GCS usando a URI gs://.
-    Assume que os arquivos são públicos (não requer autenticação explícita).
+    Implementa autenticação via st.secrets e correção do nome do arquivo (sem .SA).
     """
     
-    # Constrói a URI gs://
-    uri = f"gs://{GCS_BUCKET_NAME}/{GCS_FOLDER_PATH}/{ticker}.csv"
+    # 🚨 CORREÇÃO 1: TRATAMENTO DO NOME DO ARQUIVO
+    # Remove o sufixo '.SA' do ticker para formar o nome do arquivo, 
+    # pois o GCS provavelmente salvou o arquivo como ALOS3.csv e não ALOS3.SA.csv
+    ticker_filename = ticker.replace('.SA', '') 
     
+    # Constrói a URI gs:// usando o nome do arquivo corrigido
+    uri = f"gs://{GCS_BUCKET_NAME}/{GCS_FOLDER_PATH}/{ticker_filename}.csv"
+    
+    # --- 🚨 CORREÇÃO 2: CONFIGURAÇÃO DE ACESSO COM SECRETS ---
+    storage_options = {}
+    
+    # Verifica se a chave do GCS existe no secrets.toml (seção [gcs])
+    if "gcs" in st.secrets: 
+        # Passa o dicionário de credenciais JSON para o gcsfs (que o pandas usa)
+        storage_options = {"token": st.secrets["gcs"]}
+    # --------------------------------------------------------
+
     try:
-        # Pandas (com gcsfs) lê a URI gs:// e lida com o MultiIndex.
+        # Pandas (com gcsfs) lê a URI gs:// e lida com o MultiIndex e a autenticação
         df_ativo = pd.read_csv(
             uri,
             index_col=['Date', 'ticker'], # Define o MultiIndex do seu ETL
-            parse_dates=True
+            parse_dates=True,
+            storage_options=storage_options # NOVO: Usa a autenticação segura
         )
         
         # O MultiIndex do CSV pode vir com timezone e ser desserializado de forma diferente.
@@ -518,20 +533,18 @@ def carregar_dados_ativo_gcs_csv(ticker: str) -> pd.DataFrame:
         
         # Converte todas as colunas numéricas para float, tratando erros
         for col in df_ativo.columns:
-            if col not in ['sector', 'industry']:
+            if col not in ['sector', 'industry', 'ticker']: # 'ticker' é string/object
                 # Usa 'coerce' para transformar valores inválidos (incluindo strings) em NaN
                 df_ativo[col] = pd.to_numeric(df_ativo[col], errors='coerce')
         
         return df_ativo
 
     except Exception as e:
-        # ALERTA: Adicione esta linha temporariamente para ver o erro real do gcsfs
+        # Mantive a impressão detalhada do erro para o debugging final
         import traceback
-        print(f"❌ Erro EXPLICITO para {ticker} de {uri}: {e}")
-        traceback.print_exc() # Isso irá imprimir a pilha de erros completa
-        # FIM DO ALERTA
-        return None
-
+        print(f"❌ Erro EXPLICITO para {ticker} ({uri}): {e}")
+        # traceback.print_exc() # Descomente se precisar da pilha de erros completa
+        return pd.DataFrame() # Retorna um DataFrame vazio em caso de falha
 
 # =============================================================================
 # FUNÇÃO AUXILIAR: COLETA DE DADOS INDIVIDUAIS DO GCS (SOB DEMANDA)
