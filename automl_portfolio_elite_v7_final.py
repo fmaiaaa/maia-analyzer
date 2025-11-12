@@ -143,13 +143,6 @@ ARQUIVO_MACRO = DATA_PATH + 'dados_macro.parquet'
 ARQUIVO_METADATA = DATA_PATH + 'metadata.parquet'
 
 # =============================================================================
-# NOVAS CONSTANTES GCS (Preencha com seus dados)
-# =============================================================================
-GCS_BUCKET_NAME = 'meu-portfolio-dados-gratuitos'
-GCS_FILE_PATH = 'caminho/para/dados_consolidados.parquet'
-# =============================================================================
-
-# =============================================================================
 # 4. LISTAS DE ATIVOS E SETORES
 # =============================================================================
 
@@ -242,8 +235,9 @@ STRESS_TEST_SIGMA = 2.0
 # NOVAS CONSTANTES GCS (Ajustadas para CSV individual)
 # =============================================================================
 GCS_BUCKET_NAME = 'meu-portfolio-dados-gratuitos'
-GCS_FOLDER_PATH = 'dados_financeiros_etl/'
-GCS_BASE_URL = f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{GCS_FOLDER_PATH}"
+# Usa a constante GCS_DESTINATION_FOLDER do seu script ETL
+GCS_FOLDER_PATH = 'dados_financeiros_etl' 
+# A URI gs:// será construída na função de carregamento
 # =============================================================================
 
 # =============================================================================
@@ -528,38 +522,46 @@ class EngenheiroFeatures:
 
 
 # =============================================================================
-# FUNÇÃO AUXILIAR: COLETA DE DADOS INDIVIDUAIS DO GCS (CSV via HTTP)
+# FUNÇÃO AUXILIAR: COLETA DE DADOS INDIVIDUAIS DO GCS (CSV via URI gs://)
+# REQUER A INSTALAÇÃO DO gcsfs (pip install gcsfs)
 # =============================================================================
 
-def carregar_dados_ativo_gcs_csv(base_url: str, ticker: str) -> pd.DataFrame:
-    """Carrega o DataFrame de um único ativo (ticker) via URL pública do GCS (formato CSV)."""
+def carregar_dados_ativo_gcs_csv(ticker: str) -> pd.DataFrame:
+    """
+    Carrega o DataFrame de um único ativo diretamente do GCS usando a URI gs://.
+    Assume que os arquivos são públicos (não requer autenticação explícita).
+    """
     
-    file_name = f"{ticker}.csv"
-    full_url = f"{base_url}{file_name}"
+    # Constrói a URI gs://
+    uri = f"gs://{GCS_BUCKET_NAME}/{GCS_FOLDER_PATH}/{ticker}.csv"
     
     try:
-        df_ativo = pd.read_csv(full_url)
+        # Pandas (com gcsfs) lê a URI gs:// e lida com o MultiIndex.
+        df_ativo = pd.read_csv(
+            uri,
+            index_col=['Date', 'ticker'], # Define o MultiIndex do seu ETL
+            parse_dates=True
+        )
         
-        # Tenta lidar com o MultiIndex (Date, ticker) do seu ETL
-        if 'Date' in df_ativo.columns and 'ticker' in df_ativo.columns:
-            # Garante que 'Date' seja Datetime
-            df_ativo['Date'] = pd.to_datetime(df_ativo['Date'], utc=True).dt.tz_localize(None)
-            df_ativo = df_ativo.set_index(['Date', 'ticker']).sort_index()
-            
-        elif 'Date' in df_ativo.columns:
-            # Caso de índice simples
-            df_ativo['Date'] = pd.to_datetime(df_ativo['Date'], utc=True).dt.tz_localize(None)
-            df_ativo = df_ativo.set_index('Date')
-
+        # O MultiIndex do CSV pode vir com timezone e ser desserializado de forma diferente.
+        # Garante que o índice 'Date' seja limpo e timezone-naive.
+        if isinstance(df_ativo.index, pd.MultiIndex):
+            # Limpa o timezone do nível 'Date'
+            df_ativo.index = df_ativo.index.set_levels(
+                [df_ativo.index.get_level_values('Date').tz_localize(None)],
+                level='Date'
+            )
+        
         # Converte todas as colunas numéricas para float, tratando erros
         for col in df_ativo.columns:
             if col not in ['sector', 'industry']:
+                # Usa 'coerce' para transformar valores inválidos (incluindo strings) em NaN
                 df_ativo[col] = pd.to_numeric(df_ativo[col], errors='coerce')
         
         return df_ativo
 
     except Exception as e:
-        # print(f"❌ Erro ao carregar {ticker} via CSV/HTTP: {e}")
+        # print(f"❌ Erro ao carregar {ticker} via gs://: {e}")
         return pd.DataFrame()
 
 
@@ -575,7 +577,7 @@ def coletar_ativo_unico_gcs(ativo_selecionado: str):
     """Cria uma instância do coletor GCS e carrega dados de um único ativo."""
     try:
         # CHAMA A FUNÇÃO DE CARREGAMENTO INDIVIDUAL (Requer carregar dados e features)
-        df_ativo = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, ativo_selecionado)
+        df_ativo = carregar_dados_ativo_gcs_csv(ativo_selecionado)
         
         MIN_DIAS_HISTORICO_FLEXIVEL = max(180, int(MIN_DIAS_HISTORICO * 0.7))
         
@@ -655,7 +657,7 @@ class ColetorDadosGCS(object):
 
         for simbolo in tqdm(simbolos, desc="📥 Carregando ativos do GCS"):
             
-            df_ativo = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, simbolo)
+            df_ativo = carregar_dados_ativo_gcs_csv(simbolo)
 
             MIN_DIAS_HISTORICO_FLEXIVEL = max(180, int(MIN_DIAS_HISTORICO * 0.7))
             
@@ -2637,7 +2639,7 @@ def coletar_ativo_unico_gcs(ativo_selecionado: str):
     """Carrega dados de um único ativo do GCS, separa histórico e fundamentos."""
     
     try:
-        df_ativo = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, ativo_selecionado)
+        df_ativo = carregar_dados_ativo_gcs_csv(ativo_selecionado)
         
         MIN_DIAS_HISTORICO_FLEXIVEL = max(180, int(MIN_DIAS_HISTORICO * 0.7))
         
