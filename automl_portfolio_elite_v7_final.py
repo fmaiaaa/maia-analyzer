@@ -1025,7 +1025,7 @@ def aba_introducao():
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("### 1. O "Motor" de Dados (`gerador_financeiro.py`)")
+        st.markdown('### 1. O "Motor" de Dados (`gerador_financeiro.py`)')
         st.markdown("""
         Este script Python (executado separadamente, ex: no Google Colab) é o responsável por todo o trabalho pesado de coleta, processamento e modelagem.
         """)
@@ -1080,7 +1080,7 @@ def aba_introducao():
 
     # --- Coluna 2: O PAINEL ---
     with col2:
-        st.markdown("### 2. O "Painel" de Otimização (Este Aplicativo)")
+        st.markdown('### 2. O "Painel" de Otimização (Este Aplicativo)')
         st.markdown("""
         Este painel Streamlit consome os dados pré-processados pelo "Motor" para montar o portfólio ideal para o perfil do usuário.
         """)
