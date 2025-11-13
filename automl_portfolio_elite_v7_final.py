@@ -8,7 +8,7 @@ Adaptação do Sistema AutoML para usar dados pré-processados (CSV/GCS)
 gerados pelo gerador_financeiro.py, eliminando a dependência do yfinance
 na interface Streamlit e adotando uma linguagem profissional.
 
-Versão: 8.4.1 - Correção de CSS (Ícones) e Introdução Detalhada
+Versão: 8.4.2 - Introdução Metodológica Extensiva
 =============================================================================
 """
 
@@ -929,7 +929,7 @@ def configurar_pagina():
         /* Aplica a fonte Arial especificamente onde queremos, sem quebrar os ícones */
         .stButton button, .stDownloadButton button, .stFormSubmitButton button, 
         .stTabs [data-baseweb="tab"], .stMetric label, .main-header, .info-box,
-        h1, h2, h3, h4, p, body {
+        h1, h2, h3, h4, h5, p, body {
              font-family: 'Arial', sans-serif !important;
         }
         /* --- CORREÇÃO DO BUG (Fim) --- */
@@ -987,6 +987,9 @@ def configurar_pagina():
             border-radius: 6px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.08);
         }
+        .info-box h3 { margin-top: 0; }
+        .info-box h4 { margin-top: 0; }
+        
         .stMetric {
             padding: 10px 15px;
             background-color: var(--background-dark);
@@ -1005,80 +1008,130 @@ def configurar_pagina():
     """, unsafe_allow_html=True)
 
 def aba_introducao():
-    """Aba 1: Introdução Detalhada e Metodologia (v8.4.1)"""
+    """Aba 1: Introdução Metodológica Extensiva (v8.4.2)"""
     
-    st.markdown("## 📚 Metodologia e Pipeline de Dados (Do GCS ao Portfólio)")
+    st.markdown("## 📚 Metodologia Quantitativa e Arquitetura do Sistema")
     
     st.markdown("""
     <div class="info-box">
     <h3>🎯 Visão Geral do Ecossistema</h3>
-    <p>Este sistema opera em duas fases distintas e complementares: um "Motor" de processamento de dados (offline) e este "Painel" de otimização (online). Esta arquitetura garante que o aplicativo Streamlit seja leve, rápido e não dependa de APIs de mercado em tempo real (como o `yfinance`), que podem ser lentas ou instáveis.</p>
+    <p>Este sistema opera em duas fases distintas e complementares: um <b>"Motor" de processamento de dados (offline)</b> e este <b>"Painel" de otimização (online)</b>. Esta arquitetura garante que o aplicativo Streamlit seja leve, rápido e não dependa de APIs de mercado em tempo real (como o `yfinance`), que podem ser lentas ou instáveis.</p>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("---")
     
+    # --- Coluna 1: O MOTOR ---
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown(""""### 1. O "Motor" de Dados (`gerador_financeiro.py`)""")
+        st.markdown("### 1. O "Motor" de Dados (`gerador_financeiro.py`)")
         st.markdown("""
-        Este script Python (executado separadamente, ex: no Google Colab) é o responsável por todo o trabalho pesado de coleta e processamento.
-        
-        **Etapa 1: Coleta de Dados Brutos**
-        - Utiliza a biblioteca `yfinance` para baixar o histórico de preços (`OHLCV`) de todos os ativos do Ibovespa (ex: `PETR4.SA`).
-        - Também coleta dados fundamentalistas estáticos (P/L, ROE, Setor, etc.) da API `ticker.info`.
-        
-        **Etapa 2: Engenharia de Features**
-        - Para *cada* ativo, calcula dezenas de indicadores:
-            - **Técnicos:** Médias Móveis (SMA, EMA), RSI, MACD, Bandas de Bollinger, etc.
-            - **Estatísticos:** Volatilidade GARCH (para risco condicional), Retorno Anualizado, Sharpe Ratio, Drawdown.
-        
-        **Etapa 3: Treinamento de Machine Learning**
-        - Para *cada* ativo, treina um *Ensemble* de modelos de ML (LightGBM, XGBoost, RandomForest, etc.).
-        - O objetivo é prever a probabilidade do ativo ter um desempenho acima da mediana em períodos futuros (ex: 252 dias).
-        - Utiliza técnicas avançadas como Otimização de Hiperparâmetros (Optuna) e Validação Cruzada Walk-Forward (WFCV) para garantir a robustez.
-        
-        **Etapa 4: Exportação para o GCS (Google Cloud Storage)**
-        - O script salva os resultados em 4 arquivos CSV distintos por ativo no bucket `{GCS_BUCKET_NAME}`:
-            - `[TICKER]_tecnicos.csv`: A série temporal completa com todos os indicadores técnicos.
-            - `[TICKER]_fundamentos.csv`: Uma *única linha* com todos os dados estáticos (P/L, ROE, Sharpe, Setor, etc.).
-            - `[TICKER]_ml_results.csv`: Uma *única linha* com a probabilidade final de ML (ex: `ml_proba_252d`).
-            - `[TICKER]_ml_metadata.csv`: (Não utilizado pelo painel) Logs detalhados do treinamento de ML.
+        Este script Python (executado separadamente, ex: no Google Colab) é o responsável por todo o trabalho pesado de coleta, processamento e modelagem.
         """)
-    
+        
+        with st.expander("Etapa 1.1: Coleta e Engenharia de Features"):
+            st.markdown("""
+            Para cada ativo do Ibovespa, o motor executa uma análise multifacetada:
+            
+            - **Análise Técnica:** Cálculo de dezenas de indicadores de *momentum* e tendência (RSI, MACD, Bandas de Bollinger, Médias Móveis, ADX, etc.).
+            - **Análise Fundamentalista:** Coleta de métricas estáticas de *valuation* e *qualidade* (P/L, P/VP, ROE, ROIC, Margens, Crescimento de Receita).
+            - **Análise Estatística:** Cálculo de métricas de risco/retorno (Sharpe Ratio, Max Drawdown) e, crucialmente, a volatilidade condicional futura através de modelos **GARCH(1,1)**, que capturam a "memória" da volatilidade de forma mais eficaz que o desvio padrão histórico.
+            """)
+
+        with st.expander("Etapa 1.2: Treinamento de Modelos de Machine Learning (ML)"):
+            st.markdown("""
+            O coração do sistema é um *Ensemble* de 5 modelos (LightGBM, XGBoost, CatBoost, RandomForest, SVC) treinado para cada ativo.
+            
+            **Objetivo (Target):**
+            O modelo *não* tenta prever o preço (uma tarefa notoriamente difícil e ruidosa). Em vez disso, ele prevê a probabilidade do ativo ter um **desempenho superior à mediana móvel** dos seus próprios retornos futuros (ex: nos próximos 252 dias). Isso transforma o problema em uma classificação binária (performou acima/abaixo da mediana), que é mais robusta e menos suscetível a *outliers* extremos.
+            
+            **Prevenção de Overfitting (Sobreajuste):**
+            - **Ensemble:** A média das previsões de 5 modelos diversos reduz a variância e previne que o sistema dependa do "viés" de um único algoritmo.
+            - **Regularização:** A Otimização de Hiperparâmetros (HPO) com Optuna ajusta parâmetros de regularização (L1/L2) e restringe a complexidade (ex: `max_depth` baixo) para evitar que o modelo decore o ruído dos dados de treino.
+            - **Feature Selection:** Um RandomForest inicial seleciona apenas as features mais importantes, reduzindo o ruído e a "maldição da dimensionalidade".
+            
+            **Prevenção de Underfitting (Subajuste):**
+            - O HPO (Optuna) garante que os modelos tenham capacidade suficiente (ex: `num_leaves` ou `C` do SVC) para capturar os padrões reais, evitando uma simplificação excessiva que ignore sinais válidos.
+            
+            **Prevenção de Lookahead Bias e Data Leakage:**
+            - **Viés de Olhar Futuro (Lookahead):** É evitado ao garantir que, no dia "D", o modelo só utilize dados disponíveis até "D". O *target* (calculado com dados futuros) é corretamente "deslocado" para o passado para servir como rótulo de treino, sem nunca ser usado como *feature*.
+            - **Vazamento de Dados (Leakage):** A validação é feita com **Validação Cruzada Walk-Forward (WFCV)**, específica para séries temporais.
+            
+            *Exemplo de WFCV (Janela Deslizante):*
+            | Fold | Dados de Treino | Dados de Teste |
+            | :--- | :--- | :--- |
+            | 1 | Dias 1-500 | Dias 501-560 |
+            | 2 | Dias 61-560 | Dias 561-620 |
+            | 3 | Dias 121-620 | Dias 621-680 |
+            
+            Isso simula realisticamente o ato de treinar o modelo em dados passados e prever o futuro imediato, sem nunca "contaminar" o treino com informações futuras.
+            """)
+        
+        with st.expander("Etapa 1.3: Exportação (GCS)"):
+             st.markdown(f"""
+            O script salva os resultados em 4 arquivos CSV distintos por ativo no bucket `{GCS_BUCKET_NAME}`:
+            
+            - **`[TICKER]_tecnicos.csv`**: A série temporal completa (OHLCV, Retornos, RSI, MACD, etc.).
+            - **`[TICKER]_fundamentos.csv`**: Uma *única linha* estática (P/L, ROE, Sharpe, Setor, Vol. GARCH).
+            - **`[TICKER]_ml_results.csv`**: Uma *única linha* com a probabilidade final do *Ensemble* de ML.
+            - **`[TICKER]_ml_metadata.csv`**: Logs detalhados do treino (não usados pelo painel).
+            """)
+
+    # --- Coluna 2: O PAINEL ---
     with col2:
-        st.markdown(""""### 2. O "Painel" de Otimização (Este Aplicativo)""")
+        st.markdown("### 2. O "Painel" de Otimização (Este Aplicativo)")
         st.markdown("""
-        Este painel Streamlit consome os dados pré-processados pelo "Motor" para montar o portfólio ideal para você.
-        
-        **Etapa 1: Definição do Perfil (Questionário)**
-        - Você responde ao questionário para definir seu **Nível de Risco** (Conservador, Moderado, Avançado) e **Horizonte Temporal** (Curto, Médio, Longo Prazo).
-        - Essas respostas são cruciais, pois ajustam os pesos da seleção.
-        
-        **Etapa 2: Carregamento de Dados (Leitura do GCS)**
-        - O aplicativo *lê* os arquivos `_fundamentos.csv`, `_tecnicos.csv` e `_ml_results.csv` diretamente do GCS para os ativos selecionados (Aba 2).
-        - **Importante:** Nenhuma chamada ao `yfinance` é feita aqui. A análise é instantânea.
-        
-        **Etapa 3: Ranqueamento Multi-Fatorial**
-        - O sistema calcula um **Score Total** para cada ativo combinando quatro pilares:
-            1. **Performance:** Baseado no Sharpe Ratio (Risco/Retorno).
-            2. **Fundamentos:** Baseado no P/L e ROE.
-            3. **Técnicos:** Baseado no *momentum* (RSI, MACD).
-            4. **Machine Learning:** Baseado na probabilidade de alta (`ML_Proba`).
-        - O *Horizonte Temporal* do seu perfil define os pesos de cada pilar (ex: Longo Prazo foca mais em Fundamentos).
-        
-        **Etapa 4: Otimização de Portfólio (MPT)**
-        - O sistema seleciona os 5 melhores ativos do ranqueamento (`NUM_ATIVOS_PORTFOLIO`).
-        - Utiliza a Teoria Moderna de Portfólio (Markowitz) para encontrar a alocação de pesos ideal, com base no seu *Nível de Risco*:
-            - **Conservador:** Minimiza a Volatilidade (MinVolatility).
-            - **Moderado:** Maximiza o Sharpe Ratio (MaxSharpe).
-            - **Avançado:** Minimiza o Risco de Cauda (CVaR).
-        
-        **Etapa 5: Visualização dos Resultados**
-        - O aplicativo exibe a alocação final (em % e R$), as métricas de performance esperadas, os gráficos e as justificativas para cada escolha.
+        Este painel Streamlit consome os dados pré-processados pelo "Motor" para montar o portfólio ideal para o perfil do usuário.
         """)
-    
+        
+        with st.expander("Etapa 2.1: Definição do Perfil e Carga de Dados"):
+            st.markdown("""
+            O aplicativo primeiro lê os arquivos CSV do GCS (com base na seleção de ativos da Aba 2) e, em seguida, solicita que o usuário preencha o questionário (Aba 3). As respostas definem duas variáveis críticas:
+            
+            1.  **Nível de Risco:** (Conservador, Moderado, etc.)
+            2.  **Horizonte Temporal:** (Curto, Médio, Longo Prazo)
+            """)
+
+        with st.expander("Etapa 2.2: Ranqueamento Multi-Fatorial"):
+            st.markdown("""
+            O sistema calcula um **Score Total** para cada ativo combinando quatro pilares. O **Horizonte Temporal** do seu perfil define os pesos de cada pilar:
+            
+            | Pilar | O que mede? | Peso (Longo Prazo) | Peso (Curto Prazo) |
+            | :--- | :--- | :--- | :--- |
+            | **Performance** | Sharpe Ratio (Risco/Retorno) | Médio | Alto |
+            | **Fundamentos** | P/L e ROE (Valor/Qualidade) | **Alto** | Baixo |
+            | **Técnicos** | RSI e MACD (Momentum) | Baixo | **Alto** |
+            | **Machine Learning**| Probabilidade de Alta (Sinal) | Médio | Médio |
+            
+            Os 5 ativos com maior *Score Total* são pré-selecionados, com uma regra de diversificação setorial.
+            """)
+            
+        with st.expander("Etapa 2.3: Otimização (Teoria Moderna de Portfólio - MPT)"):
+            st.markdown("""
+            Após selecionar os 5 melhores ativos, o sistema usa a **Teoria Moderna de Portfólio (MPT)** de Harry Markowitz para definir o peso (percentual) de cada ativo na carteira.
+            
+            O objetivo é encontrar a carteira na "Fronteira Eficiente" – o ponto que oferece o maior retorno esperado para um dado nível de risco (volatilidade).
+            
+            
+            
+            O **Nível de Risco** do seu perfil determina *qual* ponto da fronteira o sistema irá buscar:
+            
+            - **Conservador/Intermediário:** Busca a carteira de **Mínima Volatilidade (MinVolatility)**. Foco total em reduzir o risco.
+            - **Moderado:** Busca a carteira com o **Máximo Sharpe Ratio (MaxSharpe)**. O melhor equilíbrio entre risco e retorno.
+            - **Avançado:** Otimiza usando **CVaR (Conditional Value at Risk)**. Foca em minimizar a perda média nos piores cenários (ex: 5% piores dias), buscando proteção contra "eventos de cauda".
+            """)
+            
+        with st.expander("Etapa 2.4: Análise de Similaridade (PCA/KMeans)"):
+            st.markdown("""
+            Na Aba 4 (Análise Individual), o sistema utiliza aprendizado não supervisionado para agrupar ativos com características similares.
+            
+            1.  **PCA (Principal Component Analysis):** Reduz a dimensionalidade de dezenas de métricas (Sharpe, P/L, ROE, Volatilidade, etc.) em apenas 2 ou 3 "Componentes Principais" que explicam a maior parte da variação.
+            2.  **KMeans:** Agrupa (clusteriza) os ativos com base nesses componentes.
+            
+            O resultado permite identificar quais ativos se comportam de forma financeiramente similar, independentemente do setor (ex: um banco e uma empresa de energia podem cair no mesmo cluster se tiverem P/L, ROE e volatilidade parecidos).
+            """)
+
     st.markdown("---")
     st.info("""
     **Próxima Etapa:**
