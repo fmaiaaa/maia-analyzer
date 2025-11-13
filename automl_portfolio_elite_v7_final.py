@@ -8,7 +8,7 @@ Adaptação do Sistema AutoML para usar dados pré-processados (CSV/GCS)
 gerados pelo gerador_financeiro.py, eliminando a dependência do yfinance
 na interface Streamlit e adotando uma linguagem profissional.
 
-Versão: 8.3.0 - Arquitetura Limpa, Níveis de Risco Calibrados e Remoção de Mocks
+Versão: 8.4.0 - Design Profissional, UI Clean e Correção de Conflitos de Chave
 =============================================================================
 """
 
@@ -155,7 +155,7 @@ SCORE_MAP_REACTION = {
 }
 
 # =============================================================================
-# 6. CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR (LÓGICA ALTERADA)
+# 6. CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR (LÓGICA CALIBRADA - V8.3.0)
 # =============================================================================
 
 class AnalisadorPerfilInvestidor:
@@ -218,7 +218,7 @@ class AnalisadorPerfilInvestidor:
         nivel_risco = self.determinar_nivel_risco(pontuacao)
         
         # Extrai apenas a chave (A, B ou C) para determinar o horizonte ML
-        liquidez_key = respostas_risco['liquidity'][0] if isinstance(respostas_risco['liquidity'], str) and respostas_risco['liquidity'] else 'C'
+        liquidez_key = respostas_risco['liquidity'][0] if isinstance(respostas_risco['liquidity'], str) and respostas_risco['liquidez'] else 'C'
         objetivo_key = respostas_risco['time_purpose'][0] if isinstance(respostas_risco['time_purpose'], str) and respostas_risco['time_purpose'] else 'C'
         
         horizonte_tempo, ml_lookback = self.determinar_horizonte_ml(
@@ -227,44 +227,44 @@ class AnalisadorPerfilInvestidor:
         return nivel_risco, horizonte_tempo, ml_lookback, pontuacao
 
 # =============================================================================
-# 7. FUNÇÕES DE ESTILO E VISUALIZAÇÃO (Inalteradas)
+# 7. FUNÇÕES DE ESTILO E VISUALIZAÇÃO (Aprimoradas)
 # =============================================================================
 
 def obter_template_grafico() -> dict:
-    """Retorna um template de layout otimizado para gráficos Plotly com estilo Times New Roman."""
+    """Retorna um template de layout otimizado para gráficos Plotly com estilo Limpo/Neutro."""
     return {
-        'plot_bgcolor': 'white',
+        'plot_bgcolor': '#f8f9fa', # Cinza muito claro
         'paper_bgcolor': 'white',
         'font': {
-            'family': 'Times New Roman, serif',
+            'family': 'Arial, sans-serif', # Fonte mais limpa
             'size': 12,
-            'color': 'black'
+            'color': '#343a40' # Cinza escuro
         },
         'title': {
             'font': {
-                'family': 'Times New Roman, serif',
+                'family': 'Arial, sans-serif',
                 'size': 16,
-                'color': '#2c3e50',
+                'color': '#212529', # Preto/Cinza muito escuro
                 'weight': 'bold'
             },
             'x': 0.5,
             'xanchor': 'center'
         },
         'xaxis': {
-            'showgrid': True, 'gridcolor': 'lightgray', 'showline': True, 'linecolor': 'black', 'linewidth': 1,
-            'tickfont': {'family': 'Times New Roman, serif', 'color': 'black'}, 'title': {'font': {'family': 'Times New Roman, serif', 'color': 'black'}}, 'zeroline': False
+            'showgrid': True, 'gridcolor': '#e9ecef', 'showline': True, 'linecolor': '#ced4da', 'linewidth': 1,
+            'tickfont': {'family': 'Arial, sans-serif', 'color': '#343a40'}, 'title': {'font': {'family': 'Arial, sans-serif', 'color': '#343a40'}}, 'zeroline': False
         },
         'yaxis': {
-            'showgrid': True, 'gridcolor': 'lightgray', 'showline': True, 'linecolor': 'black', 'linewidth': 1,
-            'tickfont': {'family': 'Times New Roman, serif', 'color': 'black'}, 'title': {'font': {'family': 'Times New Roman, serif', 'color': 'black'}}, 'zeroline': False
+            'showgrid': True, 'gridcolor': '#e9ecef', 'showline': True, 'linecolor': '#ced4da', 'linewidth': 1,
+            'tickfont': {'family': 'Arial, sans-serif', 'color': '#343a40'}, 'title': {'font': {'family': 'Arial, sans-serif', 'color': '#343a40'}}, 'zeroline': False
         },
         'legend': {
-            'font': {'family': 'Times New Roman, serif', 'color': 'black'},
+            'font': {'family': 'Arial, sans-serif', 'color': '#343a40'},
             'bgcolor': 'rgba(255, 255, 255, 0.8)',
-            'bordercolor': 'lightgray',
+            'bordercolor': '#e9ecef',
             'borderwidth': 1
         },
-        'colorway': ['#2c3e50', '#7f8c8d', '#3498db', '#e74c3c', '#27ae60']
+        'colorway': ['#007bff', '#17a2b8', '#28a745', '#ffc107', '#dc3545'] # Paleta moderna/neutra (Bootstrap-inspired)
     }
 
 # =============================================================================
@@ -292,7 +292,7 @@ class EngenheiroFeatures:
             return (max_val - serie) / (max_val - min_val)
 
 # =============================================================================
-# 9. FUNÇÕES DE COLETA DE DADOS GCS (Corrigidas e Otimizadas)
+# 9. FUNÇÕES DE COLETA DE DADOS GCS (Mantido)
 # =============================================================================
 
 def carregar_dados_ativo_gcs_csv(base_url: str, ticker: str, file_suffix: str) -> pd.DataFrame:
@@ -881,7 +881,7 @@ class AnalisadorIndividualAtivos:
         return resultado_pca, pca, kmeans
 
 # =============================================================================
-# 13. INTERFACE STREAMLIT - REESTRUTURADA COM AJUSTES DE UI
+# 13. INTERFACE STREAMLIT - REESTRUTURADA COM AJUSTES DE DESIGN
 # =============================================================================
 
 def configurar_pagina():
@@ -893,193 +893,145 @@ def configurar_pagina():
         initial_sidebar_state="expanded"
     )
     
-    # Estilos CSS com correções para evitar sobreposição de texto em botões
+    # Estilos CSS com correções para evitar sobreposição de texto em botões e design profissional
     st.markdown("""
         <style>
+        /* Cor de destaque primária */
+        :root {
+            --primary-color: #007bff; /* Azul primário */
+            --secondary-color: #6c757d; /* Cinza secundário */
+            --background-light: #ffffff; /* Fundo branco */
+            --background-dark: #f8f9fa; /* Cinza muito claro */
+            --text-color: #212529; /* Preto/Cinza escuro para texto */
+            --border-color: #dee2e6; /* Cinza claro para bordas */
+        }
+        
         .main-header {
-            font-family: 'Times New Roman', serif;
-            color: #2c3e50;
+            font-family: 'Arial', sans-serif;
+            color: var(--text-color);
             text-align: center;
-            border-bottom: 2px solid #e0e0e0;
+            border-bottom: 2px solid var(--border-color);
             padding-bottom: 10px;
             font-size: 2.2rem !important;
             margin-bottom: 20px;
+            font-weight: 600;
         }
         html, body, [class*="st-"] {
-            font-family: 'Times New Roman', serif;
+            font-family: 'Arial', sans-serif;
         }
         
-        /* Estilo base para botões (garante que o texto se ajuste) */
-        .stButton button {
-            border: 1px solid #2c3e50;
-            color: #2c3e50;
-            border-radius: 4px;
+        /* Correção CRÍTICA para sobreposição de texto em botões/widgets */
+        .stButton button, .stDownloadButton button, .stFormSubmitButton button {
+            border: 1px solid var(--primary-color);
+            color: var(--primary-color);
+            border-radius: 6px;
             padding: 8px 16px;
-            white-space: nowrap; /* Impede quebras de linha indesejadas */
-            overflow: hidden;    /* Esconde o conteúdo que transborda, evitando sobreposição */
-            text-overflow: ellipsis; /* Adiciona '...' se o texto for muito longo */
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            transition: all 0.3s ease;
         }
-        .stButton button:hover {
-            background-color: #7f8c8d;
-            color: white;
+        .stButton button:hover, .stDownloadButton button:hover {
+            background-color: var(--primary-color);
+            color: var(--background-light);
+            box-shadow: 0 4px 8px rgba(0, 123, 255, 0.2);
         }
-        .stButton button[kind="primary"] {
-            background-color: #2c3e50;
-            color: white;
+        .stButton button[kind="primary"], .stFormSubmitButton button {
+            background-color: var(--primary-color);
+            color: var(--background-light);
             border: none;
         }
         
-        /* Correção para o problema de sobreposição em radio/selectbox */
-        /* O problema geralmente ocorre quando o 'key' do Streamlit é exibido. */
-        /* Isso é geralmente causado por um widget sendo renderizado fora do lugar devido a um bug na lib Streamlit ou uso incorreto. */
-        /* O CSS abaixo é para o caso de o texto 'key' ser renderizado como um elemento HTML visível. */
-        
-        .key, .element-container > div > p:first-child[data-testid^="st"] {
-            display: none !important; 
-        }
-
-        .info-box {
-            background-color: #f8f9fa;
-            border-left: 4px solid #2c3e50;
-            padding: 15px;
-            margin: 10px 0;
-            border-radius: 4px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
+        /* Estilo para TABS */
         .stTabs [data-baseweb="tab-list"] {
-            gap: 20px;
+            gap: 15px;
+            border-bottom: 2px solid var(--border-color);
         }
         .stTabs [data-baseweb="tab"] {
-            height: 50px;
-            white-space: pre-wrap;
-            background-color: #f8f9fa;
+            height: 40px;
+            background-color: var(--background-light);
             border-radius: 4px 4px 0 0;
-            gap: 1px;
-            padding-top: 10px;
-            padding-bottom: 10px;
+            padding-top: 5px;
+            padding-bottom: 5px;
+            color: var(--secondary-color);
+            font-weight: 500;
         }
         .stTabs [aria-selected="true"] {
-            background-color: #ffffff;
-            border-top: 2px solid #2c3e50;
-            border-left: 1px solid #e0e0e0;
-            border-right: 1px solid #e0e0e0;
+            background-color: var(--background-light);
+            border-bottom: 2px solid var(--primary-color);
+            color: var(--primary-color);
+            font-weight: 700;
         }
-        .stTabs [aria-selected="true"] span {
-            font-weight: bold;
+        
+        /* Estilo para caixas de informação e métricas */
+        .info-box {
+            background-color: var(--background-dark);
+            border-left: 4px solid var(--primary-color);
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 6px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
         }
         .stMetric {
             padding: 10px 15px;
-            background-color: #ffffff;
-            border-radius: 5px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
+            background-color: var(--background-dark);
+            border-radius: 6px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
             margin-bottom: 10px;
         }
-        .stMetric label { font-weight: bold; color: #555; }
-        .stMetric delta { font-weight: bold; color: #28a745; }
+        .stMetric label { font-weight: 600; color: var(--text-color); }
+        .stMetric delta { font-weight: 700; color: #28a745; }
         .stMetric delta[style*="color: red"] { color: #dc3545 !important; }
-        .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4, .stMarkdown h5, .stMarkdown h6 {
-            color: #2c3e50;
-            font-weight: bold;
+        
+        /* Remover o texto 'key' que pode estar sendo injetado */
+        .key {
+            display: none !important;
         }
-        .stMarkdown ul { padding-left: 20px; }
-        .stMarkdown li { margin-bottom: 8px; }
-
-        .alert-success { background-color: #d4edda; border-color: #c3e6cb; color: #155724; padding: .75rem 1.25rem; margin-bottom: 1rem; border: 1px solid transparent; border-radius: .25rem; }
-        .alert-warning { background-color: #fff3cd; border-color: #ffeeba; color: #856404; padding: .75rem 1.25rem; margin-bottom: 1rem; border: 1px solid transparent; border-radius: .25rem; }
-        .alert-error { background-color: #f8d7da; border-color: #f5c6cb; color: #721c24; padding: .75rem 1.25rem; margin-bottom: 1rem; border: 1px solid transparent; border-radius: .25rem; }
-        .alert-info { background-color: #d1ecf1; border-color: #bee5eb; color: #0c5460; padding: .75rem 1.25rem; margin-bottom: 1rem; border: 1px solid transparent; border-radius: .25rem; }
         </style>
     """, unsafe_allow_html=True)
 
 def aba_introducao():
-    """Aba 1: Introdução e Metodologia (Textos revisados)"""
+    """Aba 1: Introdução e Metodologia (Textos revisados para tom neutro e profissional)"""
     
-    st.markdown("## 📚 Metodologia de Otimização Quantitativa")
+    st.markdown("## 📚 Metodologia Quantitativa de Alocação")
     
     st.markdown("""
     <div class="info-box">
-    <h3>🎯 Proposta de Valor</h3>
-    <p>O <strong>Sistema de Portfólios Adaptativos</strong> é uma plataforma avançada que utiliza 
-    <strong>Machine Learning, Modelagem Estatística e Teoria Moderna de Portfólio</strong> 
-    para construir e otimizar alocações de capital. Nossa metodologia adapta a seleção de ativos e 
-    os critérios de otimização de acordo com o perfil de risco do investidor e o horizonte temporal.</p>
+    <h3>🎯 Visão Geral</h3>
+    <p>A Plataforma de Portfólios Adaptativos emprega uma metodologia rigorosa, combinando 
+    análise estatística avançada, modelos preditivos de Machine Learning (ML) e a Teoria Moderna de Portfólio (MPT) 
+    para otimizar a alocação de capital em ativos do Ibovespa.</p>
     </div>
     """, unsafe_allow_html=True)
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("### 🔬 Pipeline Analítico Estruturado")
+        st.markdown("### 🔬 Componentes Analíticos")
         st.markdown("""
-        **1. Avaliação do Perfil de Risco**
-        - Definição do horizonte temporal e tolerância à volatilidade, essenciais para a calibração dos fatores de pontuação.
+        **1. Avaliação do Perfil:** Definição do horizonte temporal e tolerância ao risco do investidor, essencial para ponderar os fatores de seleção.
         
-        **2. Fatorização e Engenharia de Features**
-        - Integração de dados de *Valuation* (P/L, ROE, etc.), *Momentum* (RSI, MACD) e *Volatilidade* (GARCH, ATR) <strong>pré-calculados</strong> pelo `gerador_financeiro.py`.
+        **2. Fatorização (GCS):** Utilização de features **pré-processadas** pelo pipeline `gerador_financeiro.py`, incluindo:
+        - Fundamentos (*Valuation* e Qualidade)
+        - Indicadores Técnicos (*Momentum* e Tendência)
+        - Volatilidade Condicional (GARCH).
         
-        **3. Previsão Preditiva (Machine Learning)**
-        - Modelos de Ensemble (LightGBM, XGBoost, etc.) <strong>pré-treinados e otimizados</strong> (resultados lidos diretamente do GCS).
+        **3. Predição ML:** Resultados de modelos de *Ensemble* (probabilidade de movimento direcional futuro) são incorporados como fator preditivo na pontuação.
         """)
     
     with col2:
-        st.markdown("### ⚙️ Algoritmos de Otimização e Alocação")
+        st.markdown("### ⚙️ Alocação e Otimização")
         st.markdown("""
-        **Otimização de Portfólio**
-        - Estruturação da Matriz de Covariância usando volatilidade condicional **GARCH** para maior precisão de risco.
-        - Objetivos de Otimização: Maximização do Sharpe Ratio, Minimização da Volatilidade ou Minimização do Risco Condicional (*CVaR*).
+        **Seleção Multi-Fatorial:** Ativos são ranqueados através de um *Score Composto* adaptativo (Performance, Fundamentos, Técnicos e ML), garantindo uma visão holística.
         
-        **Seleção Multi-Fatorial**
-        - Ranqueamento dos ativos com base em um *Score Composto* que balanceia Fatores (Performance Histórica, Fundamentos, Análise Técnica e Predição ML).
+        **Otimização de Risco:** A alocação de pesos é determinada por algoritmos de otimização (Max Sharpe, Min Volatility ou Min CVaR), utilizando uma Matriz de Covariância ajustada pela volatilidade GARCH.
         
-        **Governança e Diversificação**
-        - Restrições de diversificação setorial para reduzir o risco não-sistemático.
-        - Limites de concentração por ativo (Peso Mínimo/Máximo), garantindo a robustez da carteira.
+        **Governança:** Restrições de peso mínimo/máximo por ativo e de diversificação setorial são aplicadas para assegurar a robustez da carteira final.
         """)
     
     st.markdown("---")
     
-    st.markdown("### 📊 O Score Composto para a Seleção Final")
-    
-    st.markdown("""
-    <div class="info-box">
-    <h4>Fatores de Pontuação Adaptativos</h4>
-    <p>A seleção dos <strong>5 ativos</strong> é baseada em um modelo de ranqueamento que adapta a relevância de cada fator ao seu perfil:</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.markdown("""
-        **📈 Fator Performance**
-        - Relação Retorno/Risco (Sharpe Ratio)
-        - Retorno e Drawdown
-        """)
-    
-    with col2:
-        st.markdown("""
-        **💼 Fator Fundamentalista**
-        - Métrica de Valor (P/L, P/VP)
-        - Métrica de Qualidade (ROE, ROIC)
-        """)
-    
-    with col3:
-        st.markdown("""
-        **🔧 Fator Técnico**
-        - Indicadores de Curto Prazo (RSI, MACD)
-        - Análise de Tendência e Volatilidade
-        """)
-    
-    with col4:
-        st.markdown("""
-        **🤖 Fator Predição ML**
-        - Probabilidade de Movimento Direcional (Alta)
-        - Consistência do Modelo (AUC-ROC)
-        """)
-    
-    st.markdown("---")
-    
-    st.markdown("### ⚖️ Otimização vs. Perfil")
+    st.markdown("### ⚖️ Estratégias de Otimização e Perfil")
     
     perfil_table = pd.DataFrame({
         'Perfil': ['Conservador', 'Intermediário', 'Moderado', 'Moderado-Arrojado', 'Avançado'],
@@ -1093,41 +1045,39 @@ def aba_introducao():
     
     st.info("""
     **Próxima Etapa:**
-    Navegue até a aba **'Construtor de Portfólio'** para responder ao questionário e gerar sua alocação otimizada.
+    Utilize o menu de abas para navegar até **'Construtor de Portfólio'**, definir seu perfil e gerar o relatório de alocação otimizada.
     """)
 
 def aba_selecao_ativos():
-    """Aba 2: Seleção de Ativos (AJUSTADA: Apenas Ibovespa, sem Entrada Manual ou Universo Expandido)"""
+    """Aba 2: Seleção de Ativos (Design e Textos ajustados)"""
     
-    st.markdown("## 🎯 Definição do Universo de Análise (Apenas Ativos do Ibovespa)")
+    st.markdown("## 🎯 Definição do Universo de Análise")
     
     st.markdown("""
     <div class="info-box">
-    <p>O universo de análise está restrito aos **ativos do Índice Ibovespa** (B3). 
-    O motor de otimização irá analisar o histórico e as métricas de todos os ativos selecionados para escolher os 
-    <strong>5 ativos ideais</strong> com base no seu perfil de risco.</p>
+    <p>O universo de análise está restrito ao **Índice Ibovespa**. O sistema utiliza todos os ativos selecionados para realizar o ranqueamento multi-fatorial e otimizar a carteira.</p>
     </div>
     """, unsafe_allow_html=True)
     
-    # Opções de Seleção REDUZIDAS
+    # Opções de Seleção
     modo_selecao = st.radio(
         "**Modo de Seleção:**",
         [
-            "📊 Índice de Referência (Ibovespa - Todos os Ativos)",
-            "🏢 Seleção Setorial (Ativos do Ibovespa)",
-            "✍️ Seleção Individual (Ativos do Ibovespa)"
+            "📊 Índice de Referência (Todos do Ibovespa)",
+            "🏢 Seleção Setorial",
+            "✍️ Seleção Individual"
         ],
         index=0,
-        key='selection_mode_radio'
+        key='selection_mode_radio_v8' # Chave única
     )
     
     ativos_selecionados = []
     
     if "Índice de Referência" in modo_selecao:
         ativos_selecionados = TODOS_ATIVOS.copy()
-        st.success(f"✓ **{len(ativos_selecionados)} ativos de referência** selecionados")
+        st.success(f"✓ **{len(ativos_selecionados)} ativos** (Ibovespa completo) definidos para análise.")
         
-        with st.expander("📋 Ver tickers do Índice"):
+        with st.expander("📋 Visualizar Tickers"):
             ibov_display = pd.DataFrame({
                 'Ticker': ATIVOS_IBOVESPA,
                 'Código': [a.replace('.SA', '') for a in ATIVOS_IBOVESPA]
@@ -1146,16 +1096,16 @@ def aba_selecao_ativos():
                 )
     
     elif "Seleção Setorial" in modo_selecao:
-        st.markdown("### 🏢 Seleção por Setor (Apenas Ativos do Ibovespa)")
+        st.markdown("### 🏢 Seleção por Setor")
         setores_disponiveis = sorted(list(ATIVOS_POR_SETOR.keys()))
         col1, col2 = st.columns([2, 1])
         
         with col1:
             setores_selecionados = st.multiselect(
-                "Escolha um ou mais setores para compor o universo de análise:",
+                "Escolha um ou mais setores:",
                 options=setores_disponiveis,
                 default=setores_disponiveis[:3] if setores_disponiveis else [],
-                key='setores_multiselect'
+                key='setores_multiselect_v8' # Chave única
             )
         
         if setores_selecionados:
@@ -1163,10 +1113,10 @@ def aba_selecao_ativos():
             ativos_selecionados = list(set(ativos_selecionados))
             
             with col2:
-                st.metric("Setores Selecionados", len(setores_selecionados))
+                st.metric("Setores", len(setores_selecionados))
                 st.metric("Total de Ativos", len(ativos_selecionados))
             
-            with st.expander("📋 Ver ativos por setor"):
+            with st.expander("📋 Visualizar Ativos por Setor"):
                 for setor in setores_selecionados:
                     ativos_do_setor = ATIVOS_POR_SETOR.get(setor, [])
                     st.markdown(f"**{setor}** ({len(ativos_do_setor)} ativos)")
@@ -1175,7 +1125,7 @@ def aba_selecao_ativos():
             st.warning("⚠️ Selecione pelo menos um setor.")
     
     elif "Seleção Individual" in modo_selecao:
-        st.markdown("### ✍️ Seleção Individual de Tickers (Apenas Ativos do Ibovespa)")
+        st.markdown("### ✍️ Seleção Individual de Tickers")
         
         ativos_com_setor = {}
         for setor, ativos in ATIVOS_POR_SETOR.items():
@@ -1186,35 +1136,35 @@ def aba_selecao_ativos():
         col1, col2 = st.columns([3, 1])
         
         with col1:
-            st.markdown("#### 📝 Selecione Tickers da Lista IBOVESPA")
+            st.markdown("#### 📝 Selecione Tickers (Ibovespa)")
             ativos_selecionados = st.multiselect(
-                "Pesquise e selecione tickers disponíveis (Ibovespa):",
+                "Pesquise e selecione os tickers:",
                 options=todos_tickers_ibov,
                 format_func=lambda x: f"{x.replace('.SA', '')} - {ativos_com_setor.get(x, 'Desconhecido')}",
-                key='ativos_individuais_multiselect'
+                key='ativos_individuais_multiselect_v8' # Chave única
             )
         
         with col2:
             st.metric("Tickers Selecionados", len(ativos_selecionados))
 
         if not ativos_selecionados:
-            st.warning("⚠️ Nenhum ativo definido. Por favor, faça uma seleção.")
+            st.warning("⚠️ Nenhum ativo definido.")
     
     if ativos_selecionados:
         st.session_state.ativos_para_analise = ativos_selecionados
         st.markdown("---")
         
         col1, col2, col3 = st.columns(3)
-        col1.metric("✓ Tickers Definidos", len(ativos_selecionados))
-        col2.metric("→ Serão Ranqueados", len(ativos_selecionados))
-        col3.metric("→ Carteira Final", NUM_ATIVOS_PORTFOLIO)
+        col1.metric("Tickers Definidos", len(ativos_selecionados))
+        col2.metric("Para Ranqueamento", len(ativos_selecionados))
+        col3.metric("Carteira Final", NUM_ATIVOS_PORTFOLIO)
         
-        st.success("✓ Definição concluída! Vá para a aba **'Construtor de Portfólio'** para gerar a alocação.")
+        st.success("✓ Definição concluída. Prossiga para a aba **'Construtor de Portfólio'**.")
     else:
         st.warning("⚠️ O universo de análise está vazio.")
 
 # =============================================================================
-# Aba 3: Questionário e Construção de Portfólio (Corrigido e Optuna Removido)
+# Aba 3: Questionário e Construção de Portfólio (Design e Keys ajustados)
 # =============================================================================
 
 def aba_construtor_portfolio():
@@ -1230,13 +1180,13 @@ def aba_construtor_portfolio():
     
     # FASE 1: QUESTIONÁRIO
     if not st.session_state.builder_complete:
-        st.markdown('## 📋 Questionário de Calibração do Perfil')
+        st.markdown('## 📋 Calibração do Perfil de Risco')
         
-        st.info(f"✓ {len(st.session_state.ativos_para_analise)} ativos prontos para o ranqueamento.")
+        st.info(f"✓ **{len(st.session_state.ativos_para_analise)} ativos** prontos. Responda o questionário para calibrar a otimização.")
         
         col_question1, col_question2 = st.columns(2)
         
-        # Correção de Keys para o Formulário
+        # Correção de Keys para o Formulário - APLICADA V8.4
         with st.form("investor_profile_form", clear_on_submit=False): 
             options_score = list(SCORE_MAP.keys())
             options_reaction = list(SCORE_MAP_REACTION.keys())
@@ -1249,30 +1199,28 @@ def aba_construtor_portfolio():
             ]
             
             with col_question1:
-                st.markdown("#### Avaliação da Tolerância ao Risco")
-                # Keys únicas corrigidas
-                p2_risk = st.radio("**1. Estou disposto a aceitar volatilidade de curto prazo em busca de retornos superiores:**", options=options_score, index=2, key='risk_accept_radio_q1')
-                p3_gain = st.radio("**2. Meu objetivo principal é a maximização do retorno, mesmo com maior exposição ao risco:**", options=options_score, index=2, key='max_gain_radio_q2')
-                p4_stable = st.radio("**3. Priorizo a estabilidade e a preservação do capital em detrimento de altos ganhos:**", options=options_score, index=2, key='stable_growth_radio_q3')
-                p5_loss = st.radio("**4. A prevenção de perdas é mais crítica para mim do que a busca por crescimento acelerado:**", options=options_score, index=2, key='avoid_loss_radio_q4')
-                p511_reaction = st.radio("**5. Diante de uma queda de 10% no portfólio, minha reação seria:**", options=options_reaction, index=1, key='reaction_radio_q5')
-                p_level = st.radio("**6. Meu nível de conhecimento sobre o mercado financeiro:**", options=options_level_abc, index=1, key='level_radio_q6')
+                st.markdown("#### Tolerância ao Risco")
+                # Chaves únicas e descritivas (v8.4)
+                p2_risk = st.radio("**1. Volatilidade de Curto Prazo:** Aceito volatilidade em busca de retornos superiores.", options=options_score, index=2, key='risk_accept_radio_v8_q1')
+                p3_gain = st.radio("**2. Objetivo Primário:** Maximizar o retorno, mesmo com maior exposição ao risco.", options=options_score, index=2, key='max_gain_radio_v8_q2')
+                p4_stable = st.radio("**3. Estabilidade vs. Ganhos:** Priorizo a estabilidade e a preservação do capital.", options=options_score, index=2, key='stable_growth_radio_v8_q3')
+                p5_loss = st.radio("**4. Prevenção de Perdas:** A prevenção de perdas é mais crítica do que a busca por crescimento acelerado.", options=options_score, index=2, key='avoid_loss_radio_v8_q4')
+                p511_reaction = st.radio("**5. Reação a Queda de 10%:** Qual seria sua reação diante dessa queda?", options=options_reaction, index=1, key='reaction_radio_v8_q5')
+                p_level = st.radio("**6. Nível de Conhecimento:** Qual seu nível de conhecimento sobre o mercado financeiro?", options=options_level_abc, index=1, key='level_radio_v8_q6')
             
             with col_question2:
-                st.markdown("#### Definição de Horizonte e Capital")
-                # Extraindo apenas a chave A, B ou C
-                p211_time = st.radio("**7. O prazo máximo para reavaliação estratégica do portfólio é:**", options=options_time_horizon, index=2, key='time_purpose_radio_q7')
-                p311_liquid = st.radio("**8. Meu prazo mínimo de resgate/necessidade de liquidez é:**", options=options_liquidez, index=2, key='liquidity_radio_q8')
+                st.markdown("#### Horizonte e Capital")
+                # Chaves únicas e descritivas (v8.4)
+                p211_time = st.radio("**7. Prazo Estratégico:** Prazo máximo para reavaliação estratégica do portfólio.", options=options_time_horizon, index=2, key='time_purpose_radio_v8_q7')
+                p311_liquid = st.radio("**8. Liquidez:** Prazo mínimo para resgate/necessidade de liquidez.", options=options_liquidez, index=2, key='liquidity_radio_v8_q8')
                 
                 st.markdown("---")
                 investment = st.number_input(
                     "Capital Total a ser Alocado (R$)",
-                    min_value=1000, max_value=10000000, value=100000, step=10000, key='investment_amount_input'
+                    min_value=1000, max_value=10000000, value=100000, step=10000, key='investment_amount_input_v8'
                 )
             
-            # Botão de Optuna REMOVIDO, conforme solicitado
-            
-            submitted = st.form_submit_button("🚀 Iniciar Otimização Adaptativa", type="primary", key='submit_optimization_button')
+            submitted = st.form_submit_button("🚀 Gerar Alocação Otimizada", type="primary", key='submit_optimization_button_v8') # Botão unificado e claro
             
             if submitted:
                 # 1. Analisa perfil
@@ -1296,7 +1244,7 @@ def aba_construtor_portfolio():
                     st.error(f"Erro fatal ao inicializar o construtor do portfólio: {e}")
                     return
 
-                # 3. Executa pipeline (otimizar_ml=False, pois o Optuna foi removido)
+                # 3. Executa pipeline
                 with st.spinner(f'Executando pipeline de fatores para **PERFIL {risk_level}** ({horizon})...'):
                     success = builder_local.executar_pipeline(
                         simbolos_customizados=st.session_state.ativos_para_analise,
@@ -1304,7 +1252,7 @@ def aba_construtor_portfolio():
                     )
                     
                     if not success:
-                        st.error("Falha na aquisição ou processamento dos dados. Certifique-se de que os arquivos CSV no GCS estão disponíveis e válidos para os ativos selecionados.")
+                        st.error("Falha na aquisição ou processamento dos dados. Verifique a disponibilidade dos arquivos CSV no GCS.")
                         st.session_state.builder = None; st.session_state.profile = {}; return
                     
                     st.session_state.builder_complete = True
@@ -1327,7 +1275,7 @@ def aba_construtor_portfolio():
         col3.metric("Sharpe Ratio (Portfólio)", f"{builder.metricas_portfolio.get('sharpe_ratio', 0):.3f}")
         col4.metric("Estratégia de Alocação", builder.metodo_alocacao_atual.split('(')[0].strip())
         
-        if st.button("🔄 Recalibrar Perfil e Otimizar", key='recomecar_analysis_button'):
+        if st.button("🔄 Recalibrar Perfil e Otimizar", key='recomecar_analysis_button_v8'):
             st.session_state.builder_complete = False
             st.session_state.builder = None
             st.session_state.profile = {}
@@ -1497,8 +1445,8 @@ def aba_construtor_portfolio():
                 plot_df_garch['Vol. Condicional (%)'] = plot_df_garch['Vol. Condicional (%)'].astype(float)
                 plot_df_garch['Vol. Histórica (%)'] = plot_df_garch['Vol. Histórica (%)'].apply(lambda x: float(x) if x != 'N/A' else np.nan)
 
-                fig_garch.add_trace(go.Bar(name='Volatilidade Histórica', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Histórica (%)'], marker=dict(color='#7f8c8d'), opacity=0.7))
-                fig_garch.add_trace(go.Bar(name='Volatilidade Condicional', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Condicional (%)'], marker=dict(color='#3498db')))
+                fig_garch.add_trace(go.Bar(name='Volatilidade Histórica', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Histórica (%)'], marker=dict(color='#6c757d'), opacity=0.7)) # Cor Secundária
+                fig_garch.add_trace(go.Bar(name='Volatilidade Condicional', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Condicional (%)'], marker=dict(color='#007bff'))) # Cor Primária
                 
                 fig_layout = obter_template_grafico()
                 fig_layout['title']['text'] = "Volatilidade Anualizada: Histórica vs. Condicional (GARCH)"
@@ -1542,7 +1490,7 @@ def aba_construtor_portfolio():
 
 
 # =============================================================================
-# Aba 4: Análise Individual (Inalterada, pois PCA/KMeans foi corrigido na classe)
+# Aba 4: Análise Individual (Mantido)
 # =============================================================================
 
 def aba_analise_individual():
@@ -1560,8 +1508,8 @@ def aba_analise_individual():
         return
 
     # Garante que o estado individual_asset_select é válido
-    if 'individual_asset_select' not in st.session_state or st.session_state.individual_asset_select not in ativos_disponiveis:
-        st.session_state.individual_asset_select = ativos_disponiveis[0] if ativos_disponiveis else None
+    if 'individual_asset_select_v8' not in st.session_state or st.session_state.individual_asset_select_v8 not in ativos_disponiveis:
+        st.session_state.individual_asset_select_v8 = ativos_disponiveis[0] if ativos_disponiveis else None
 
     col1, col2 = st.columns([3, 1])
     
@@ -1570,11 +1518,11 @@ def aba_analise_individual():
             "Selecione um ticker para análise detalhada:",
             options=ativos_disponiveis,
             format_func=lambda x: x.replace('.SA', '') if isinstance(x, str) else x,
-            key='individual_asset_select'
+            key='individual_asset_select_v8' # Chave única
         )
     
     with col2:
-        if st.button("🔄 Executar Análise", key='analyze_asset_button', type="primary"):
+        if st.button("🔄 Executar Análise", key='analyze_asset_button_v8', type="primary"):
             st.session_state.analisar_ativo_triggered = True 
     
     if 'analisar_ativo_triggered' not in st.session_state or not st.session_state.analisar_ativo_triggered:
@@ -1634,7 +1582,7 @@ def aba_analise_individual():
                     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
                     
                     fig.add_trace(go.Candlestick(x=df_completo.index, open=df_completo['Open'], high=df_completo['High'], low=df_completo['Low'], close=df_completo['Close'], name='Preço'), row=1, col=1)
-                    fig.add_trace(go.Bar(x=df_completo.index, y=df_completo['Volume'], name='Volume', marker=dict(color='lightblue'), opacity=0.7), row=2, col=1)
+                    fig.add_trace(go.Bar(x=df_completo.index, y=df_completo['Volume'], name='Volume', marker=dict(color='#6c757d'), opacity=0.7), row=2, col=1)
                     
                     fig_layout = obter_template_grafico()
                     fig_layout['title']['text'] = f"Série Temporal de Preços e Volume - {ativo_selecionado.replace('.SA', '')}"
@@ -1690,16 +1638,16 @@ def aba_analise_individual():
                 fig_osc = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=("RSI (14) - Força Relativa", "MACD - Convergência/Divergência"))
                 
                 if 'rsi_14' in df_completo.columns:
-                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['rsi_14'], name='RSI', line=dict(color='#3498db')), row=1, col=1)
-                    fig_osc.add_hline(y=70, line_dash="dash", line_color="red", row=1, col=1)
-                    fig_osc.add_hline(y=30, line_dash="dash", line_color="green", row=1, col=1)
+                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['rsi_14'], name='RSI', line=dict(color='#007bff')), row=1, col=1) # Cor Primária
+                    fig_osc.add_hline(y=70, line_dash="dash", line_color="#dc3545", row=1, col=1)
+                    fig_osc.add_hline(y=30, line_dash="dash", line_color="#28a745", row=1, col=1)
                 
                 if 'macd' in df_completo.columns and 'macd_signal' in df_completo.columns:
-                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd'], name='MACD', line=dict(color='#e74c3c')), row=2, col=1)
-                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd_signal'], name='Signal', line=dict(color='#7f8c8d')), row=2, col=1)
+                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd'], name='MACD', line=dict(color='#17a2b8')), row=2, col=1) # Cor Info
+                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd_signal'], name='Signal', line=dict(color='#6c757d')), row=2, col=1) # Cor Secundária
                     # Coluna macd_diff (Histograma)
                     if 'macd_diff' in df_completo.columns:
-                        fig_osc.add_trace(go.Bar(x=df_completo.index, y=df_completo['macd_diff'], name='Histograma', marker=dict(color='lightgray')), row=2, col=1)
+                        fig_osc.add_trace(go.Bar(x=df_completo.index, y=df_completo['macd_diff'], name='Histograma', marker=dict(color='#e9ecef')), row=2, col=1)
                 
                 fig_layout = obter_template_grafico()
                 fig_layout['height'] = 550
