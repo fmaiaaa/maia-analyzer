@@ -8,7 +8,7 @@ Adaptação do Sistema AutoML para usar dados pré-processados (CSV/GCS)
 gerados pelo gerador_financeiro.py, eliminando a dependência do yfinance
 na interface Streamlit e adotando uma linguagem profissional.
 
-Versão: 8.4.0 - Design Profissional, UI Clean e Correção de Conflitos de Chave
+Versão: 8.4.1 - Correção de CSS (Ícones) e Introdução Detalhada
 =============================================================================
 """
 
@@ -218,7 +218,7 @@ class AnalisadorPerfilInvestidor:
         nivel_risco = self.determinar_nivel_risco(pontuacao)
         
         # Extrai apenas a chave (A, B ou C) para determinar o horizonte ML
-        liquidez_key = respostas_risco['liquidity'][0] if isinstance(respostas_risco['liquidity'], str) and respostas_risco['liquidez'] else 'C'
+        liquidez_key = respostas_risco['liquidity'][0] if isinstance(respostas_risco['liquidity'], str) and respostas_risco['liquidity'] else 'C'
         objetivo_key = respostas_risco['time_purpose'][0] if isinstance(respostas_risco['time_purpose'], str) and respostas_risco['time_purpose'] else 'C'
         
         horizonte_tempo, ml_lookback = self.determinar_horizonte_ml(
@@ -916,9 +916,24 @@ def configurar_pagina():
             margin-bottom: 20px;
             font-weight: 600;
         }
-        html, body, [class*="st-"] {
+
+        /* --- CORREÇÃO DO BUG (Início) --- */
+        /* REMOVIDA a regra global que quebrava os ícones:
+         html, body, [class*="st-"] {
             font-family: 'Arial', sans-serif;
+         }
+         Isso impedia que a fonte 'Material Icons' do Streamlit fosse carregada nos botões.
+         A fonte 'Arial' agora é aplicada seletivamente abaixo.
+        */
+        
+        /* Aplica a fonte Arial especificamente onde queremos, sem quebrar os ícones */
+        .stButton button, .stDownloadButton button, .stFormSubmitButton button, 
+        .stTabs [data-baseweb="tab"], .stMetric label, .main-header, .info-box,
+        h1, h2, h3, h4, p, body {
+             font-family: 'Arial', sans-serif !important;
         }
+        /* --- CORREÇÃO DO BUG (Fim) --- */
+
         
         /* Correção CRÍTICA para sobreposição de texto em botões/widgets */
         .stButton button, .stDownloadButton button, .stFormSubmitButton button {
@@ -983,69 +998,91 @@ def configurar_pagina():
         .stMetric delta { font-weight: 700; color: #28a745; }
         .stMetric delta[style*="color: red"] { color: #dc3545 !important; }
         
-        /* Remover o texto 'key' que pode estar sendo injetado */
-        .key {
-            display: none !important;
-        }
+        /* REMOVIDA a regra '.key' que era perigosa e poderia causar conflitos.
+        */
+        
         </style>
     """, unsafe_allow_html=True)
 
 def aba_introducao():
-    """Aba 1: Introdução e Metodologia (Textos revisados para tom neutro e profissional)"""
+    """Aba 1: Introdução Detalhada e Metodologia (v8.4.1)"""
     
-    st.markdown("## 📚 Metodologia Quantitativa de Alocação")
+    st.markdown("## 📚 Metodologia e Pipeline de Dados (Do GCS ao Portfólio)")
     
     st.markdown("""
     <div class="info-box">
-    <h3>🎯 Visão Geral</h3>
-    <p>A Plataforma de Portfólios Adaptativos emprega uma metodologia rigorosa, combinando 
-    análise estatística avançada, modelos preditivos de Machine Learning (ML) e a Teoria Moderna de Portfólio (MPT) 
-    para otimizar a alocação de capital em ativos do Ibovespa.</p>
+    <h3>🎯 Visão Geral do Ecossistema</h3>
+    <p>Este sistema opera em duas fases distintas e complementares: um "Motor" de processamento de dados (offline) e este "Painel" de otimização (online). Esta arquitetura garante que o aplicativo Streamlit seja leve, rápido e não dependa de APIs de mercado em tempo real (como o `yfinance`), que podem ser lentas ou instáveis.</p>
     </div>
     """, unsafe_allow_html=True)
+    
+    st.markdown("---")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("### 🔬 Componentes Analíticos")
+        st.markdown("### 1. O "Motor" de Dados (`gerador_financeiro.py`)")
         st.markdown("""
-        **1. Avaliação do Perfil:** Definição do horizonte temporal e tolerância ao risco do investidor, essencial para ponderar os fatores de seleção.
+        Este script Python (executado separadamente, ex: no Google Colab) é o responsável por todo o trabalho pesado de coleta e processamento.
         
-        **2. Fatorização (GCS):** Utilização de features **pré-processadas** pelo pipeline `gerador_financeiro.py`, incluindo:
-        - Fundamentos (*Valuation* e Qualidade)
-        - Indicadores Técnicos (*Momentum* e Tendência)
-        - Volatilidade Condicional (GARCH).
+        **Etapa 1: Coleta de Dados Brutos**
+        - Utiliza a biblioteca `yfinance` para baixar o histórico de preços (`OHLCV`) de todos os ativos do Ibovespa (ex: `PETR4.SA`).
+        - Também coleta dados fundamentalistas estáticos (P/L, ROE, Setor, etc.) da API `ticker.info`.
         
-        **3. Predição ML:** Resultados de modelos de *Ensemble* (probabilidade de movimento direcional futuro) são incorporados como fator preditivo na pontuação.
+        **Etapa 2: Engenharia de Features**
+        - Para *cada* ativo, calcula dezenas de indicadores:
+            - **Técnicos:** Médias Móveis (SMA, EMA), RSI, MACD, Bandas de Bollinger, etc.
+            - **Estatísticos:** Volatilidade GARCH (para risco condicional), Retorno Anualizado, Sharpe Ratio, Drawdown.
+        
+        **Etapa 3: Treinamento de Machine Learning**
+        - Para *cada* ativo, treina um *Ensemble* de modelos de ML (LightGBM, XGBoost, RandomForest, etc.).
+        - O objetivo é prever a probabilidade do ativo ter um desempenho acima da mediana em períodos futuros (ex: 252 dias).
+        - Utiliza técnicas avançadas como Otimização de Hiperparâmetros (Optuna) e Validação Cruzada Walk-Forward (WFCV) para garantir a robustez.
+        
+        **Etapa 4: Exportação para o GCS (Google Cloud Storage)**
+        - O script salva os resultados em 4 arquivos CSV distintos por ativo no bucket `{GCS_BUCKET_NAME}`:
+            - `[TICKER]_tecnicos.csv`: A série temporal completa com todos os indicadores técnicos.
+            - `[TICKER]_fundamentos.csv`: Uma *única linha* com todos os dados estáticos (P/L, ROE, Sharpe, Setor, etc.).
+            - `[TICKER]_ml_results.csv`: Uma *única linha* com a probabilidade final de ML (ex: `ml_proba_252d`).
+            - `[TICKER]_ml_metadata.csv`: (Não utilizado pelo painel) Logs detalhados do treinamento de ML.
         """)
     
     with col2:
-        st.markdown("### ⚙️ Alocação e Otimização")
+        st.markdown("### 2. O "Painel" de Otimização (Este Aplicativo)")
         st.markdown("""
-        **Seleção Multi-Fatorial:** Ativos são ranqueados através de um *Score Composto* adaptativo (Performance, Fundamentos, Técnicos e ML), garantindo uma visão holística.
+        Este painel Streamlit consome os dados pré-processados pelo "Motor" para montar o portfólio ideal para você.
         
-        **Otimização de Risco:** A alocação de pesos é determinada por algoritmos de otimização (Max Sharpe, Min Volatility ou Min CVaR), utilizando uma Matriz de Covariância ajustada pela volatilidade GARCH.
+        **Etapa 1: Definição do Perfil (Questionário)**
+        - Você responde ao questionário para definir seu **Nível de Risco** (Conservador, Moderado, Avançado) e **Horizonte Temporal** (Curto, Médio, Longo Prazo).
+        - Essas respostas são cruciais, pois ajustam os pesos da seleção.
         
-        **Governança:** Restrições de peso mínimo/máximo por ativo e de diversificação setorial são aplicadas para assegurar a robustez da carteira final.
+        **Etapa 2: Carregamento de Dados (Leitura do GCS)**
+        - O aplicativo *lê* os arquivos `_fundamentos.csv`, `_tecnicos.csv` e `_ml_results.csv` diretamente do GCS para os ativos selecionados (Aba 2).
+        - **Importante:** Nenhuma chamada ao `yfinance` é feita aqui. A análise é instantânea.
+        
+        **Etapa 3: Ranqueamento Multi-Fatorial**
+        - O sistema calcula um **Score Total** para cada ativo combinando quatro pilares:
+            1. **Performance:** Baseado no Sharpe Ratio (Risco/Retorno).
+            2. **Fundamentos:** Baseado no P/L e ROE.
+            3. **Técnicos:** Baseado no *momentum* (RSI, MACD).
+            4. **Machine Learning:** Baseado na probabilidade de alta (`ML_Proba`).
+        - O *Horizonte Temporal* do seu perfil define os pesos de cada pilar (ex: Longo Prazo foca mais em Fundamentos).
+        
+        **Etapa 4: Otimização de Portfólio (MPT)**
+        - O sistema seleciona os 5 melhores ativos do ranqueamento (`NUM_ATIVOS_PORTFOLIO`).
+        - Utiliza a Teoria Moderna de Portfólio (Markowitz) para encontrar a alocação de pesos ideal, com base no seu *Nível de Risco*:
+            - **Conservador:** Minimiza a Volatilidade (MinVolatility).
+            - **Moderado:** Maximiza o Sharpe Ratio (MaxSharpe).
+            - **Avançado:** Minimiza o Risco de Cauda (CVaR).
+        
+        **Etapa 5: Visualização dos Resultados**
+        - O aplicativo exibe a alocação final (em % e R$), as métricas de performance esperadas, os gráficos e as justificativas para cada escolha.
         """)
     
     st.markdown("---")
-    
-    st.markdown("### ⚖️ Estratégias de Otimização e Perfil")
-    
-    perfil_table = pd.DataFrame({
-        'Perfil': ['Conservador', 'Intermediário', 'Moderado', 'Moderado-Arrojado', 'Avançado'],
-        'Estratégia de Otimização': ['Minimização de Volatilidade', 'Minimização de Volatilidade', 'Maximização do Sharpe', 'Maximização do Sharpe', 'Otimização do CVaR'],
-        'Foco dos Fatores': ['Qualidade (Longo Prazo)', 'Equilíbrio c/ Fundamentos', 'Equilíbrio Geral (Médio Prazo)', 'Momentum (Curto Prazo)', 'Visão de Curto Prazo/ML']
-    })
-    
-    st.table(perfil_table)
-    
-    st.markdown("---")
-    
     st.info("""
     **Próxima Etapa:**
-    Utilize o menu de abas para navegar até **'Construtor de Portfólio'**, definir seu perfil e gerar o relatório de alocação otimizada.
+    Utilize o menu de abas para navegar até **'Seleção de Ativos'** e, em seguida, **'Construtor de Portfólio'** para gerar sua alocação otimizada.
     """)
 
 def aba_selecao_ativos():
