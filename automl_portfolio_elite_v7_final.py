@@ -8,7 +8,7 @@ Adaptação do Sistema AutoML para usar dados pré-processados (CSV/GCS)
 gerados pelo gerador_financeiro.py, eliminando a dependência do yfinance
 na interface Streamlit e adotando uma linguagem profissional.
 
-Versão: 8.0.0 - Foco em Profissionalismo e Dados Offline
+Versão: 8.3.0 - Arquitetura Limpa, Níveis de Risco Calibrados e Remoção de Mocks
 =============================================================================
 """
 
@@ -35,14 +35,10 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 
 # --- 4. FEATURE ENGINEERING / TECHNICAL ANALYSIS (TA) ---
-# Apenas a importação das classes, o cálculo em si é assumido nos dados do GCS
-import ta
-from ta.trend import SMAIndicator, EMAIndicator, MACD, ADXIndicator, CCIIndicator
-from ta.momentum import RSIIndicator, StochasticOscillator, ROCIndicator, WilliamsRIndicator
-from ta.volatility import BollingerBands, AverageTrueRange, KeltnerChannel, DonchianChannel
-from ta.volume import OnBalanceVolumeIndicator, ChaikinMoneyFlowIndicator, MFIIndicator, VolumeWeightedAveragePrice
+# REMOVIDAS: O cálculo em si é assumido nos dados do GCS.
 
 # --- 5. MACHINE LEARNING (SCIKIT-LEARN) ---
+# MANTIDAS: Usadas EXCLUSIVAMENTE para a função de clusterização (PCA/KMeans) local.
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import silhouette_score, mean_squared_error, mean_absolute_error, r2_score, roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit
@@ -51,18 +47,13 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 
 # --- 6. BOOSTED MODELS & OPTIMIZATION ---
-# Mantidas apenas para o contexto, mas a lógica de treinamento complexo foi removida.
-import xgboost as xgb
-import lightgbm as lgb
-from catboost import CatBoostClassifier
-import optuna
-import shap
+# REMOVIDAS: O treinamento e otimização são feitos no gerador_financeiro.py (Optuna/XGBoost/LightGBM/CatBoost).
 
 # --- 7. SPECIALIZED TIME SERIES & ECONOMETRICS ---
+# MANTIDA: Usada como dependência lógica, embora o resultado (volatilidade) venha do GCS.
 from arch import arch_model
 
 # --- 8. CONFIGURATION (NOVO NOME PROFISSIONAL) ---
-optuna.logging.set_verbosity(optuna.logging.WARNING)
 warnings.filterwarnings('ignore')
 
 # =============================================================================
@@ -96,11 +87,12 @@ GCS_FOLDER_PATH = 'dados_financeiros_etl/'
 GCS_BASE_URL = f"https://storage.googleapis.com/{GCS_BUCKET_NAME}/{GCS_FOLDER_PATH}"
 
 # =============================================================================
-# 4. LISTAS DE ATIVOS E SETORES (Inalteradas, pois são a base do sistema)
+# 4. LISTAS DE ATIVOS E SETORES (AJUSTADAS SOMENTE PARA IBOVESPA)
 # =============================================================================
 
+# Lista ATUALIZADA de ativos do Ibovespa (baseada no arquivo gerador_financeiro.py)
 ATIVOS_IBOVESPA = [
-    'ALOS3.SA', 'ABEV3.SA', 'ASAI3.SA', 'AURE3.SA', 'AZZA3.SA', 'B3SA3.SA',
+    'ALOS3.SA', 'ABEV3.SA', 'ASAI3.SA', 'AESB3.SA', 'AZZA3.SA', 'B3SA3.SA',
     'BBSE3.SA', 'BBDC3.SA', 'BBDC4.SA', 'BRAP4.SA', 'BBAS3.SA', 'BRKM5.SA',
     'BRAV3.SA', 'BPAC11.SA', 'CXSE3.SA', 'CEAB3.SA', 'CMIG4.SA', 'COGN3.SA',
     'CPLE6.SA', 'CSAN3.SA', 'CPFE3.SA', 'CMIN3.SA', 'CURY3.SA', 'CVCB3.SA',
@@ -108,7 +100,7 @@ ATIVOS_IBOVESPA = [
     'ENEV3.SA', 'EGIE3.SA', 'EQTL3.SA', 'FLRY3.SA', 'GGBR4.SA', 'GOAU4.SA',
     'HAPV3.SA', 'HYPE3.SA', 'IGTI11.SA', 'IRBR3.SA', 'ISAE4.SA', 'ITSA4.SA',
     'ITUB4.SA', 'KLBN11.SA', 'RENT3.SA', 'LREN3.SA', 'MGLU3.SA', 'POMO4.SA',
-    'MBRF3.SA', 'BEEF3.SA', 'MOTV3.SA', 'MRVE3.SA', 'MULT3.SA', 'NATU3.SA',
+    'BEEF3.SA', 'MRVE3.SA', 'MULT3.SA', 'NATU3.SA',
     'PCAR3.SA', 'PETR3.SA', 'PETR4.SA', 'RECV3.SA', 'PRIO3.SA', 'PSSA3.SA',
     'RADL3.SA', 'RAIZ4.SA', 'RDOR3.SA', 'RAIL3.SA', 'SBSP3.SA', 'SANB11.SA',
     'CSNA3.SA', 'SLCE3.SA', 'SMFT3.SA', 'SUZB3.SA', 'TAEE11.SA', 'VIVT3.SA',
@@ -116,56 +108,29 @@ ATIVOS_IBOVESPA = [
     'VBBR3.SA', 'VIVA3.SA', 'WEGE3.SA', 'YDUQ3.SA'
 ]
 
-ATIVOS_POR_SETOR = {
-    'Bens Industriais': ['NATU3.SA', 'AMOB3.SA', 'ISAE4.SA', 'BHIA3.SA', 'ZAMP3.SA', 'AERI3.SA',
-                         'ICBR3.SA', 'DOTZ3.SA', 'GOLL3.SA', 'VIIA3.SA', 'ARML3.SA', 'MLAS3.SA',
-                         'CBAV3.SA', 'TTEN3.SA', 'BRBI11.SA', 'REAG3.SA', 'ATEA3.SA', 'MODL4.SA',
-                         'VITT3.SA', 'KRSA3.SA', 'CXSE3.SA', 'RIOS3.SA', 'HCAR3.SA', 'GGPS3.SA',
-                         'MATD3.SA', 'ALLD3.SA', 'BLAU3.SA', 'ATMP3.SA', 'ASAI3.SA', 'JSLG3.SA',
-                         'CMIN3.SA', 'ELMD3.SA', 'ORVR3.SA', 'OPCT3.SA', 'WEST3.SA', 'CSED3.SA',
-                         'BMOB3.SA', 'JALL3.SA', 'TOKY3.SA', 'ESPA3.SA', 'VAMO3.SA', 'INTB3.SA',
-                         'NGRD3.SA', 'AVLL3.SA', 'RRRP3.SA', 'ENJU3.SA', 'CASH3.SA', 'TFCO4.SA',
-                         'CONX3.SA', 'GMAT3.SA', 'SEQL3.SA', 'PASS3.SA', 'BOAS3.SA', 'MELK3.SA',
-                         'HBSA3.SA', 'SIMH3.SA', 'CURY3.SA', 'PLPL3.SA', 'PETZ3.SA', 'PGMN3.SA',
-                         'LAVV3.SA', 'LJQQ3.SA', 'DMVF3.SA', 'SOMA3.SA', 'RIVA3.SA', 'AMBP3.SA', 'ALPK3.SA'],
-    'Consumo Cíclico': ['AZZA3.SA', 'ALOS3.SA', 'VIIA3.SA', 'RDNI3.SA', 'SLED4.SA', 'RSID3.SA',
-                        'MNDL3.SA', 'LEVE3.SA', 'CTKA4.SA', 'MYPK3.SA', 'GRND3.SA', 'LCAM3.SA',
-                        'CEAB3.SA', 'VSTE3.SA', 'CGRA3.SA', 'ESTR4.SA', 'DIRR3.SA', 'CTNM3.SA',
-                        'ANIM3.SA', 'EVEN3.SA', 'AMAR3.SA', 'MOVI3.SA', 'JHSF3.SA', 'HBOR3.SA',
-                        'PDGR3.SA', 'ARZZ3.SA', 'EZTC3.SA', 'ALPA3.SA', 'RENT3.SA', 'MRVE3.SA',
-                        'MGLU3.SA', 'LREN3.SA', 'COGN3.SA', 'WHRL4.SA', 'TCSA3.SA', 'SMLS3.SA',
-                        'SEER3.SA', 'HOOT4.SA', 'GFSA3.SA', 'YDUQ3.SA', 'CYRE3.SA', 'CVCB3.SA', 'SBFG3.SA'],
-    'Consumo não Cíclico': ['PRVA3.SA', 'SMTO3.SA', 'MDIA3.SA', 'CAML3.SA', 'AGRO3.SA', 'BEEF3.SA',
-                             'VIVA3.SA', 'CRFB3.SA', 'PCAR3.SA', 'NTCO3.SA', 'NATU3.SA', 'MRFG3.SA',
-                             'JBSS3.SA', 'BRFS3.SA'],
-    'Financeiro': ['CSUD3.SA', 'INBR31.SA', 'BIDI3.SA', 'BIDI4.SA', 'IGTI11.SA', 'IGTI3.SA',
-                   'XPBR31.SA', 'TRAD3.SA', 'BSLI4.SA', 'BTTL3.SA', 'BPAR3.SA', 'SCAR3.SA',
-                   'LPSB3.SA', 'BMGB4.SA', 'IGBR3.SA', 'GSHP3.SA', 'PSSA3.SA', 'CARD3.SA',
-                   'BBRK3.SA', 'BRPR3.SA', 'BRSR6.SA', 'SANB4.SA', 'SANB3.SA', 'MULT3.SA',
-                   'ITUB3.SA', 'ITUB4.SA', 'ALSO3.SA', 'BMIN3.SA', 'MERC4.SA', 'LOGG3.SA',
-                   'ITSA4.SA', 'IRBR3.SA', 'PDTC3.SA', 'SYNE3.SA', 'BBDC4.SA', 'BBDC3.SA',
-                   'BRML3.SA', 'APER3.SA', 'BBSE3.SA', 'BPAN4.SA', 'BBAS3.SA'],
-    'Materiais Básicos': ['LAND3.SA', 'DEXP4.SA', 'RANI3.SA', 'PMAM3.SA', 'FESA4.SA', 'EUCA3.SA',
-                          'SUZB3.SA', 'KLBN4.SA', 'KLBN3.SA', 'VALE3.SA', 'VALE5.SA', 'UNIP6.SA',
-                          'UNIP5.SA', 'GOAU4.SA', 'DXCO3.SA', 'CSNA3.SA', 'BRKM6.SA', 'BRKM5.SA',
-                          'BRAP4.SA', 'BRAP3.SA'],
-    'Petróleo, Gás e Biocombustíveis': ['SRNA3.SA', 'VBBR3.SA', 'RAIZ4.SA', 'RECV3.SA', 'PRIO3.SA',
-                                        'OSXB3.SA', 'DMMO3.SA', 'RPMG3.SA', 'UGPA3.SA', 'PETR4.SA',
-                                        'PETR3.SA', 'ENAT3.SA'],
-    'Saúde': ['ONCO3.SA', 'VVEO3.SA', 'PARD3.SA', 'BIOM3.SA', 'BALM3.SA', 'PNVL3.SA', 'AALR3.SA',
-              'ODPV3.SA', 'RADL3.SA', 'QUAL3.SA', 'OFSA3.SA', 'HYPE3.SA', 'FLRY3.SA'],
-    'Tecnologia da Informação': ['CLSA3.SA', 'LVTC3.SA', 'G2DI33.SA', 'IFCM3.SA', 'GOGL35.SA',
-                                 'LWSA3.SA', 'TOTS3.SA', 'LINX3.SA', 'POSI3.SA'],
-    'Telecomunicações': ['BRIT3.SA', 'FIQE3.SA', 'DESK3.SA', 'TIMS3.SA', 'VIVT3.SA', 'TELB4.SA', 'TELB3.SA'],
-    'Utilidade Pública': ['BRAV3.SA', 'AURE3.SA', 'MEGA3.SA', 'CEPE6.SA', 'CEED3.SA', 'EEEL4.SA',
-                          'CASN4.SA', 'CEGR3.SA', 'CEBR3.SA', 'RNEW4.SA', 'COCE6.SA', 'CLSC4.SA',
-                          'ALUP4.SA', 'ALUP3.SA', 'SAPR4.SA', 'SAPR3.SA', 'CPRE3.SA', 'CPLE5.SA',
-                          'CPLE6.SA', 'CPLE3.SA', 'CPFE3.SA', 'CGAS3.SA', 'AESB3.SA', 'NEOE3.SA',
-                          'TRPL4.SA', 'TRPL3.SA', 'EGIE3.SA', 'TAEE4.SA', 'TAEE3.SA', 'SBSP3.SA',
-                          'GEPA4.SA', 'CESP6.SA', 'CMIG4.SA', 'CMIG3.SA', 'AFLT3.SA']
+# Mapeamento setorial (MANTIDO, mas apenas para os ativos acima, usando a lista original como referência)
+ATIVOS_POR_SETOR_IBOV = {
+    'Bens Industriais': ['EMBR3.SA', 'VAMO3.SA', 'WEGE3.SA', 'VIVA3.SA', 'ASAI3.SA', 'SMFT3.SA', 'CMIN3.SA', 'SLCE3.SA'],
+    'Consumo Cíclico': ['AZZA3.SA', 'ALOS3.SA', 'CEAB3.SA', 'COGN3.SA', 'CURY3.SA', 'CVCB3.SA', 'CYRE3.SA', 'DIRR3.SA', 'LREN3.SA', 'MGLU3.SA', 'MRVE3.SA', 'RENT3.SA', 'YDUQ3.SA'],
+    'Consumo não Cíclico': ['BEEF3.SA', 'NATU3.SA', 'PCAR3.SA', 'VIVA3.SA'], # Algumas duplicatas são resolvidas no ALL_ASSETS
+    'Financeiro': ['B3SA3.SA', 'BBSE3.SA', 'BBDC3.SA', 'BBDC4.SA', 'BBAS3.SA', 'BPAC11.SA', 'CXSE3.SA', 'HYPE3.SA', 'IGTI11.SA', 'IRBR3.SA', 'ITSA4.SA', 'ITUB4.SA', 'MULT3.SA', 'PSSA3.SA', 'RDOR3.SA', 'SANB11.SA'],
+    'Materiais Básicos': ['BRAP4.SA', 'BRKM5.SA', 'CSNA3.SA', 'GGBR4.SA', 'GOAU4.SA', 'KLBN11.SA', 'POMO4.SA', 'SUZB3.SA', 'USIM5.SA', 'VALE3.SA'],
+    'Petróleo, Gás e Biocombustíveis': ['ENEV3.SA', 'PETR3.SA', 'PETR4.SA', 'PRIO3.SA', 'RAIZ4.SA', 'RECV3.SA', 'UGPA3.SA', 'VBBR3.SA'],
+    'Saúde': ['FLRY3.SA', 'HAPV3.SA', 'RADL3.SA'],
+    'Tecnologia da Informação': ['TOTS3.SA'],
+    'Telecomunicações': ['TIMS3.SA', 'VIVT3.SA'],
+    'Utilidade Pública': ['AESB3.SA', 'AURE3.SA', 'BRAV3.SA', 'CMIG4.SA', 'CPLE6.SA', 'CPFE3.SA', 'EGIE3.SA', 'ELET3.SA', 'ELET6.SA', 'ENGI11.SA', 'EQTL3.SA', 'ISAE4.SA', 'RAIL3.SA', 'SBSP3.SA', 'TAEE11.SA']
 }
 
-TODOS_ATIVOS = sorted(list(set([ativo for ativos in ATIVOS_POR_SETOR.values() for ativo in ativos])))
+# Garante que as listas de ativos e setores estejam sincronizadas (apenas IBOVESPA)
+TODOS_ATIVOS = sorted(list(set(ATIVOS_IBOVESPA)))
+
+# Remove setores vazios que poderiam surgir na filtragem
+ATIVOS_POR_SETOR = {
+    setor: [ativo for ativo in ativos if ativo in ATIVOS_IBOVESPA] 
+    for setor, ativos in ATIVOS_POR_SETOR_IBOV.items()
+    if any(ativo in ATIVOS_IBOVESPA for ativo in ativos)
+}
 
 
 # =============================================================================
@@ -179,14 +144,18 @@ SCORE_MAP_INV = {
     'CT: Concordo Totalmente': 1, 'C: Concordo': 2, 'N: Neutro': 3, 'D: Discordo': 4, 'DT: Discordo Totalmente': 5
 }
 SCORE_MAP_CONHECIMENTO = {
-    'A: Avançado': 5, 'B: Intermediário': 3, 'C: Iniciante': 1
+    'A: Avançado (Análise fundamentalista, macro e técnica)': 5, 
+    'B: Intermediário (Conhecimento básico sobre mercados e ativos)': 3, 
+    'C: Iniciante (Pouca ou nenhuma experiência em investimentos)': 1
 }
 SCORE_MAP_REACTION = {
-    'A: Venderia': 1, 'B: Manteria': 3, 'C: Compraria mais': 5
+    'A: Venderia imediatamente': 1, 
+    'B: Manteria e reavaliaria a tese': 3, 
+    'C: Compraria mais para aproveitar preços baixos': 5
 }
 
 # =============================================================================
-# 6. CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR (Inalterada)
+# 6. CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR (LÓGICA ALTERADA)
 # =============================================================================
 
 class AnalisadorPerfilInvestidor:
@@ -198,10 +167,21 @@ class AnalisadorPerfilInvestidor:
         self.dias_lookback_ml = 5
     
     def determinar_nivel_risco(self, pontuacao: int) -> str:
-        if pontuacao <= 18: return "CONSERVADOR"
-        elif pontuacao <= 30: return "INTERMEDIÁRIO"
-        elif pontuacao <= 45: return "MODERADO"
-        elif pontuacao <= 60: return "MODERADO-ARROJADO"
+        """
+        Determina o nível de risco com base na pontuação total (min 26, max 130).
+        Faixas igualmente espaçadas (aprox. 21 pontos por nível).
+        """
+        # Faixas de pontuação calibradas:
+        # CONSERVADOR: 26 - 46
+        # INTERMEDIÁRIO: 47 - 67
+        # MODERADO: 68 - 88
+        # MODERADO-ARROJADO: 89 - 109
+        # AVANÇADO: 110 - 130
+        
+        if pontuacao <= 46: return "CONSERVADOR"
+        elif pontuacao <= 67: return "INTERMEDIÁRIO"
+        elif pontuacao <= 88: return "MODERADO"
+        elif pontuacao <= 109: return "MODERADO-ARROJADO"
         else: return "AVANÇADO"
     
     def determinar_horizonte_ml(self, liquidez_key: str, objetivo_key: str) -> tuple[str, int]:
@@ -218,17 +198,31 @@ class AnalisadorPerfilInvestidor:
         return self.horizonte_tempo, self.dias_lookback_ml
     
     def calcular_perfil(self, respostas_risco: dict) -> tuple[str, str, int, int]:
+        
+        # Mapeamento do texto da resposta para o score numérico
+        score_risk_accept = SCORE_MAP.get(respostas_risco['risk_accept'], 3)
+        score_max_gain = SCORE_MAP.get(respostas_risco['max_gain'], 3)
+        score_stable_growth = SCORE_MAP_INV.get(respostas_risco['stable_growth'], 3)
+        score_avoid_loss = SCORE_MAP_INV.get(respostas_risco['avoid_loss'], 3)
+        score_level = SCORE_MAP_CONHECIMENTO.get(respostas_risco['level'], 3)
+        score_reaction = SCORE_MAP_REACTION.get(respostas_risco['reaction'], 3)
+
         pontuacao = (
-            SCORE_MAP[respostas_risco['risk_accept']] * 5 +
-            SCORE_MAP[respostas_risco['max_gain']] * 5 +
-            SCORE_MAP_INV[respostas_risco['stable_growth']] * 5 +
-            SCORE_MAP_INV[respostas_risco['avoid_loss']] * 5 +
-            SCORE_MAP_CONHECIMENTO[respostas_risco['level']] * 3 +
-            SCORE_MAP_REACTION[respostas_risco['reaction']] * 3
+            score_risk_accept * 5 +
+            score_max_gain * 5 +
+            score_stable_growth * 5 +
+            score_avoid_loss * 5 +
+            score_level * 3 +
+            score_reaction * 3
         )
         nivel_risco = self.determinar_nivel_risco(pontuacao)
+        
+        # Extrai apenas a chave (A, B ou C) para determinar o horizonte ML
+        liquidez_key = respostas_risco['liquidity'][0] if isinstance(respostas_risco['liquidity'], str) and respostas_risco['liquidity'] else 'C'
+        objetivo_key = respostas_risco['time_purpose'][0] if isinstance(respostas_risco['time_purpose'], str) and respostas_risco['time_purpose'] else 'C'
+        
         horizonte_tempo, ml_lookback = self.determinar_horizonte_ml(
-            respostas_risco['liquidity'], respostas_risco['time_purpose']
+            liquidez_key, objetivo_key
         )
         return nivel_risco, horizonte_tempo, ml_lookback, pontuacao
 
@@ -274,7 +268,7 @@ def obter_template_grafico() -> dict:
     }
 
 # =============================================================================
-# 8. CLASSE: ENGENHEIRO DE FEATURES (Mantido, mas usado apenas para normalização)
+# 8. CLASSE: ENGENHEIRO DE FEATURES (Mantido)
 # =============================================================================
 
 class EngenheiroFeatures:
@@ -307,24 +301,30 @@ def carregar_dados_ativo_gcs_csv(base_url: str, ticker: str, file_suffix: str) -
     full_url = f"{base_url}{file_name}"
     
     try:
+        # Tenta carregar o arquivo
         df_ativo = pd.read_csv(full_url)
         
+        # 1. Configuração do Índice (Date)
         if 'Date' in df_ativo.columns:
             df_ativo = df_ativo.set_index('Date')
         elif 'index' in df_ativo.columns:
             df_ativo = df_ativo.set_index('index')
             df_ativo.index.name = 'Date'
             
+        # 2. Conversão para Datetime e remoção de timezone
+        if df_ativo.index.dtype == object:
+            df_ativo.index = pd.to_datetime(df_ativo.index)
+        
         if df_ativo.index.tz is not None:
-             df_ativo.index = pd.to_datetime(df_ativo.index, utc=True).tz_convert(None) 
-        else:
-             df_ativo.index = pd.to_datetime(df_ativo.index)
+             df_ativo.index = df_ativo.index.tz_convert(None) 
 
+        # 3. Conversão de colunas numéricas
         for col in df_ativo.columns:
             if col not in ['ticker', 'sector', 'industry', 'recommendation', 'Date', 'index']:
+                # Força a conversão para float, ignorando erros
                 df_ativo[col] = pd.to_numeric(df_ativo[col], errors='coerce')
         
-        return df_ativo
+        return df_ativo.sort_index()
 
     except Exception as e:
         # print(f"❌ Erro ao carregar {ticker} com sufixo {file_suffix} da URL: {full_url}. Erro: {e}")
@@ -346,9 +346,11 @@ class ColetorDadosGCS(object):
 
     def _get_fundamental_metrics_from_df(self, fund_row: pd.Series) -> dict:
         """Método auxiliar para extrair fundamentos e métricas de performance de uma linha de df_fundamentos."""
+        # Filtra colunas que começam com 'fund_'
         fund_data = fund_row.filter(regex='^fund_').to_dict()
         fund_data = {k.replace('fund_', ''): v for k, v in fund_data.items()}
         
+        # Adiciona colunas de performance estáticas
         fund_data['sharpe_ratio'] = fund_row.get('sharpe_ratio', np.nan)
         fund_data['annual_return'] = fund_row.get('annual_return', np.nan)
         fund_data['annual_volatility'] = fund_row.get('annual_volatility', np.nan)
@@ -356,6 +358,10 @@ class ColetorDadosGCS(object):
         fund_data['garch_volatility'] = fund_row.get('garch_volatility', np.nan)
         fund_data['sector'] = fund_row.get('sector', 'Unknown')
         fund_data['industry'] = fund_row.get('industry', 'Unknown')
+        
+        # Renomeia para P/L e ROE simples, se existirem
+        if 'pe_ratio' in fund_data: fund_data['pe_ratio'] = fund_data['pe_ratio'] 
+        if 'roe' in fund_data: fund_data['roe'] = fund_data['roe'] 
         
         return fund_data
 
@@ -371,29 +377,42 @@ class ColetorDadosGCS(object):
 
         for simbolo in tqdm(simbolos, desc="📥 Carregando ativos do GCS"):
             
+            # 1. Carrega os 3 arquivos essenciais
             df_tecnicos = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, simbolo, file_suffix='_tecnicos.csv')
             df_fundamentos = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, simbolo, file_suffix='_fundamentos.csv')
             df_ml_results = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, simbolo, file_suffix='_ml_results.csv')
             
-            if df_tecnicos.empty or 'Close' not in df_tecnicos.columns or len(df_tecnicos) < MIN_DIAS_HISTORICO_FLEXIVEL or df_fundamentos.empty: continue
+            # 2. Validação Mínima
+            if (df_tecnicos.empty or 'Close' not in df_tecnicos.columns or 
+                len(df_tecnicos.dropna(subset=['Close', 'returns'])) < MIN_DIAS_HISTORICO_FLEXIVEL or 
+                df_fundamentos.empty): 
+                continue
 
             # --- 3. Extração e Preparação ---
             
+            # Armazena o DF temporal (Close, returns, indicadores, targets, etc.)
             self.dados_por_ativo[simbolo] = df_tecnicos.dropna(how='all')
             self.ativos_sucesso.append(simbolo)
             
+            # Extrai a linha única de fundamentos
             fund_row = df_fundamentos.iloc[0] 
             fund_data = self._get_fundamental_metrics_from_df(fund_row)
             
             # 4. Adiciona dados ML à última linha do DataFrame Temporal
             if not df_ml_results.empty:
                 ml_row = df_ml_results.iloc[0] 
+                # Tenta encontrar a coluna de proba mais longa (252d é o padrão de longo prazo)
                 ml_proba_col = next((c for c in ml_row.index if c.startswith('ml_proba_') and not pd.isna(ml_row[c])), 'ml_proba_252d')
                 
-                last_index = self.dados_por_ativo[simbolo].index[-1]
-                
-                self.dados_por_ativo[simbolo].loc[last_index, 'ML_Proba'] = ml_row[ml_proba_col] if ml_proba_col in ml_row else 0.5
-                self.dados_por_ativo[simbolo].loc[last_index, 'ML_Confidence'] = 0.7 
+                # Assume a última data válida no DF técnico (garantindo que existe)
+                if not self.dados_por_ativo[simbolo].empty:
+                    last_index = self.dados_por_ativo[simbolo].index[-1]
+                    
+                    self.dados_por_ativo[simbolo].loc[last_index, 'ML_Proba'] = ml_row.get(ml_proba_col, 0.5)
+                    
+                    # CORRIGIDO: Não usar valor fixo (0.7). Usar np.nan (que será tratado como neutro/médio no score).
+                    # A confiança AUC-ROC deve ser carregada do GCS, mas se não existir, usamos np.nan.
+                    self.dados_por_ativo[simbolo].loc[last_index, 'ML_Confidence'] = ml_row.get('auc_roc_score_best_model', np.nan)
             
             # 5. Cria o DataFrame Estático e Volatilidade GARCH
             fund_data['Ticker'] = simbolo
@@ -419,11 +438,14 @@ class ColetorDadosGCS(object):
         
         self.metricas_performance = pd.DataFrame(metricas_simples_list).set_index('Ticker')
         
+        # Anexa os dados estáticos (fundamentos) à última linha dos DFs temporais para fácil acesso
         for simbolo in self.ativos_sucesso:
-            if simbolo in self.dados_fundamentalistas.index:
+            if simbolo in self.dados_fundamentalistas.index and not self.dados_por_ativo[simbolo].empty:
                 last_index = self.dados_por_ativo[simbolo].index[-1]
                 for col, value in self.dados_fundamentalistas.loc[simbolo].items():
-                    self.dados_por_ativo[simbolo].loc[last_index, col] = value
+                    # Garante que a coluna 'returns' não seja sobrescrita por 'annual_return'
+                    if col not in ['annual_return', 'annual_volatility', 'max_drawdown']: 
+                        self.dados_por_ativo[simbolo].loc[last_index, col] = value
                 
         return True
 
@@ -444,15 +466,20 @@ class ColetorDadosGCS(object):
         if not df_tecnicos.empty:
             last_index = df_tecnicos.index[-1]
             
+            # Adiciona features estáticas
             for key, value in features_fund.items():
-                df_tecnicos.loc[last_index, key] = value
+                # Evita sobrescrever séries temporais com valores estáticos
+                if key not in df_tecnicos.columns or df_tecnicos[key].isnull().all():
+                     df_tecnicos.loc[last_index, key] = value
                 
+            # Adiciona ML
             if not df_ml_results.empty:
                 ml_row = df_ml_results.iloc[0] 
                 ml_proba_col = next((c for c in ml_row.index if c.startswith('ml_proba_') and not pd.isna(ml_row[c])), 'ml_proba_252d')
                 
-                df_tecnicos.loc[last_index, 'ML_Proba'] = ml_row[ml_proba_col] if ml_proba_col in ml_row else 0.5
-                df_tecnicos.loc[last_index, 'ML_Confidence'] = 0.7 
+                df_tecnicos.loc[last_index, 'ML_Proba'] = ml_row.get(ml_proba_col, 0.5)
+                # CORRIGIDO: Não usar mock, usar np.nan se a coluna não for carregada.
+                df_tecnicos.loc[last_index, 'ML_Confidence'] = ml_row.get('auc_roc_score_best_model', np.nan) 
         
         return df_tecnicos.dropna(how='all'), features_fund
 
@@ -580,7 +607,12 @@ class ConstrutorPortfolioAutoML:
         """Coleta e processa dados de mercado (VIA GCS/CSV)."""
         coletor = ColetorDadosGCS(periodo=self.periodo)
         
-        if not coletor.coletar_e_processar_dados(simbolos):
+        # Filtra os símbolos para garantir que são apenas os do IBOVESPA
+        simbolos_filtrados = [s for s in simbolos if s in TODOS_ATIVOS]
+        
+        if not simbolos_filtrados: return False
+        
+        if not coletor.coletar_e_processar_dados(simbolos_filtrados):
             return False
         
         self.dados_por_ativo = coletor.dados_por_ativo
@@ -616,7 +648,7 @@ class ConstrutorPortfolioAutoML:
             last_row = self.dados_por_ativo[ativo].iloc[-1]
             self.predicoes_ml[ativo] = {
                 'predicted_proba_up': last_row.get('ML_Proba', 0.5),
-                'auc_roc_score': last_row.get('ML_Confidence', np.nan),
+                'auc_roc_score': last_row.get('ML_Confidence', np.nan), # CORRIGIDO: usa np.nan se não carregado
                 'model_name': 'Ensemble GCS (Pré-calculado)'
             }
 
@@ -645,29 +677,34 @@ class ConstrutorPortfolioAutoML:
             
         combinado = pd.DataFrame(last_metrics).T
         
-        required_cols = ['sharpe_ratio', 'pe_ratio', 'roe', 'rsi_14', 'macd', 'ML_Proba', 'ML_Confidence', 'sector']
+        # Garantindo que as colunas de score existam (usando fallbacks do gerador_financeiro)
+        required_cols = ['sharpe_ratio', 'pe_ratio', 'roe', 'rsi_14', 'macd_diff', 'ML_Proba', 'ML_Confidence', 'sector']
         for col in required_cols:
-             if col not in combinado.columns: combinado[col] = np.nan
+             if col not in combinado.columns: 
+                 if col == 'pe_ratio': combinado[col] = combinado.get('fund_pe_ratio', np.nan)
+                 elif col == 'roe': combinado[col] = combinado.get('fund_roe', np.nan)
+                 else: combinado[col] = np.nan
         
         # 4. Cálculo dos Scores
-        pe_col = 'pe_ratio' if 'pe_ratio' in combinado.columns else 'fund_pe_ratio'
-        roe_col = 'roe' if 'roe' in combinado.columns else 'fund_roe'
+        pe_col = 'pe_ratio'
+        roe_col = 'roe'
 
         # 4.1. Score de Performance (Sharpe)
         scores['performance_score'] = EngenheiroFeatures._normalizar(combinado['sharpe_ratio'], maior_melhor=True) * WEIGHT_PERF
         
         # 4.2. Score Fundamentalista (P/L e ROE)
-        pe_score = EngenheiroFeatures._normalizar(combinado[pe_col], maior_melhor=False)
-        roe_score = EngenheiroFeatures._normalizar(combinado[roe_col], maior_melhor=True)
+        pe_score = EngenheiroFeatures._normalizar(combinado[pe_col].replace([np.inf, -np.inf], np.nan), maior_melhor=False)
+        roe_score = EngenheiroFeatures._normalizar(combinado[roe_col].replace([np.inf, -np.inf], np.nan), maior_melhor=True)
         scores['fundamental_score'] = (pe_score * 0.5 + roe_score * 0.5) * WEIGHT_FUND
         
         # 4.3. Score Técnico (RSI e MACD)
         rsi_norm = EngenheiroFeatures._normalizar(combinado['rsi_14'], maior_melhor=False)
-        macd_norm = EngenheiroFeatures._normalizar(combinado['macd'], maior_melhor=True)
+        macd_norm = EngenheiroFeatures._normalizar(combinado['macd_diff'], maior_melhor=True)
         scores['technical_score'] = (rsi_norm * 0.5 + macd_norm * 0.5) * WEIGHT_TECH
 
         # 4.4. Score de Machine Learning (Proba e Confiança)
         ml_proba_norm = EngenheiroFeatures._normalizar(combinado['ML_Proba'], maior_melhor=True)
+        # CORRIGIDO: Se ML_Confidence for NaN, a normalização será 0.5, o que significa peso neutro.
         ml_confidence_norm = EngenheiroFeatures._normalizar(combinado['ML_Confidence'], maior_melhor=True)
         scores['ml_score_weighted'] = (ml_proba_norm * 0.6 + ml_confidence_norm * 0.4) * final_ml_weight
         
@@ -679,7 +716,8 @@ class ConstrutorPortfolioAutoML:
         final_portfolio = []; selected_sectors = set(); num_assets_to_select = min(NUM_ATIVOS_PORTFOLIO, len(ranked_assets))
         
         for asset in ranked_assets:
-            sector = combinado.loc[asset, 'sector'] if 'sector' in combinado.columns and asset in combinado.index else 'Unknown'
+            sector = self.scores_combinados.loc[asset, 'sector'] if 'sector' in self.scores_combinados.columns and asset in self.scores_combinados.index else 'Unknown'
+            # Garante diversificação setorial ou preenche o mínimo de ativos
             if sector not in selected_sectors or len(final_portfolio) < num_assets_to_select:
                 final_portfolio.append(asset); selected_sectors.add(sector)
             if len(final_portfolio) >= num_assets_to_select: break
@@ -749,12 +787,14 @@ class ConstrutorPortfolioAutoML:
             vol_garch = fund.get('garch_volatility', np.nan)
             justification.append(f"Performance: Sharpe {sharpe:.3f}, Retorno {ann_ret*100:.2f}%, Vol. {vol_garch*100:.2f}% (GARCH/Hist.)")
             
+            # Usando os nomes das colunas após o processamento no ColetorDadosGCS
             pe_ratio = fund.get('pe_ratio', fund.get('fund_pe_ratio', np.nan))
             roe = fund.get('roe', fund.get('fund_roe', np.nan))
             justification.append(f"Fundamentos: P/L {pe_ratio:.2f}, ROE {roe:.2f}%")
             
             proba_up = self.predicoes_ml.get(simbolo, {}).get('predicted_proba_up', 0.5)
-            auc_score = self.predicoes_ml.get(simbolo, {}).get('auc_roc_score', np.nan)
+            # CORRIGIDO: usa np.nan se não carregado, o que será exibido como N/A
+            auc_score = self.predicoes_ml.get(simbolo, {}).get('auc_roc_score', np.nan) 
             auc_str = f"{auc_score:.3f}" if not pd.isna(auc_score) else "N/A"
             justification.append(f"ML: Prob. Alta {proba_up*100:.1f}% (Confiança: {auc_str})")
             
@@ -762,7 +802,7 @@ class ConstrutorPortfolioAutoML:
         
         return self.justificativas_selecao
         
-    def executar_pipeline(self, simbolos_customizados: list, perfil_inputs: dict, otimizar_ml: bool = False) -> bool:
+    def executar_pipeline(self, simbolos_customizados: list, perfil_inputs: dict) -> bool:
         
         self.perfil_dashboard = perfil_inputs
         ml_lookback_days = perfil_inputs.get('ml_lookback_days', LOOKBACK_ML)
@@ -772,7 +812,8 @@ class ConstrutorPortfolioAutoML:
         if not self.coletar_e_processar_dados(simbolos_customizados): return False
         
         self.calcular_volatilidades_garch()
-        self.treinar_modelos_ensemble(dias_lookback_ml=ml_lookback_days, otimizar=otimizar_ml)
+        # Otimização do ML removida do front-end, mas a função treinar_modelos_ensemble é chamada
+        self.treinar_modelos_ensemble(dias_lookback_ml=ml_lookback_days, otimizar=False) 
         self.pontuar_e_selecionar_ativos(horizonte_tempo=horizonte_tempo)
         self.alocacao_portfolio = self.otimizar_alocacao(nivel_risco=nivel_risco)
         self.calcular_metricas_portfolio()
@@ -781,7 +822,7 @@ class ConstrutorPortfolioAutoML:
         return True
 
 # =============================================================================
-# 12. CLASSE: ANALISADOR INDIVIDUAL DE ATIVOS (ADAPTADA)
+# 12. CLASSE: ANALISADOR INDIVIDUAL DE ATIVOS (ADAPTADA COM PCA/KMEANS)
 # =============================================================================
 
 class AnalisadorIndividualAtivos:
@@ -791,29 +832,43 @@ class AnalisadorIndividualAtivos:
     def realizar_clusterizacao_pca(dados_ativos: pd.DataFrame, n_clusters: int = 5) -> tuple[pd.DataFrame | None, PCA | None, KMeans | None]:
         """Realiza clusterização K-means após redução de dimensionalidade com PCA."""
         
-        features_numericas = dados_ativos.select_dtypes(include=[np.number]).copy()
-        features_numericas = features_numericas.replace([np.inf, -np.inf], np.nan)
+        # Filtra as features importantes para a clusterização
+        features_cluster = ['sharpe', 'retorno_anual', 'volatilidade_anual', 'max_drawdown', 
+                            'pe_ratio', 'pb_ratio', 'roe', 'debt_to_equity', 'revenue_growth']
         
+        # Garante que as colunas existam e não sejam vazias
+        features_numericas = dados_ativos.filter(items=features_cluster).select_dtypes(include=[np.number]).copy()
+        
+        # Limpeza de dados
+        features_numericas = features_numericas.replace([np.inf, -np.inf], np.nan)
+        features_numericas.rename(columns={'pe_ratio': 'P/L', 'roe': 'ROE'}, inplace=True) # Para visualização
+        
+        # Preenchimento de NaNs (Estratégia: Mediana)
         for col in features_numericas.columns:
             if features_numericas[col].isnull().any():
                 median_val = features_numericas[col].median()
                 features_numericas[col] = features_numericas[col].fillna(median_val)
         
         features_numericas = features_numericas.dropna(axis=1, how='all')
+        # Remove colunas com variação próxima de zero
         features_numericas = features_numericas.loc[:, (features_numericas.std() > 1e-6)]
 
+        # Condição de Falha
         if features_numericas.empty or len(features_numericas) < n_clusters:
             return None, None, None
             
         scaler = StandardScaler()
         dados_normalizados = scaler.fit_transform(features_numericas)
         
+        # PCA
         n_pca_components = min(3, len(features_numericas.columns))
         pca = PCA(n_components=n_pca_components)
         componentes_pca = pca.fit_transform(dados_normalizados)
         
+        # KMeans
         actual_n_clusters = min(n_clusters, len(features_numericas))
-        kmeans = KMeans(n_clusters=actual_n_clusters, random_state=42, n_init=10)
+        # Ajusta n_init para evitar warning
+        kmeans = KMeans(n_clusters=actual_n_clusters, random_state=42, n_init='auto') 
         clusters = kmeans.fit_predict(componentes_pca)
         
         resultado_pca = pd.DataFrame(
@@ -826,7 +881,7 @@ class AnalisadorIndividualAtivos:
         return resultado_pca, pca, kmeans
 
 # =============================================================================
-# 13. INTERFACE STREAMLIT - REESTRUTURADA COM TEXTOS PROFISSIONAIS
+# 13. INTERFACE STREAMLIT - REESTRUTURADA COM AJUSTES DE UI
 # =============================================================================
 
 def configurar_pagina():
@@ -838,6 +893,7 @@ def configurar_pagina():
         initial_sidebar_state="expanded"
     )
     
+    # Estilos CSS com correções para evitar sobreposição de texto em botões
     st.markdown("""
         <style>
         .main-header {
@@ -852,11 +908,16 @@ def configurar_pagina():
         html, body, [class*="st-"] {
             font-family: 'Times New Roman', serif;
         }
+        
+        /* Estilo base para botões (garante que o texto se ajuste) */
         .stButton button {
             border: 1px solid #2c3e50;
             color: #2c3e50;
             border-radius: 4px;
             padding: 8px 16px;
+            white-space: nowrap; /* Impede quebras de linha indesejadas */
+            overflow: hidden;    /* Esconde o conteúdo que transborda, evitando sobreposição */
+            text-overflow: ellipsis; /* Adiciona '...' se o texto for muito longo */
         }
         .stButton button:hover {
             background-color: #7f8c8d;
@@ -867,6 +928,16 @@ def configurar_pagina():
             color: white;
             border: none;
         }
+        
+        /* Correção para o problema de sobreposição em radio/selectbox */
+        /* O problema geralmente ocorre quando o 'key' do Streamlit é exibido. */
+        /* Isso é geralmente causado por um widget sendo renderizado fora do lugar devido a um bug na lib Streamlit ou uso incorreto. */
+        /* O CSS abaixo é para o caso de o texto 'key' ser renderizado como um elemento HTML visível. */
+        
+        .key, .element-container > div > p:first-child[data-testid^="st"] {
+            display: none !important; 
+        }
+
         .info-box {
             background-color: #f8f9fa;
             border-left: 4px solid #2c3e50;
@@ -944,12 +1015,10 @@ def aba_introducao():
         - Definição do horizonte temporal e tolerância à volatilidade, essenciais para a calibração dos fatores de pontuação.
         
         **2. Fatorização e Engenharia de Features**
-        - Integração de dados de *Valuation* (P/L, ROE, etc.), *Momentum* (RSI, MACD) e *Volatilidade* (GARCH, ATR).
-        - Utilização de séries temporais de alta granularidade e fatores de risco macroeconômicos.
+        - Integração de dados de *Valuation* (P/L, ROE, etc.), *Momentum* (RSI, MACD) e *Volatilidade* (GARCH, ATR) <strong>pré-calculados</strong> pelo `gerador_financeiro.py`.
         
         **3. Previsão Preditiva (Machine Learning)**
-        - Modelos de Ensemble (LightGBM, XGBoost, etc.) pré-treinados e otimizados via Optuna.
-        - Geração de probabilidades de alta futura, ponderadas pela confiança (AUC-ROC), incorporando uma visão preditiva na seleção.
+        - Modelos de Ensemble (LightGBM, XGBoost, etc.) <strong>pré-treinados e otimizados</strong> (resultados lidos diretamente do GCS).
         """)
     
     with col2:
@@ -1028,33 +1097,34 @@ def aba_introducao():
     """)
 
 def aba_selecao_ativos():
-    """Aba 2: Seleção de Ativos (Inalterada, apenas pequenos ajustes de texto)"""
+    """Aba 2: Seleção de Ativos (AJUSTADA: Apenas Ibovespa, sem Entrada Manual ou Universo Expandido)"""
     
-    st.markdown("## 🎯 Definição do Universo de Análise")
+    st.markdown("## 🎯 Definição do Universo de Análise (Apenas Ativos do Ibovespa)")
     
     st.markdown("""
     <div class="info-box">
-    <p>Selecione o universo de ativos a ser considerado. O motor de otimização irá 
-    analisar o histórico e as métricas de todos os ativos selecionados para escolher os 
+    <p>O universo de análise está restrito aos **ativos do Índice Ibovespa** (B3). 
+    O motor de otimização irá analisar o histórico e as métricas de todos os ativos selecionados para escolher os 
     <strong>5 ativos ideais</strong> com base no seu perfil de risco.</p>
     </div>
     """, unsafe_allow_html=True)
     
+    # Opções de Seleção REDUZIDAS
     modo_selecao = st.radio(
         "**Modo de Seleção:**",
         [
-            "📊 Índice de Referência (Ibovespa - 82 ativos)",
-            "🌐 Universo Expandido (259 ativos)",
-            "🏢 Setores Específicos",
-            "✍️ Entrada Manual de Tickers"
+            "📊 Índice de Referência (Ibovespa - Todos os Ativos)",
+            "🏢 Seleção Setorial (Ativos do Ibovespa)",
+            "✍️ Seleção Individual (Ativos do Ibovespa)"
         ],
-        index=0
+        index=0,
+        key='selection_mode_radio'
     )
     
     ativos_selecionados = []
     
     if "Índice de Referência" in modo_selecao:
-        ativos_selecionados = ATIVOS_IBOVESPA.copy()
+        ativos_selecionados = TODOS_ATIVOS.copy()
         st.success(f"✓ **{len(ativos_selecionados)} ativos de referência** selecionados")
         
         with st.expander("📋 Ver tickers do Índice"):
@@ -1075,21 +1145,9 @@ def aba_selecao_ativos():
                     use_container_width=True
                 )
     
-    elif "Universo Expandido" in modo_selecao:
-        ativos_selecionados = TODOS_ATIVOS.copy()
-        st.success(f"✓ **{len(ativos_selecionados)} ativos** selecionados de todo o universo B3")
-        
-        with st.expander("📊 Distribuição Setorial"):
-            setor_counts = {setor: len(ativos) for setor, ativos in ATIVOS_POR_SETOR.items()}
-            df_setores = pd.DataFrame({'Setor': list(setor_counts.keys()), 'Quantidade': list(setor_counts.values())}).sort_values('Quantidade', ascending=False)
-            
-            fig = px.bar(df_setores, x='Setor', y='Quantidade', title='Ativos por Setor')
-            fig.update_layout(**obter_template_grafico(), xaxis_tickangle=-45, height=400)
-            st.plotly_chart(fig, use_container_width=True)
-    
-    elif "Setores Específicos" in modo_selecao:
-        st.markdown("### 🏢 Seleção por Setor")
-        setores_disponiveis = list(ATIVOS_POR_SETOR.keys())
+    elif "Seleção Setorial" in modo_selecao:
+        st.markdown("### 🏢 Seleção por Setor (Apenas Ativos do Ibovespa)")
+        setores_disponiveis = sorted(list(ATIVOS_POR_SETOR.keys()))
         col1, col2 = st.columns([2, 1])
         
         with col1:
@@ -1097,10 +1155,12 @@ def aba_selecao_ativos():
                 "Escolha um ou mais setores para compor o universo de análise:",
                 options=setores_disponiveis,
                 default=setores_disponiveis[:3] if setores_disponiveis else [],
+                key='setores_multiselect'
             )
         
         if setores_selecionados:
             for setor in setores_selecionados: ativos_selecionados.extend(ATIVOS_POR_SETOR[setor])
+            ativos_selecionados = list(set(ativos_selecionados))
             
             with col2:
                 st.metric("Setores Selecionados", len(setores_selecionados))
@@ -1108,76 +1168,36 @@ def aba_selecao_ativos():
             
             with st.expander("📋 Ver ativos por setor"):
                 for setor in setores_selecionados:
-                    st.markdown(f"**{setor}** ({len(ATIVOS_POR_SETOR[setor])} ativos)")
-                    st.write(", ".join([a.replace('.SA', '') for a in ATIVOS_POR_SETOR[setor]]))
+                    ativos_do_setor = ATIVOS_POR_SETOR.get(setor, [])
+                    st.markdown(f"**{setor}** ({len(ativos_do_setor)} ativos)")
+                    st.write(", ".join([a.replace('.SA', '') for a in ativos_do_setor]))
         else:
             st.warning("⚠️ Selecione pelo menos um setor.")
     
-    elif "Entrada Manual de Tickers" in modo_selecao:
-        st.markdown("### ✍️ Inserção Manual de Tickers")
+    elif "Seleção Individual" in modo_selecao:
+        st.markdown("### ✍️ Seleção Individual de Tickers (Apenas Ativos do Ibovespa)")
         
         ativos_com_setor = {}
         for setor, ativos in ATIVOS_POR_SETOR.items():
             for ativo in ativos: ativos_com_setor[ativo] = setor
         
-        todos_tickers = sorted(list(ativos_com_setor.keys()))
+        todos_tickers_ibov = sorted(list(ativos_com_setor.keys()))
         
         col1, col2 = st.columns([3, 1])
         
         with col1:
-            st.markdown("#### 📝 Selecione Tickers da Lista")
-            ativos_da_lista = st.multiselect(
-                "Pesquise e selecione tickers disponíveis:",
-                options=todos_tickers,
+            st.markdown("#### 📝 Selecione Tickers da Lista IBOVESPA")
+            ativos_selecionados = st.multiselect(
+                "Pesquise e selecione tickers disponíveis (Ibovespa):",
+                options=todos_tickers_ibov,
                 format_func=lambda x: f"{x.replace('.SA', '')} - {ativos_com_setor.get(x, 'Desconhecido')}",
+                key='ativos_individuais_multiselect'
             )
         
         with col2:
-            st.metric("Tickers Selecionados", len(ativos_da_lista))
-        
-        st.markdown("---")
-        st.markdown("#### ✏️ Ou Adicione Tickers Novos/Personalizados")
-        
-        col3, col4 = st.columns(2)
-        
-        with col3:
-            novos_ativos_input = st.text_area(
-                "Digite os códigos dos ativos (um por linha):",
-                height=150,
-                placeholder="Ex: TOTS3\nBBDC4\n...",
-                help="Digite os códigos sem o '.SA'. Um código por linha."
-            )
-        
-        with col4:
-            setores_disponiveis_manual = ["Selecione o setor..."] + list(ATIVOS_POR_SETOR.keys())
-            setor_novos_ativos = st.selectbox("Setor principal dos tickers manuais:", options=setores_disponiveis_manual)
-            st.markdown("**Ou digite um nome de setor:**")
-            setor_customizado = st.text_input("Setor personalizado:")
-        
-        # Process manual inputs
-        novos_ativos = []
-        if novos_ativos_input.strip():
-            linhas = novos_ativos_input.strip().split('\n')
-            for linha in linhas:
-                ticker = linha.strip().upper()
-                if ticker:
-                    if not ticker.endswith('.SA'): ticker = f"{ticker}.SA"
-                    novos_ativos.append(ticker)
-        
-        ativos_selecionados = list(set(ativos_da_lista + novos_ativos))
-        
-        if ativos_selecionados:
-            st.success(f"✓ **{len(ativos_selecionados)} ativos** definidos para análise")
-            
-            with st.expander("📋 Ver tickers definidos"):
-                df_selecionados = pd.DataFrame({
-                    'Ticker': [a.replace('.SA', '') for a in ativos_selecionados],
-                    'Código Completo': ativos_selecionados,
-                    'Setor Estimado': [ativos_com_setor.get(a, setor_customizado or setor_novos_ativos or 'Não especificado') 
-                             for a in ativos_selecionados]
-                })
-                st.dataframe(df_selecionados, use_container_width=True, hide_index=True)
-        else:
+            st.metric("Tickers Selecionados", len(ativos_selecionados))
+
+        if not ativos_selecionados:
             st.warning("⚠️ Nenhum ativo definido. Por favor, faça uma seleção.")
     
     if ativos_selecionados:
@@ -1194,7 +1214,7 @@ def aba_selecao_ativos():
         st.warning("⚠️ O universo de análise está vazio.")
 
 # =============================================================================
-# Aba 3: Questionário e Construção de Portfólio (Textos revisados)
+# Aba 3: Questionário e Construção de Portfólio (Corrigido e Optuna Removido)
 # =============================================================================
 
 def aba_construtor_portfolio():
@@ -1216,12 +1236,11 @@ def aba_construtor_portfolio():
         
         col_question1, col_question2 = st.columns(2)
         
-        with st.form("investor_profile_form"):
-            options_score = [
-                'CT: Concordo Totalmente', 'C: Concordo', 'N: Neutro', 'D: Discordo', 'DT: Discordo Totalmente'
-            ]
-            options_reaction = ['A: Venderia imediatamente', 'B: Manteria e reavaliaria a tese', 'C: Compraria mais para aproveitar preços baixos']
-            options_level_abc = ['A: Avançado (Análise fundamentalista, macro e técnica)', 'B: Intermediário (Conhecimento básico sobre mercados e ativos)', 'C: Iniciante (Pouca ou nenhuma experiência em investimentos)']
+        # Correção de Keys para o Formulário
+        with st.form("investor_profile_form", clear_on_submit=False): 
+            options_score = list(SCORE_MAP.keys())
+            options_reaction = list(SCORE_MAP_REACTION.keys())
+            options_level_abc = list(SCORE_MAP_CONHECIMENTO.keys())
             options_time_horizon = [
                 'A: Curto (até 1 ano - Foco em liquidez)', 'B: Médio (1-5 anos - Foco em crescimento balanceado)', 'C: Longo (5+ anos - Foco em valor e qualidade)'
             ]
@@ -1231,34 +1250,36 @@ def aba_construtor_portfolio():
             
             with col_question1:
                 st.markdown("#### Avaliação da Tolerância ao Risco")
-                p2_risk = st.radio("**1. Estou disposto a aceitar volatilidade de curto prazo em busca de retornos superiores:**", options=options_score, index=2, key='risk_accept_radio')
-                p3_gain = st.radio("**2. Meu objetivo principal é a maximização do retorno, mesmo com maior exposição ao risco:**", options=options_score, index=2, key='max_gain_radio')
-                p4_stable = st.radio("**3. Priorizo a estabilidade e a preservação do capital em detrimento de altos ganhos:**", options=options_score, index=2, key='stable_growth_radio')
-                p5_loss = st.radio("**4. A prevenção de perdas é mais crítica para mim do que a busca por crescimento acelerado:**", options=options_score, index=2, key='avoid_loss_radio')
-                p511_reaction = st.radio("**5. Diante de uma queda de 10% no portfólio, minha reação seria:**", options=options_reaction, index=1, key='reaction_radio')
-                p_level = st.radio("**6. Meu nível de conhecimento sobre o mercado financeiro:**", options=options_level_abc, index=1, key='level_radio')
+                # Keys únicas corrigidas
+                p2_risk = st.radio("**1. Estou disposto a aceitar volatilidade de curto prazo em busca de retornos superiores:**", options=options_score, index=2, key='risk_accept_radio_q1')
+                p3_gain = st.radio("**2. Meu objetivo principal é a maximização do retorno, mesmo com maior exposição ao risco:**", options=options_score, index=2, key='max_gain_radio_q2')
+                p4_stable = st.radio("**3. Priorizo a estabilidade e a preservação do capital em detrimento de altos ganhos:**", options=options_score, index=2, key='stable_growth_radio_q3')
+                p5_loss = st.radio("**4. A prevenção de perdas é mais crítica para mim do que a busca por crescimento acelerado:**", options=options_score, index=2, key='avoid_loss_radio_q4')
+                p511_reaction = st.radio("**5. Diante de uma queda de 10% no portfólio, minha reação seria:**", options=options_reaction, index=1, key='reaction_radio_q5')
+                p_level = st.radio("**6. Meu nível de conhecimento sobre o mercado financeiro:**", options=options_level_abc, index=1, key='level_radio_q6')
             
             with col_question2:
                 st.markdown("#### Definição de Horizonte e Capital")
-                p211_time = st.radio("**7. O prazo máximo para reavaliação estratégica do portfólio é:**", options=options_time_horizon, index=2, key='time_purpose_radio')[0]
-                p311_liquid = st.radio("**8. Meu prazo mínimo de resgate/necessidade de liquidez é:**", options=options_liquidez, index=2, key='liquidity_radio')[0]
+                # Extraindo apenas a chave A, B ou C
+                p211_time = st.radio("**7. O prazo máximo para reavaliação estratégica do portfólio é:**", options=options_time_horizon, index=2, key='time_purpose_radio_q7')
+                p311_liquid = st.radio("**8. Meu prazo mínimo de resgate/necessidade de liquidez é:**", options=options_liquidez, index=2, key='liquidity_radio_q8')
                 
                 st.markdown("---")
                 investment = st.number_input(
                     "Capital Total a ser Alocado (R$)",
-                    min_value=1000, max_value=10000000, value=100000, step=10000, key='investment_amount'
+                    min_value=1000, max_value=10000000, value=100000, step=10000, key='investment_amount_input'
                 )
             
-            with st.expander("Parâmetros de Otimização Avançada"):
-                otimizar_ml = st.checkbox("Executar Otimização de Hiperparâmetros (HPO) nos modelos ML (Aumenta o tempo de processamento)", value=False, key='optimize_ml_checkbox')
+            # Botão de Optuna REMOVIDO, conforme solicitado
             
-            submitted = st.form_submit_button("🚀 Iniciar Otimização Adaptativa", type="primary")
+            submitted = st.form_submit_button("🚀 Iniciar Otimização Adaptativa", type="primary", key='submit_optimization_button')
             
             if submitted:
                 # 1. Analisa perfil
                 risk_answers = {
                     'risk_accept': p2_risk, 'max_gain': p3_gain, 'stable_growth': p4_stable, 'avoid_loss': p5_loss,
-                    'reaction': p511_reaction, 'level': p_level, 'time_purpose': p211_time, 'liquidity': p311_liquid
+                    'reaction': p511_reaction, 'level': p_level, 
+                    'time_purpose': p211_time, 'liquidity': p311_liquid
                 }
                 analyzer = AnalisadorPerfilInvestidor()
                 risk_level, horizon, lookback, score = analyzer.calcular_perfil(risk_answers)
@@ -1275,16 +1296,15 @@ def aba_construtor_portfolio():
                     st.error(f"Erro fatal ao inicializar o construtor do portfólio: {e}")
                     return
 
-                # 3. Executa pipeline
+                # 3. Executa pipeline (otimizar_ml=False, pois o Optuna foi removido)
                 with st.spinner(f'Executando pipeline de fatores para **PERFIL {risk_level}** ({horizon})...'):
                     success = builder_local.executar_pipeline(
                         simbolos_customizados=st.session_state.ativos_para_analise,
-                        perfil_inputs=st.session_state.profile,
-                        otimizar_ml=otimizar_ml
+                        perfil_inputs=st.session_state.profile
                     )
                     
                     if not success:
-                        st.error("Falha na aquisição ou processamento dos dados. Certifique-se de que os arquivos CSV no GCS estão disponíveis e válidos.")
+                        st.error("Falha na aquisição ou processamento dos dados. Certifique-se de que os arquivos CSV no GCS estão disponíveis e válidos para os ativos selecionados.")
                         st.session_state.builder = None; st.session_state.profile = {}; return
                     
                     st.session_state.builder_complete = True
@@ -1307,7 +1327,7 @@ def aba_construtor_portfolio():
         col3.metric("Sharpe Ratio (Portfólio)", f"{builder.metricas_portfolio.get('sharpe_ratio', 0):.3f}")
         col4.metric("Estratégia de Alocação", builder.metodo_alocacao_atual.split('(')[0].strip())
         
-        if st.button("🔄 Recalibrar Perfil e Otimizar", key='recomecar_analysis'):
+        if st.button("🔄 Recalibrar Perfil e Otimizar", key='recomecar_analysis_button'):
             st.session_state.builder_complete = False
             st.session_state.builder = None
             st.session_state.profile = {}
@@ -1325,7 +1345,7 @@ def aba_construtor_portfolio():
             with col_alloc:
                 st.markdown('#### Distribuição do Capital')
                 alloc_data = pd.DataFrame([
-                    {'Ativo': a, 'Peso (%)': allocation[a]['weight'] * 100}
+                    {'Ativo': a.replace('.SA', ''), 'Peso (%)': allocation[a]['weight'] * 100}
                     for a in assets if a in allocation and allocation[a]['weight'] > 0.001
                 ])
                 
@@ -1497,8 +1517,9 @@ def aba_construtor_portfolio():
             st.markdown(f"**Pesos Adaptativos Usados:** Performance: {builder.pesos_atuais['Performance']:.2f} | Fundamentos: {builder.pesos_atuais['Fundamentos']:.2f} | Técnicos: {builder.pesos_atuais['Técnicos']:.2f} | ML: {builder.pesos_atuais['ML']:.2f}")
             st.markdown("---")
             
-            df_scores_display = builder.scores_combinados[['total_score', 'performance_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 'sharpe_ratio', 'pe_ratio', 'roe', 'rsi_14', 'macd', 'ML_Proba']].copy()
-            df_scores_display.columns = ['Score Total', 'Score Perf.', 'Score Fund.', 'Score Téc.', 'Score ML', 'Sharpe', 'P/L', 'ROE', 'RSI 14', 'MACD', 'Prob. Alta ML']
+            # Ajusta colunas para usar macd_diff (diferença) e pe/roe simples
+            df_scores_display = builder.scores_combinados[['total_score', 'performance_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 'sharpe_ratio', 'pe_ratio', 'roe', 'rsi_14', 'macd_diff', 'ML_Proba']].copy()
+            df_scores_display.columns = ['Score Total', 'Score Perf.', 'Score Fund.', 'Score Téc.', 'Score ML', 'Sharpe', 'P/L', 'ROE', 'RSI 14', 'MACD Hist.', 'Prob. Alta ML']
             df_scores_display = df_scores_display.iloc[:15]
             
             st.markdown("##### Ranqueamento Ponderado Multi-Fatorial (Top 15 Tickers)")
@@ -1521,7 +1542,7 @@ def aba_construtor_portfolio():
 
 
 # =============================================================================
-# Aba 4: Análise Individual (Textos revisados)
+# Aba 4: Análise Individual (Inalterada, pois PCA/KMeans foi corrigido na classe)
 # =============================================================================
 
 def aba_analise_individual():
@@ -1530,16 +1551,17 @@ def aba_analise_individual():
     st.markdown("## 🔍 Análise de Fatores por Ticker")
     
     if 'ativos_para_analise' in st.session_state and st.session_state.ativos_para_analise:
-        ativos_disponiveis = st.session_state.ativos_para_analise
+        ativos_disponiveis = sorted(list(set(st.session_state.ativos_para_analise)))
     else:
-        ativos_disponiveis = ATIVOS_IBOVESPA 
+        ativos_disponiveis = TODOS_ATIVOS 
             
     if not ativos_disponiveis:
         st.error("Nenhum ativo disponível. Verifique a seleção ou o universo padrão.")
         return
 
-    if 'individual_asset_select' not in st.session_state and ativos_disponiveis:
-        st.session_state.individual_asset_select = ativos_disponiveis[0]
+    # Garante que o estado individual_asset_select é válido
+    if 'individual_asset_select' not in st.session_state or st.session_state.individual_asset_select not in ativos_disponiveis:
+        st.session_state.individual_asset_select = ativos_disponiveis[0] if ativos_disponiveis else None
 
     col1, col2 = st.columns([3, 1])
     
@@ -1570,7 +1592,12 @@ def aba_analise_individual():
             if builder_existe and ativo_selecionado in st.session_state.builder.dados_por_ativo:
                 builder = st.session_state.builder
                 df_completo = builder.dados_por_ativo[ativo_selecionado].copy().dropna(how='all')
-                features_fund = builder.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
+                features_fund_raw = builder.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
+                # Adapta o dict de fundamentos para usar os nomes simples P/L e ROE
+                features_fund = features_fund_raw.copy()
+                features_fund['pe_ratio'] = features_fund.get('pe_ratio', features_fund_raw.get('fund_pe_ratio'))
+                features_fund['roe'] = features_fund.get('roe', features_fund_raw.get('fund_roe'))
+
             
             # 2. Se falhar ou não houver cache, coleta sob demanda
             if df_completo is None or df_completo.empty or features_fund is None:
@@ -1594,8 +1621,8 @@ def aba_analise_individual():
                 col1, col2, col3, col4, col5 = st.columns(5)
                 
                 preco_atual = df_completo['Close'].iloc[-1]
-                variacao_dia = df_completo['returns'].iloc[-1] * 100
-                volume_medio = df_completo['Volume'].mean()
+                variacao_dia = df_completo['returns'].iloc[-1] * 100 if 'returns' in df_completo.columns else 0.0
+                volume_medio = df_completo['Volume'].mean() if 'Volume' in df_completo.columns else 0.0
                 
                 col1.metric("Preço de Fechamento", f"R$ {preco_atual:.2f}", f"{variacao_dia:+.2f}%")
                 col2.metric("Volume Médio Recente", f"{volume_medio:,.0f}")
@@ -1638,9 +1665,12 @@ def aba_analise_individual():
                 st.markdown("---")
                 st.markdown("#### Tabela de Fatores Fundamentais (GCS)")
                 
+                # Exclui chaves que são mapeadas para nomes simples
+                keys_to_exclude = ['pe_ratio', 'roe'] 
                 df_fund_display = pd.DataFrame({
-                    'Métrica': list(features_fund.keys()),
-                    'Valor': [f"{v:.4f}" if isinstance(v, (int, float)) and not pd.isna(v) else str(v) for v in features_fund.values()]
+                    'Métrica': [k for k in features_fund.keys() if k not in keys_to_exclude],
+                    'Valor': [f"{v:.4f}" if isinstance(v, (int, float)) and not pd.isna(v) else str(v) 
+                              for k, v in features_fund.items() if k not in keys_to_exclude]
                 })
                 
                 st.dataframe(df_fund_display, use_container_width=True, hide_index=True)
@@ -1667,7 +1697,9 @@ def aba_analise_individual():
                 if 'macd' in df_completo.columns and 'macd_signal' in df_completo.columns:
                     fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd'], name='MACD', line=dict(color='#e74c3c')), row=2, col=1)
                     fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd_signal'], name='Signal', line=dict(color='#7f8c8d')), row=2, col=1)
-                    fig_osc.add_trace(go.Bar(x=df_completo.index, y=df_completo['macd_diff'], name='Histograma', marker=dict(color='lightgray')), row=2, col=1)
+                    # Coluna macd_diff (Histograma)
+                    if 'macd_diff' in df_completo.columns:
+                        fig_osc.add_trace(go.Bar(x=df_completo.index, y=df_completo['macd_diff'], name='Histograma', marker=dict(color='lightgray')), row=2, col=1)
                 
                 fig_layout = obter_template_grafico()
                 fig_layout['height'] = 550
@@ -1678,28 +1710,50 @@ def aba_analise_individual():
             with tab4:
                 st.markdown("### Análise de Similaridade e Clusterização")
                 
-                if not builder_existe or builder.metricas_performance.empty:
-                    st.warning("A Clusterização está desabilitada. É necessário executar a **'Otimização Adaptativa'** (Aba 3) para carregar os dados de comparação de múltiplos ativos.")
+                if not builder_existe or builder.metricas_performance.empty or builder.dados_fundamentalistas.empty:
+                    st.warning("A Clusterização está desabilitada. É necessário executar o **'Construtor de Portfólio'** (Aba 3) para carregar os dados de comparação de múltiplos ativos.")
                     return
                 
+                # Combina métricas de performance e fundamentos
                 df_comparacao = builder.metricas_performance.join(builder.dados_fundamentalistas, how='inner', rsuffix='_fund')
                 
-                features_cluster = ['sharpe', 'retorno_anual', 'volatilidade_anual', 'max_drawdown', 
-                                    'pe_ratio', 'pb_ratio', 'roe', 'debt_to_equity', 'revenue_growth']
+                # Renomeia as colunas de P/L e ROE para usar as chaves simples
+                if 'pe_ratio' not in df_comparacao.columns and 'fund_pe_ratio' in df_comparacao.columns:
+                    df_comparacao['pe_ratio'] = df_comparacao['fund_pe_ratio']
+                if 'roe' not in df_comparacao.columns and 'fund_roe' in df_comparacao.columns:
+                    df_comparacao['roe'] = df_comparacao['fund_roe']
                 
-                df_comparacao = df_comparacao.filter(items=features_cluster).dropna()
+                # As features de clusterização são definidas na função realizar_clusterizacao_pca
                 
                 if len(df_comparacao) < 10:
                     st.warning("Dados insuficientes para realizar a clusterização (menos de 10 ativos com métricas completas).")
                     return
                     
+                # Chama a função de clusterização (que agora usa a lógica completa)
                 resultado_pca, pca, kmeans = AnalisadorIndividualAtivos.realizar_clusterizacao_pca(df_comparacao, n_clusters=5)
                 
                 if resultado_pca is not None:
+                    # Garantir que o nome do ativo seja desformatado para hover
+                    hover_names = resultado_pca.index.str.replace('.SA', '')
+
                     if 'PC3' in resultado_pca.columns:
-                        fig_pca = px.scatter_3d(resultado_pca, x='PC1', y='PC2', z='PC3', color='Cluster', hover_name=resultado_pca.index.str.replace('.SA', ''), title='Similaridade de Tickers (PCA/K-means - 3D)')
+                        fig_pca = px.scatter_3d(
+                            resultado_pca, 
+                            x='PC1', y='PC2', z='PC3', 
+                            color='Cluster', 
+                            hover_name=hover_names, 
+                            title='Similaridade de Tickers (PCA/K-means - 3D)',
+                            color_continuous_scale=px.colors.qualitative.Plotly # Usar escala qualitativa para clusters
+                        )
                     else:
-                        fig_pca = px.scatter(resultado_pca, x='PC1', y='PC2', color='Cluster', hover_name=resultado_pca.index.str.replace('.SA', ''), title='Similaridade de Tickers (PCA/K-means - 2D)')
+                        fig_pca = px.scatter(
+                            resultado_pca, 
+                            x='PC1', y='PC2', 
+                            color='Cluster', 
+                            hover_name=hover_names, 
+                            title='Similaridade de Tickers (PCA/K-means - 2D)',
+                            color_continuous_scale=px.colors.qualitative.Plotly
+                        )
                     
                     fig_pca.update_layout(**obter_template_grafico(), height=600)
                     st.plotly_chart(fig_pca, use_container_width=True)
