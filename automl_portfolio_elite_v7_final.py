@@ -8,7 +8,7 @@ Adaptação do Sistema AutoML para usar dados pré-processados (CSV/GCS)
 gerados pelo gerador_financeiro.py, eliminando a dependência do yfinance
 na interface Streamlit e adotando uma linguagem profissional.
 
-Versão: 8.5.0 - UI Aprimorada, Seleção por Cluster (KMeans/PCA) e Referências
+Versão: 8.6.0 - Novo Tema (Neutro/Preto), Barra de Progresso e Abas Centralizadas
 =============================================================================
 """
 
@@ -305,7 +305,7 @@ class AnalisadorPerfilInvestidor:
 # =============================================================================
 
 def obter_template_grafico() -> dict:
-    """Retorna um template de layout otimizado para gráficos Plotly com estilo Limpo/Neutro."""
+    """Retorna um template de layout otimizado para gráficos Plotly com estilo Limpo/Neutro (Preto/Cinza)."""
     return {
         'plot_bgcolor': '#f8f9fa', # Cinza muito claro
         'paper_bgcolor': 'white',
@@ -338,7 +338,8 @@ def obter_template_grafico() -> dict:
             'bordercolor': '#e9ecef',
             'borderwidth': 1
         },
-        'colorway': ['#007bff', '#17a2b8', '#28a745', '#ffc107', '#dc3545'] # Paleta moderna/neutra (Bootstrap-inspired)
+        # Paleta de cores Neutra/Monocromática
+        'colorway': ['#212529', '#495057', '#6c757d', '#adb5bd', '#ced4da']
     }
 
 # =============================================================================
@@ -456,7 +457,10 @@ class ColetorDadosGCS(object):
 
         MIN_DIAS_HISTORICO_FLEXIVEL = max(180, int(MIN_DIAS_HISTORICO * 0.7))
 
-        for simbolo in tqdm(simbolos, desc="📥 Carregando ativos do GCS"):
+        # A barra de progresso do Streamlit será controlada na 'aba_construtor_portfolio'
+        # A 'tqdm' aqui serve apenas como log de console, se necessário, mas removemos 
+        # para não poluir o log.
+        for simbolo in simbolos:
             
             # 1. Carrega os 3 arquivos essenciais
             df_tecnicos = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, simbolo, file_suffix='_tecnicos.csv')
@@ -699,6 +703,8 @@ class ConstrutorPortfolioAutoML:
         
         if not simbolos_filtrados: return False
         
+        # A coleta de dados agora é feita sem a barra 'tqdm' interna 
+        # para ser controlada pelo Streamlit
         if not coletor.coletar_e_processar_dados(simbolos_filtrados):
             return False
         
@@ -997,23 +1003,49 @@ class ConstrutorPortfolioAutoML:
         
         return self.justificativas_selecao
         
-    def executar_pipeline(self, simbolos_customizados: list, perfil_inputs: dict) -> bool:
+    def executar_pipeline(self, simbolos_customizados: list, perfil_inputs: dict, progress_bar=None) -> bool:
+        """
+        Executa o pipeline completo de construção de portfólio, 
+        atualizando uma barra de progresso do Streamlit.
+        """
         
         self.perfil_dashboard = perfil_inputs
         ml_lookback_days = perfil_inputs.get('ml_lookback_days', LOOKBACK_ML)
         nivel_risco = perfil_inputs.get('risk_level', 'MODERADO')
         horizonte_tempo = perfil_inputs.get('time_horizon', 'MÉDIO PRAZO')
         
-        if not self.coletar_e_processar_dados(simbolos_customizados): return False
+        try:
+            if progress_bar: progress_bar.progress(10, text="Coletando e processando dados do GCS...")
+            if not self.coletar_e_processar_dados(simbolos_customizados): 
+                st.error("Falha na coleta de dados. (executar_pipeline)")
+                return False
+            
+            if progress_bar: progress_bar.progress(30, text="Calculando volatilidades (GARCH)...")
+            self.calcular_volatilidades_garch()
+            
+            if progress_bar: progress_bar.progress(50, text="Carregando predições de Machine Learning...")
+            # Otimização do ML removida do front-end
+            self.treinar_modelos_ensemble(dias_lookback_ml=ml_lookback_days, otimizar=False) 
+            
+            if progress_bar: progress_bar.progress(70, text="Ranqueando e selecionando ativos (Cluster)...")
+            self.pontuar_e_selecionar_ativos(horizonte_tempo=horizonte_tempo) 
+            
+            if progress_bar: progress_bar.progress(85, text="Otimizando alocação (MPT)...")
+            self.alocacao_portfolio = self.otimizar_alocacao(nivel_risco=nivel_risco)
+            
+            if progress_bar: progress_bar.progress(95, text="Calculando métricas finais...")
+            self.calcular_metricas_portfolio()
+            self.gerar_justificativas()
+            
+            if progress_bar: progress_bar.progress(100, text="Pipeline concluído!")
+            if progress_bar: time.sleep(1) # Pausa para ver a mensagem
         
-        self.calcular_volatilidades_garch()
-        # Otimização do ML removida do front-end, mas a função treinar_modelos_ensemble é chamada
-        self.treinar_modelos_ensemble(dias_lookback_ml=ml_lookback_days, otimizar=False) 
-        self.pontuar_e_selecionar_ativos(horizonte_tempo=horizonte_tempo) # Lógica de seleção por cluster agora está aqui
-        self.alocacao_portfolio = self.otimizar_alocacao(nivel_risco=nivel_risco)
-        self.calcular_metricas_portfolio()
-        self.gerar_justificativas()
-        
+        except Exception as e:
+            st.error(f"Erro durante a execução do pipeline: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+            return False
+            
         return True
 
 # =============================================================================
@@ -1105,11 +1137,11 @@ class AnalisadorIndividualAtivos:
         return resultado_pca, pca, kmeans, optimal_k
 
 # =============================================================================
-# 13. INTERFACE STREAMLIT - REESTRUTURADA COM AJUSTES DE DESIGN
+# 13. INTERFACE STREAMLIT - REESTRUTURADA COM NOVO TEMA
 # =============================================================================
 
 def configurar_pagina():
-    """Configura página Streamlit com novo título e estilo."""
+    """Configura página Streamlit com novo título e estilo (Neutro/Preto)."""
     st.set_page_config(
         page_title="Sistema de Portfólios Adaptativos",
         page_icon="📈",
@@ -1117,22 +1149,28 @@ def configurar_pagina():
         initial_sidebar_state="expanded"
     )
     
-    # Estilos CSS com correções para evitar sobreposição de texto em botões e design profissional
+    # Estilos CSS com tema Preto/Branco/Cinza e Abas Centralizadas
     st.markdown("""
         <style>
-        /* Cor de destaque primária */
+        /* Paleta de Cores (Tema Neutro/Preto) */
         :root {
-            --primary-color: #007bff; /* Azul primário */
+            --primary-color: #000000; /* Preto */
             --secondary-color: #6c757d; /* Cinza secundário */
             --background-light: #ffffff; /* Fundo branco */
             --background-dark: #f8f9fa; /* Cinza muito claro */
             --text-color: #212529; /* Preto/Cinza escuro para texto */
+            --text-color-light: #ffffff; /* Texto claro (para botões pretos) */
             --border-color: #dee2e6; /* Cinza claro para bordas */
         }
         
+        body {
+            background-color: var(--background-light);
+            color: var(--text-color);
+        }
+
         .main-header {
             font-family: 'Arial', sans-serif;
-            color: var(--text-color);
+            color: var(--primary-color); /* Preto */
             text-align: center;
             border-bottom: 2px solid var(--border-color);
             padding-bottom: 10px;
@@ -1141,60 +1179,71 @@ def configurar_pagina():
             font-weight: 600;
         }
 
-        /* Aplica a fonte Arial especificamente onde queremos, sem quebrar os ícones */
+        /* Aplica a fonte Arial */
         .stButton button, .stDownloadButton button, .stFormSubmitButton button, 
         .stTabs [data-baseweb="tab"], .stMetric label, .main-header, .info-box,
         h1, h2, h3, h4, h5, p, body {
              font-family: 'Arial', sans-serif !important;
         }
         
-        /* Correção CRÍTICA para sobreposição de texto em botões/widgets */
-        .stButton button, .stDownloadButton button, .stFormSubmitButton button {
-            border: 1px solid var(--primary-color);
-            color: var(--primary-color);
+        /* Botões Padrão (Contorno Preto) */
+        .stButton button, .stDownloadButton button {
+            border: 1px solid var(--primary-color) !important;
+            color: var(--primary-color) !important;
             border-radius: 6px;
             padding: 8px 16px;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
             transition: all 0.3s ease;
+            background-color: transparent !important;
         }
         .stButton button:hover, .stDownloadButton button:hover {
-            background-color: var(--primary-color);
-            color: var(--background-light);
-            box-shadow: 0 4px 8px rgba(0, 123, 255, 0.2);
-        }
-        .stButton button[kind="primary"], .stFormSubmitButton button {
-            background-color: var(--primary-color);
-            color: var(--background-light);
-            border: none;
+            background-color: var(--primary-color) !important;
+            color: var(--text-color-light) !important;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
         }
         
-        /* Estilo para TABS */
+        /* Botões Primários (Preenchimento Preto) */
+        .stButton button[kind="primary"], .stFormSubmitButton button {
+            background-color: var(--primary-color) !important;
+            color: var(--text-color-light) !important;
+            border: none !important;
+        }
+        .stButton button[kind="primary"]:hover, .stFormSubmitButton button:hover {
+            background-color: #333333 !important; /* Um pouco mais claro no hover */
+            color: var(--text-color-light) !important;
+        }
+        
+        /* Estilo para TABS (Centralizadas) */
         .stTabs [data-baseweb="tab-list"] {
-            gap: 15px;
+            gap: 24px; /* Espaçamento entre abas */
             border-bottom: 2px solid var(--border-color);
+            display: flex; /* Obrigatório para centralizar */
+            justify-content: center; /* CENTRALIZA AS ABAS */
+            width: 100%; /* Ocupa a largura total */
         }
         .stTabs [data-baseweb="tab"] {
             height: 40px;
-            background-color: var(--background-light);
+            background-color: transparent;
             border-radius: 4px 4px 0 0;
             padding-top: 5px;
             padding-bottom: 5px;
             color: var(--secondary-color);
             font-weight: 500;
+            flex-grow: 0 !important; /* Impede que as abas estiquem */
         }
         .stTabs [aria-selected="true"] {
-            background-color: var(--background-light);
-            border-bottom: 2px solid var(--primary-color);
-            color: var(--primary-color);
+            background-color: transparent;
+            border-bottom: 2px solid var(--primary-color); /* Destaque Preto */
+            color: var(--primary-color); /* Texto Preto */
             font-weight: 700;
         }
         
         /* Estilo para caixas de informação e métricas */
         .info-box {
             background-color: var(--background-dark);
-            border-left: 4px solid var(--primary-color);
+            border-left: 4px solid var(--primary-color); /* Destaque Preto */
             padding: 15px;
             margin: 10px 0;
             border-radius: 6px;
@@ -1213,6 +1262,11 @@ def configurar_pagina():
         .stMetric label { font-weight: 600; color: var(--text-color); }
         .stMetric delta { font-weight: 700; color: #28a745; }
         .stMetric delta[style*="color: red"] { color: #dc3545 !important; }
+        
+        /* Barra de Progresso */
+        .stProgress > div > div > div > div {
+            background-color: var(--primary-color); /* Cor da barra preta */
+        }
         
         /* Estilo para referências bibliográficas */
         .reference-block {
@@ -1488,7 +1542,7 @@ def aba_selecao_ativos():
         st.warning("⚠️ O universo de análise está vazio.")
 
 # =============================================================================
-# Aba 3: Questionário e Construção de Portfólio (Design e Keys ajustados)
+# Aba 3: Questionário e Construção de Portfólio (COM BARRA DE PROGRESSO)
 # =============================================================================
 
 def aba_construtor_portfolio():
@@ -1502,6 +1556,9 @@ def aba_construtor_portfolio():
     if 'profile' not in st.session_state: st.session_state.profile = {}
     if 'builder_complete' not in st.session_state: st.session_state.builder_complete = False
     
+    # Placeholder para a barra de progresso
+    progress_bar_placeholder = st.empty()
+    
     # FASE 1: QUESTIONÁRIO
     if not st.session_state.builder_complete:
         st.markdown('## 📋 Calibração do Perfil de Risco')
@@ -1510,7 +1567,7 @@ def aba_construtor_portfolio():
         
         col_question1, col_question2 = st.columns(2)
         
-        with st.form("investor_profile_form_v8_5", clear_on_submit=False): 
+        with st.form("investor_profile_form_v8_6", clear_on_submit=False): 
             
             with col_question1:
                 st.markdown("#### Tolerância ao Risco")
@@ -1603,19 +1660,25 @@ def aba_construtor_portfolio():
                     st.error(f"Erro fatal ao inicializar o construtor do portfólio: {e}")
                     return
 
-                # 4. Executa pipeline
-                with st.spinner(f'Executando pipeline de fatores para **PERFIL {risk_level}** ({horizon})...'):
-                    success = builder_local.executar_pipeline(
-                        simbolos_customizados=st.session_state.ativos_para_analise,
-                        perfil_inputs=st.session_state.profile
-                    )
+                # 4. Executa pipeline com BARRA DE PROGRESSO
+                # Substitui o st.spinner
+                progress_widget = progress_bar_placeholder.progress(0, text=f"Iniciando pipeline para PERFIL {risk_level}...")
+                
+                success = builder_local.executar_pipeline(
+                    simbolos_customizados=st.session_state.ativos_para_analise,
+                    perfil_inputs=st.session_state.profile,
+                    progress_bar=progress_widget # Passa o objeto da barra
+                )
+                
+                # Limpa a barra de progresso
+                progress_bar_placeholder.empty()
                     
-                    if not success:
-                        st.error("Falha na aquisição ou processamento dos dados. Verifique a disponibilidade dos arquivos CSV no GCS ou se há ativos suficientes.")
-                        st.session_state.builder = None; st.session_state.profile = {}; return
-                    
-                    st.session_state.builder_complete = True
-                    st.rerun()
+                if not success:
+                    st.error("Falha na aquisição ou processamento dos dados. Verifique a disponibilidade dos arquivos CSV no GCS ou se há ativos suficientes.")
+                    st.session_state.builder = None; st.session_state.profile = {}; return
+                
+                st.session_state.builder_complete = True
+                st.rerun()
     
     # FASE 2: RESULTADOS
     else:
@@ -1744,7 +1807,7 @@ def aba_construtor_portfolio():
                     y=plot_df_ml['Prob. Alta (%)'],
                     marker=dict(
                         color=plot_df_ml['Prob. Alta (%)'],
-                        colorscale='RdYlGn', 
+                        colorscale='Greys', # Escala de cinza
                         showscale=True,
                         colorbar=dict(title="Prob. (%)")
                     ),
@@ -1804,8 +1867,11 @@ def aba_construtor_portfolio():
                 plot_df_garch['Vol. Condicional (%)'] = plot_df_garch['Vol. Condicional (%)'].astype(float)
                 plot_df_garch['Vol. Histórica (%)'] = plot_df_garch['Vol. Histórica (%)'].apply(lambda x: float(x) if x != 'N/A' else np.nan)
 
-                fig_garch.add_trace(go.Bar(name='Volatilidade Histórica', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Histórica (%)'], marker=dict(color='#6c757d'), opacity=0.7)) # Cor Secundária
-                fig_garch.add_trace(go.Bar(name='Volatilidade Condicional', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Condicional (%)'], marker=dict(color='#007bff'))) # Cor Primária
+                # Usando cores do template (preto e cinza)
+                template_colors = obter_template_grafico()['colorway']
+                
+                fig_garch.add_trace(go.Bar(name='Volatilidade Histórica', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Histórica (%)'], marker=dict(color=template_colors[2]), opacity=0.7)) # Cinza
+                fig_garch.add_trace(go.Bar(name='Volatilidade Condicional', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Condicional (%)'], marker=dict(color=template_colors[0]))) # Preto
                 
                 fig_layout = obter_template_grafico()
                 fig_layout['title']['text'] = "Volatilidade Anualizada: Histórica vs. Condicional (GARCH)"
@@ -1850,7 +1916,7 @@ def aba_construtor_portfolio():
                     'Score Total': '{:.3f}', 'Score Perf.': '{:.3f}', 'Score Fund.': '{:.3f}', 'Score Téc.': '{:.3f}', 'Score ML': '{:.3f}',
                     'Sharpe': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}%', 'RSI 14': '{:.2f}', 'MACD Hist.': '{:.4f}', 'Prob. Alta ML': '{:.2f}'
                 }
-            ).background_gradient(cmap='YlGn', subset=['Score Total']), use_container_width=True)
+            ).background_gradient(cmap='Greys', subset=['Score Total']), use_container_width=True)
             
             st.markdown("---")
             st.markdown('##### Resumo da Seleção de Ativos (Portfólio Final)')
@@ -1901,6 +1967,7 @@ def aba_analise_individual():
         )
     
     with col2:
+        # Botão de análise agora é "primary" (preenchimento preto)
         if st.button("🔄 Executar Análise", key='analyze_asset_button_v8', type="primary"):
             st.session_state.analisar_ativo_triggered = True 
     
@@ -1962,7 +2029,10 @@ def aba_analise_individual():
                     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
                     
                     fig.add_trace(go.Candlestick(x=df_completo.index, open=df_completo['Open'], high=df_completo['High'], low=df_completo['Low'], close=df_completo['Close'], name='Preço'), row=1, col=1)
-                    fig.add_trace(go.Bar(x=df_completo.index, y=df_completo['Volume'], name='Volume', marker=dict(color='#6c757d'), opacity=0.7), row=2, col=1)
+                    
+                    # Volume com cor cinza
+                    template_colors = obter_template_grafico()['colorway']
+                    fig.add_trace(go.Bar(x=df_completo.index, y=df_completo['Volume'], name='Volume', marker=dict(color=template_colors[2]), opacity=0.7), row=2, col=1)
                     
                     fig_layout = obter_template_grafico()
                     fig_layout['title']['text'] = f"Série Temporal de Preços e Volume - {ativo_selecionado.replace('.SA', '')}"
@@ -2016,15 +2086,16 @@ def aba_analise_individual():
                 st.markdown("#### Indicadores de Força e Volatilidade (Gráfico)")
                 
                 fig_osc = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=("RSI (14) - Força Relativa", "MACD - Convergência/Divergência"))
-                
+                template_colors = obter_template_grafico()['colorway']
+
                 if 'rsi_14' in df_completo.columns:
-                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['rsi_14'], name='RSI', line=dict(color='#007bff')), row=1, col=1) # Cor Primária
+                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['rsi_14'], name='RSI', line=dict(color=template_colors[0])), row=1, col=1) # Cor Primária (Preto)
                     fig_osc.add_hline(y=70, line_dash="dash", line_color="#dc3545", row=1, col=1)
                     fig_osc.add_hline(y=30, line_dash="dash", line_color="#28a745", row=1, col=1)
                 
                 if 'macd' in df_completo.columns and 'macd_signal' in df_completo.columns:
-                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd'], name='MACD', line=dict(color='#17a2b8')), row=2, col=1) # Cor Info
-                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd_signal'], name='Signal', line=dict(color='#6c757d')), row=2, col=1) # Cor Secundária
+                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd'], name='MACD', line=dict(color=template_colors[1])), row=2, col=1) # Cor Cinza Escuro
+                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd_signal'], name='Signal', line=dict(color=template_colors[3])), row=2, col=1) # Cor Cinza Claro
                     # Coluna macd_diff (Histograma)
                     if 'macd_diff' in df_completo.columns:
                         fig_osc.add_trace(go.Bar(x=df_completo.index, y=df_completo['macd_diff'], name='Histograma', marker=dict(color='#e9ecef')), row=2, col=1)
@@ -2067,6 +2138,9 @@ def aba_analise_individual():
                     # Garantir que o nome do ativo seja desformatado para hover
                     hover_names = resultado_pca.index.str.replace('.SA', '')
 
+                    # Usando a paleta de cores neutra
+                    template_colors = obter_template_grafico()['colorway']
+
                     if 'PC3' in resultado_pca.columns:
                         fig_pca = px.scatter_3d(
                             resultado_pca, 
@@ -2074,7 +2148,7 @@ def aba_analise_individual():
                             color=resultado_pca['Cluster'].astype(str), # Converte cluster para string para cor categórica
                             hover_name=hover_names, 
                             title='Similaridade de Tickers (PCA/K-means - 3D)',
-                            color_discrete_sequence=px.colors.qualitative.Plotly
+                            color_discrete_sequence=template_colors # Paleta Neutra
                         )
                     else:
                         fig_pca = px.scatter(
@@ -2083,7 +2157,7 @@ def aba_analise_individual():
                             color=resultado_pca['Cluster'].astype(str), # Converte cluster para string para cor categórica
                             hover_name=hover_names, 
                             title='Similaridade de Tickers (PCA/K-means - 2D)',
-                            color_discrete_sequence=px.colors.qualitative.Plotly
+                            color_discrete_sequence=template_colors # Paleta Neutra
                         )
                     
                     fig_pca.update_layout(**obter_template_grafico(), height=600)
@@ -2251,8 +2325,9 @@ def main():
     configurar_pagina()
     
     # Novo Título Principal
-    st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos (v8.5)</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos (v8.6)</h1>', unsafe_allow_html=True)
     
+    # As abas agora serão centralizadas pelo CSS injetado em configurar_pagina()
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📚 Metodologia",
         "🎯 Seleção de Ativos",
