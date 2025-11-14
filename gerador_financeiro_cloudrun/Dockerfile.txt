@@ -1,0 +1,20 @@
+# Use an official Python runtime as a parent image
+FROM python:3.12-slim
+
+# Set the working directory in the container
+WORKDIR /app
+
+# Copy the requirements file into the container
+COPY requirements.txt .
+
+# Install any needed packages specified in requirements.txt
+# --no-cache-dir: Don't store the downloaded packages, keeping the image smaller
+# --trusted-host pypi.python.org: Can help avoid SSL issues in some environments
+RUN pip install --no-cache-dir --trusted-host pypi.python.org -r requirements.txt
+
+# Copy the script into the container
+COPY gerador_financeiro_cloudrun.py .
+
+# Define the command to run your script
+# This will be executed when the container starts
+CMD ["python", "gerador_financeiro_cloudrun.py"]

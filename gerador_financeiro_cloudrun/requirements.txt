@@ -1,0 +1,16 @@
+pandas
+numpy
+yfinance
+tqdm
+arch
+ta
+scikit-learn
+google-cloud-storage
+lightgbm
+xgboost
+catboost
+optuna
+requests
+beautifulsoup4
+lxml
+shap
