@@ -8,7 +8,7 @@ Adaptação do Sistema AutoML para usar dados pré-processados (CSV/GCS)
 gerados pelo gerador_financeiro.py, eliminando a dependência do yfinance
 na interface Streamlit e adotando uma linguagem profissional.
 
-Versão: 8.4.2 - Introdução Metodológica Extensiva
+Versão: 8.5.0 - UI Aprimorada, Seleção por Cluster (KMeans/PCA) e Referências
 =============================================================================
 """
 
@@ -38,7 +38,7 @@ from plotly.subplots import make_subplots
 # REMOVIDAS: O cálculo em si é assumido nos dados do GCS.
 
 # --- 5. MACHINE LEARNING (SCIKIT-LEARN) ---
-# MANTIDAS: Usadas EXCLUSIVAMENTE para a função de clusterização (PCA/KMeans) local.
+# MANTIDAS: Usadas para a função de clusterização (PCA/KMeans) local.
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import silhouette_score, mean_squared_error, mean_absolute_error, r2_score, roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit
@@ -65,6 +65,7 @@ MIN_DIAS_HISTORICO = 252
 NUM_ATIVOS_PORTFOLIO = 5
 TAXA_LIVRE_RISCO = 0.1075
 LOOKBACK_ML = 30
+SCORE_PERCENTILE_THRESHOLD = 0.85 # Percentil 85 (Ajustado do 90/95 para garantir seleção)
 
 # =============================================================================
 # 2. PONDERAÇÕES E REGRAS DE OTIMIZAÇÃO
@@ -134,25 +135,97 @@ ATIVOS_POR_SETOR = {
 
 
 # =============================================================================
-# 5. MAPEAMENTOS DE PONTUAÇÃO DO QUESTIONÁRIO (Inalterados)
+# 5. MAPEAMENTOS DE PONTUAÇÃO DO QUESTIONÁRIO (LÓGICA INALTERADA)
 # =============================================================================
 
-SCORE_MAP = {
+# Mapas de pontuação ORIGINAIS (NÃO MUDAR A LÓGICA)
+SCORE_MAP_ORIGINAL = {
     'CT: Concordo Totalmente': 5, 'C: Concordo': 4, 'N: Neutro': 3, 'D: Discordo': 2, 'DT: Discordo Totalmente': 1
 }
-SCORE_MAP_INV = {
+SCORE_MAP_INV_ORIGINAL = {
     'CT: Concordo Totalmente': 1, 'C: Concordo': 2, 'N: Neutro': 3, 'D: Discordo': 4, 'DT: Discordo Totalmente': 5
 }
-SCORE_MAP_CONHECIMENTO = {
+SCORE_MAP_CONHECIMENTO_ORIGINAL = {
     'A: Avançado (Análise fundamentalista, macro e técnica)': 5, 
     'B: Intermediário (Conhecimento básico sobre mercados e ativos)': 3, 
     'C: Iniciante (Pouca ou nenhuma experiência em investimentos)': 1
 }
-SCORE_MAP_REACTION = {
+SCORE_MAP_REACTION_ORIGINAL = {
     'A: Venderia imediatamente': 1, 
     'B: Manteria e reavaliaria a tese': 3, 
     'C: Compraria mais para aproveitar preços baixos': 5
 }
+
+# --- NOVOS MAPEAMENTOS (Textos Descritivos -> Chaves Originais) ---
+
+# Mapeamento para perguntas de Concordância (1, 2)
+OPTIONS_CONCORDA = [
+    "CT: (Concordo Totalmente) - Estou confortável com altas flutuações, pois entendo que são o preço para retornos potencialmente maiores.",
+    "C: (Concordo) - Aceito alguma volatilidade, mas espero que os ganhos compensem o risco assumido de forma clara.",
+    "N: (Neutro) - Tenho dificuldade em opinar; minha decisão dependeria do momento e do ativo específico.",
+    "D: (Discordo) - Prefiro estratégias mais cautelosas, mesmo que isso signifique um potencial de retorno menor.",
+    "DT: (Discordo Totalmente) - Não estou disposto a ver meu patrimônio flutuar significativamente; prefiro segurança absoluta."
+]
+MAP_CONCORDA = {
+    OPTIONS_CONCORDA[0]: 'CT: Concordo Totalmente',
+    OPTIONS_CONCORDA[1]: 'C: Concordo',
+    OPTIONS_CONCORDA[2]: 'N: Neutro',
+    OPTIONS_CONCORDA[3]: 'D: Discordo',
+    OPTIONS_CONCORDA[4]: 'DT: Discordo Totalmente'
+}
+
+# Mapeamento para perguntas de Discordância (Invertido) (3, 4)
+OPTIONS_DISCORDA = [
+    "CT: (Concordo Totalmente) - A preservação do capital é minha prioridade máxima, acima de qualquer ganho potencial.",
+    "C: (Concordo) - É muito importante para mim evitar perdas, mesmo que isso limite o crescimento do meu portfólio.",
+    "N: (Neutro) - Busco um equilíbrio; não quero perdas excessivas, mas sei que algum risco é necessário para crescer.",
+    "D: (Discordo) - Estou focado no crescimento de longo prazo e entendo que perdas de curto prazo fazem parte do processo.",
+    "DT: (Discordo Totalmente) - Meu foco é maximizar o retorno; perdas de curto prazo são irrelevantes se a tese de longo prazo for válida."
+]
+MAP_DISCORDA = {
+    OPTIONS_DISCORDA[0]: 'CT: Concordo Totalmente',
+    OPTIONS_DISCORDA[1]: 'C: Concordo',
+    OPTIONS_DISCORDA[2]: 'N: Neutro',
+    OPTIONS_DISCORDA[3]: 'D: Discordo',
+    OPTIONS_DISCORDA[4]: 'DT: Discordo Totalmente'
+}
+
+# Mapeamento para Reação à Perda (5)
+OPTIONS_REACTION_DETALHADA = [
+    "A: (Vender Imediatamente) - Venderia a posição para evitar perdas maiores; prefiro realizar o prejuízo e reavaliar.",
+    "B: (Manter e Reavaliar) - Manteria a calma, reavaliaria os fundamentos do ativo e o cenário macro para tomar uma decisão.",
+    "C: (Comprar Mais) - Encararia como uma oportunidade de compra, aumentando a posição a um preço menor, se os fundamentos estiverem intactos."
+]
+MAP_REACTION = {
+    OPTIONS_REACTION_DETALHADA[0]: 'A: Venderia imediatamente',
+    OPTIONS_REACTION_DETALHADA[1]: 'B: Manteria e reavaliaria a tese',
+    OPTIONS_REACTION_DETALHADA[2]: 'C: Compraria mais para aproveitar preços baixos'
+}
+
+# Mapeamento para Nível de Conhecimento (6)
+OPTIONS_CONHECIMENTO_DETALHADA = [
+    "A: (Avançado) - Sinto-me confortável analisando balanços (fundamentalista), gráficos (técnica) e cenários macroeconômicos.",
+    "B: (Intermediário) - Entendo os conceitos básicos (Renda Fixa vs. Variável, risco vs. retorno) e acompanho o mercado.",
+    "C: (Iniciante) - Tenho pouca ou nenhuma experiência prática em investimentos além da poupança ou produtos bancários simples."
+]
+MAP_CONHECIMENTO = {
+    OPTIONS_CONHECIMENTO_DETALHADA[0]: 'A: Avançado (Análise fundamentalista, macro e técnica)',
+    OPTIONS_CONHECIMENTO_DETALHADA[1]: 'B: Intermediário (Conhecimento básico sobre mercados e ativos)',
+    OPTIONS_CONHECIMENTO_DETALHADA[2]: 'C: Iniciante (Pouca ou nenhuma experiência em investimentos)'
+}
+
+# Mapeamento para Horizonte e Liquidez (Chave é a Letra Inicial)
+OPTIONS_TIME_HORIZON_DETALHADA = [
+    'A: Curto (até 1 ano) - Meu objetivo é preservar capital ou realizar um ganho rápido, com alta liquidez.', 
+    'B: Médio (1-5 anos) - Busco um crescimento balanceado e posso tolerar alguma flutuação neste período.', 
+    'C: Longo (5+ anos) - Meu foco é a acumulação de patrimônio; flutuações de curto/médio prazo não me afetam.'
+]
+OPTIONS_LIQUIDEZ_DETALHADA = [
+    'A: Menos de 6 meses - Posso precisar resgatar o valor a qualquer momento (ex: reserva de emergência).', 
+    'B: Entre 6 meses e 2 anos - Não preciso do dinheiro imediatamente, mas tenho um objetivo de curto/médio prazo.', 
+    'C: Mais de 2 anos - Este é um investimento de longo prazo; não tenho planos de resgatar nos próximos anos.'
+]
+
 
 # =============================================================================
 # 6. CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR (LÓGICA CALIBRADA - V8.3.0)
@@ -185,6 +258,7 @@ class AnalisadorPerfilInvestidor:
         else: return "AVANÇADO"
     
     def determinar_horizonte_ml(self, liquidez_key: str, objetivo_key: str) -> tuple[str, int]:
+        # A chave original (A, B, C) é extraída da resposta descritiva
         time_map = { 'A': 5, 'B': 20, 'C': 30 }
         final_lookback = max( time_map.get(liquidez_key, 5), time_map.get(objetivo_key, 5) )
         
@@ -197,15 +271,15 @@ class AnalisadorPerfilInvestidor:
         
         return self.horizonte_tempo, self.dias_lookback_ml
     
-    def calcular_perfil(self, respostas_risco: dict) -> tuple[str, str, int, int]:
+    def calcular_perfil(self, respostas_risco_originais: dict) -> tuple[str, str, int, int]:
         
-        # Mapeamento do texto da resposta para o score numérico
-        score_risk_accept = SCORE_MAP.get(respostas_risco['risk_accept'], 3)
-        score_max_gain = SCORE_MAP.get(respostas_risco['max_gain'], 3)
-        score_stable_growth = SCORE_MAP_INV.get(respostas_risco['stable_growth'], 3)
-        score_avoid_loss = SCORE_MAP_INV.get(respostas_risco['avoid_loss'], 3)
-        score_level = SCORE_MAP_CONHECIMENTO.get(respostas_risco['level'], 3)
-        score_reaction = SCORE_MAP_REACTION.get(respostas_risco['reaction'], 3)
+        # Mapeamento do texto da resposta para o score numérico (USANDO OS MAPAS ORIGINAIS)
+        score_risk_accept = SCORE_MAP_ORIGINAL.get(respostas_risco_originais['risk_accept'], 3)
+        score_max_gain = SCORE_MAP_ORIGINAL.get(respostas_risco_originais['max_gain'], 3)
+        score_stable_growth = SCORE_MAP_INV_ORIGINAL.get(respostas_risco_originais['stable_growth'], 3)
+        score_avoid_loss = SCORE_MAP_INV_ORIGINAL.get(respostas_risco_originais['avoid_loss'], 3)
+        score_level = SCORE_MAP_CONHECIMENTO_ORIGINAL.get(respostas_risco_originais['level'], 3)
+        score_reaction = SCORE_MAP_REACTION_ORIGINAL.get(respostas_risco_originais['reaction'], 3)
 
         pontuacao = (
             score_risk_accept * 5 +
@@ -218,8 +292,8 @@ class AnalisadorPerfilInvestidor:
         nivel_risco = self.determinar_nivel_risco(pontuacao)
         
         # Extrai apenas a chave (A, B ou C) para determinar o horizonte ML
-        liquidez_key = respostas_risco['liquidity'][0] if isinstance(respostas_risco['liquidity'], str) and respostas_risco['liquidity'] else 'C'
-        objetivo_key = respostas_risco['time_purpose'][0] if isinstance(respostas_risco['time_purpose'], str) and respostas_risco['time_purpose'] else 'C'
+        liquidez_key = respostas_risco_originais['liquidity'][0] if isinstance(respostas_risco_originais['liquidity'], str) and respostas_risco_originais['liquidity'] else 'C'
+        objetivo_key = respostas_risco_originais['time_purpose'][0] if isinstance(respostas_risco_originais['time_purpose'], str) and respostas_risco_originais['time_purpose'] else 'C'
         
         horizonte_tempo, ml_lookback = self.determinar_horizonte_ml(
             liquidez_key, objetivo_key
@@ -280,21 +354,27 @@ class EngenheiroFeatures:
         if serie.isnull().all():
             return pd.Series(0, index=serie.index)
         
-        min_val = serie.min()
-        max_val = serie.max()
+        # Trata outliers extremos (ex: P/L de 5000) usando clipping no percentil 98 e 2
+        q_low = serie.quantile(0.02)
+        q_high = serie.quantile(0.98)
+        serie_clipped = serie.clip(q_low, q_high)
+        
+        min_val = serie_clipped.min()
+        max_val = serie_clipped.max()
         
         if max_val == min_val:
             return pd.Series(0.5, index=serie.index)
         
         if maior_melhor:
-            return (serie - min_val) / (max_val - min_val)
+            return (serie_clipped - min_val) / (max_val - min_val)
         else:
-            return (max_val - serie) / (max_val - min_val)
+            return (max_val - serie_clipped) / (max_val - min_val)
 
 # =============================================================================
 # 9. FUNÇÕES DE COLETA DE DADOS GCS (Mantido)
 # =============================================================================
 
+@st.cache_data(ttl=3600) # Cache de 1 hora para dados GCS
 def carregar_dados_ativo_gcs_csv(base_url: str, ticker: str, file_suffix: str) -> pd.DataFrame:
     """Carrega o DataFrame de um único ativo via URL pública do GCS (formato CSV)."""
     file_name = f"{ticker}{file_suffix}" 
@@ -365,6 +445,7 @@ class ColetorDadosGCS(object):
         
         return fund_data
 
+    # O cache é aplicado na função de carregamento (carregar_dados_ativo_gcs_csv)
     def coletar_e_processar_dados(self, simbolos: list) -> bool:
         """Carrega os DataFrames para todos os ativos no pipeline."""
         
@@ -445,7 +526,13 @@ class ColetorDadosGCS(object):
                 for col, value in self.dados_fundamentalistas.loc[simbolo].items():
                     # Garante que a coluna 'returns' não seja sobrescrita por 'annual_return'
                     if col not in ['annual_return', 'annual_volatility', 'max_drawdown']: 
-                        self.dados_por_ativo[simbolo].loc[last_index, col] = value
+                        # Garante que colunas existentes (como 'pe_ratio' série) não sejam sobrescritas
+                        if col not in self.dados_por_ativo[simbolo].columns:
+                            self.dados_por_ativo[simbolo].loc[last_index, col] = value
+                        else:
+                            # Se a coluna existe mas está toda nula, preenche o último valor
+                            if self.dados_por_ativo[simbolo][col].isnull().all():
+                                self.dados_por_ativo[simbolo].loc[last_index, col] = value
                 
         return True
 
@@ -653,7 +740,10 @@ class ConstrutorPortfolioAutoML:
             }
 
     def pontuar_e_selecionar_ativos(self, horizonte_tempo: str):
-        """Pontua e ranqueia ativos usando sistema multi-fator (Perf, Fund, Tech, ML) e diversificação."""
+        """
+        Pontua e ranqueia ativos usando sistema multi-fator (Perf, Fund, Tech, ML) 
+        e seleciona usando Clusterização KMeans/PCA.
+        """
         
         # 1. Pesos Adaptativos
         if horizonte_tempo == "CURTO PRAZO": WEIGHT_PERF, WEIGHT_FUND, WEIGHT_TECH = 0.40, 0.10, 0.20
@@ -672,57 +762,162 @@ class ConstrutorPortfolioAutoML:
         last_metrics = {}
         for asset in self.ativos_sucesso:
             df = self.dados_por_ativo[asset]
-            last_row = df.iloc[-1].to_dict()
-            last_metrics[asset] = last_row
+            # Usa a última linha válida
+            last_valid_index = df.last_valid_index()
+            if last_valid_index is not None:
+                last_row = df.loc[last_valid_index].to_dict()
+                last_metrics[asset] = last_row
             
         combinado = pd.DataFrame(last_metrics).T
         
-        # Garantindo que as colunas de score existam (usando fallbacks do gerador_financeiro)
-        required_cols = ['sharpe_ratio', 'pe_ratio', 'roe', 'rsi_14', 'macd_diff', 'ML_Proba', 'ML_Confidence', 'sector']
+        # 3. Garantia de Colunas
+        # Colunas fundamentais e de performance que o GCS_Coletor já padronizou
+        # (ex: 'pe_ratio', 'roe', 'sharpe_ratio', 'sector')
+        # Colunas técnicas (ex: 'rsi_14', 'macd_diff')
+        # Colunas ML (ex: 'ML_Proba', 'ML_Confidence')
+        required_cols = [
+            'sharpe_ratio', 'pe_ratio', 'roe', 'rsi_14', 'macd_diff', 
+            'ML_Proba', 'ML_Confidence', 'sector'
+        ]
+        
         for col in required_cols:
              if col not in combinado.columns: 
-                 if col == 'pe_ratio': combinado[col] = combinado.get('fund_pe_ratio', np.nan)
-                 elif col == 'roe': combinado[col] = combinado.get('fund_roe', np.nan)
-                 else: combinado[col] = np.nan
+                 # Tenta buscar do GCS (ex: 'fund_pe_ratio' se 'pe_ratio' falhou)
+                 if col == 'pe_ratio' and 'fund_pe_ratio' in combinado.columns: 
+                     combinado[col] = combinado['fund_pe_ratio']
+                 elif col == 'roe' and 'fund_roe' in combinado.columns:
+                     combinado[col] = combinado['fund_roe']
+                 else:
+                     combinado[col] = np.nan # Preenche com NaN se ausente
         
-        # 4. Cálculo dos Scores
-        pe_col = 'pe_ratio'
-        roe_col = 'roe'
-
+        # 4. Cálculo dos Scores (Com Explicações Detalhadas)
+        
         # 4.1. Score de Performance (Sharpe)
+        # Lógica: O Sharpe Ratio mede o retorno ajustado ao risco (Retorno / Volatilidade).
+        # Um Sharpe maior é melhor (maior_melhor=True).
+        # Este score é ponderado por WEIGHT_PERF.
         scores['performance_score'] = EngenheiroFeatures._normalizar(combinado['sharpe_ratio'], maior_melhor=True) * WEIGHT_PERF
         
         # 4.2. Score Fundamentalista (P/L e ROE)
-        pe_score = EngenheiroFeatures._normalizar(combinado[pe_col].replace([np.inf, -np.inf], np.nan), maior_melhor=False)
-        roe_score = EngenheiroFeatures._normalizar(combinado[roe_col].replace([np.inf, -np.inf], np.nan), maior_melhor=True)
+        # Lógica: P/L (Preço/Lucro) é um múltiplo de valuation.
+        # Um P/L mais baixo é geralmente considerado 'mais barato' (maior_melhor=False).
+        pe_score = EngenheiroFeatures._normalizar(combinado['pe_ratio'].replace([np.inf, -np.inf], np.nan), maior_melhor=False)
+        
+        # Lógica: ROE (Return on Equity) é uma métrica de qualidade/rentabilidade.
+        # Um ROE maior indica que a empresa gera mais lucro com seu patrimônio (maior_melhor=True).
+        roe_score = EngenheiroFeatures._normalizar(combinado['roe'].replace([np.inf, -np.inf], np.nan), maior_melhor=True)
+        
+        # O score fundamentalista é a média do score de 'valor' (P/L) e 'qualidade' (ROE).
         scores['fundamental_score'] = (pe_score * 0.5 + roe_score * 0.5) * WEIGHT_FUND
         
         # 4.3. Score Técnico (RSI e MACD)
+        # Lógica: RSI (Índice de Força Relativa) é um oscilador de momentum.
+        # Valores altos (>70) indicam sobrecompra (sinal de venda/reversão).
+        # Estamos buscando ativos *não* sobrecomprados, logo, um RSI menor é 'melhor' (maior_melhor=False).
         rsi_norm = EngenheiroFeatures._normalizar(combinado['rsi_14'], maior_melhor=False)
+        
+        # Lógica: MACD Histograma (macd_diff) mede a força da tendência.
+        # Um histograma positivo e crescente indica momentum de alta (maior_melhor=True).
         macd_norm = EngenheiroFeatures._normalizar(combinado['macd_diff'], maior_melhor=True)
+        
+        # O score técnico é a média dos dois indicadores de momentum.
         scores['technical_score'] = (rsi_norm * 0.5 + macd_norm * 0.5) * WEIGHT_TECH
 
         # 4.4. Score de Machine Learning (Proba e Confiança)
+        # Lógica: ML_Proba é a probabilidade do ativo superar sua mediana de retornos (gerada pelo 'gerador_financeiro.py').
+        # Uma probabilidade maior é melhor (maior_melhor=True).
         ml_proba_norm = EngenheiroFeatures._normalizar(combinado['ML_Proba'], maior_melhor=True)
-        # CORRIGIDO: Se ML_Confidence for NaN, a normalização será 0.5, o que significa peso neutro.
+        
+        # Lógica: ML_Confidence é o AUC-ROC do modelo, medindo sua capacidade de distinguir "altas" de "baixas".
+        # Uma confiança maior (AUC > 0.5) é melhor (maior_melhor=True).
+        # Se for NaN (não carregado), a normalização resultará em 0.5 (peso neutro).
         ml_confidence_norm = EngenheiroFeatures._normalizar(combinado['ML_Confidence'], maior_melhor=True)
+        
+        # O score de ML é uma média ponderada da *previsão* (60%) e da *confiança* no modelo (40%).
         scores['ml_score_weighted'] = (ml_proba_norm * 0.6 + ml_confidence_norm * 0.4) * final_ml_weight
         
+        # 4.5. Score Total
         scores['total_score'] = scores['performance_score'] + scores['fundamental_score'] + scores['technical_score'] + scores['ml_score_weighted']
+        
+        # Junta os scores com os dados originais para a clusterização
         self.scores_combinados = scores.join(combinado, rsuffix='_combined').sort_values('total_score', ascending=False)
         
-        # 5. Seleção Final (Diversificação Setorial)
-        ranked_assets = self.scores_combinados.index.tolist()
-        final_portfolio = []; selected_sectors = set(); num_assets_to_select = min(NUM_ATIVOS_PORTFOLIO, len(ranked_assets))
         
-        for asset in ranked_assets:
-            sector = self.scores_combinados.loc[asset, 'sector'] if 'sector' in self.scores_combinados.columns and asset in self.scores_combinados.index else 'Unknown'
-            # Garante diversificação setorial ou preenche o mínimo de ativos
-            if sector not in selected_sectors or len(final_portfolio) < num_assets_to_select:
-                final_portfolio.append(asset); selected_sectors.add(sector)
-            if len(final_portfolio) >= num_assets_to_select: break
+        # --- 5. SELEÇÃO FINAL (ESTRATÉGIA DE CLUSTERIZAÇÃO KMeans/PCA) ---
         
-        self.ativos_selecionados = final_portfolio
+        # 5.1. Preparar Dados para Clusterização
+        # Usando métricas de performance e fundamentos
+        features_cluster = [
+            'sharpe_ratio', 'annual_return', 'annual_volatility', 'max_drawdown', 
+            'pe_ratio', 'pb_ratio', 'roe', 'debt_to_equity', 'revenue_growth',
+            'div_yield', 'beta', 'garch_volatility'
+        ]
+        # Garante que as colunas existam no dataframe 'combinado'
+        features_disponiveis = [col for col in features_cluster if col in self.scores_combinados.columns]
+        df_para_cluster = self.scores_combinados[features_disponiveis]
+
+        # 5.2. Executar Clusterização (encontrando K ótimo)
+        if len(df_para_cluster) < 10: # Fallback se houver poucos ativos
+            st.warning("Poucos ativos para clusterização. Usando seleção por Score Total.")
+            self.ativos_selecionados = self.scores_combinados.head(NUM_ATIVOS_PORTFOLIO).index.tolist()
+            return self.ativos_selecionados
+            
+        resultado_pca, pca, kmeans, optimal_k = AnalisadorIndividualAtivos.realizar_clusterizacao_pca(
+            df_para_cluster, 
+            max_clusters=min(10, len(df_para_cluster) - 1) # Limita o K máximo
+        )
+        
+        if resultado_pca is None: # Fallback se clusterização falhar
+            st.warning("Falha na clusterização (PCA/KMeans). Usando seleção por Score Total.")
+            self.ativos_selecionados = self.scores_combinados.head(NUM_ATIVOS_PORTFOLIO).index.tolist()
+            return self.ativos_selecionados
+
+        # 5.3. Combinar Scores e Clusters
+        df_final = self.scores_combinados.join(resultado_pca['Cluster'])
+        
+        # 5.4. Definir Threshold (Percentil 85, conforme solicitado)
+        score_threshold = df_final['total_score'].quantile(SCORE_PERCENTILE_THRESHOLD)
+        
+        # 5.5. Filtrar Candidatos
+        candidates_df = df_final[
+            (df_final['total_score'] >= score_threshold) & 
+            (df_final['Cluster'].notna())
+        ].copy()
+        
+        if candidates_df.empty: # Fallback se o threshold for muito alto
+            st.warning(f"Nenhum ativo atingiu o percentil {SCORE_PERCENTILE_THRESHOLD*100:.0f} de score. Usando o Top 5 geral.")
+            self.ativos_selecionados = self.scores_combinados.head(NUM_ATIVOS_PORTFOLIO).index.tolist()
+            return self.ativos_selecionados
+
+        # 5.6. Ranquear por Cluster (Implementação da Lógica de Seleção)
+        # Cria uma coluna 'cluster_rank' (0 para o melhor de cada cluster, 1 para o segundo, etc.)
+        candidates_df['cluster_rank'] = candidates_df.groupby('Cluster')['total_score'].rank(method='first', ascending=False) - 1
+        
+        # Ordena primeiro pelo 'cluster_rank' (pegando todos os rank 0, depois todos os rank 1...)
+        # e desempata pelo 'total_score' (o rank 0 do cluster A com score 0.9 vem antes do rank 0 do cluster B com score 0.8)
+        candidates_df_sorted = candidates_df.sort_values(
+            by=['cluster_rank', 'total_score'], 
+            ascending=[True, False]
+        )
+        
+        # 5.7. Selecionar o Top N
+        self.ativos_selecionados = candidates_df_sorted.head(NUM_ATIVOS_PORTFOLIO).index.tolist()
+        
+        # 5.8. Fallback (Garantir que o portfólio tenha N ativos)
+        if len(self.ativos_selecionados) < NUM_ATIVOS_PORTFOLIO:
+            st.warning(f"Seleção por Cluster retornou {len(self.ativos_selecionados)} ativos. Completando com o Top Score geral.")
+            ativos_faltantes = NUM_ATIVOS_PORTFOLIO - len(self.ativos_selecionados)
+            
+            # Pega os melhores do ranking geral que ainda não foram selecionados
+            top_geral = self.scores_combinados.head(NUM_ATIVOS_PORTFOLIO * 2).index
+            
+            for ativo in top_geral:
+                if ativo not in self.ativos_selecionados:
+                    self.ativos_selecionados.append(ativo)
+                    ativos_faltantes -= 1
+                if ativos_faltantes == 0:
+                    break
+        
         return self.ativos_selecionados
     
     def otimizar_alocacao(self, nivel_risco: str):
@@ -790,7 +985,7 @@ class ConstrutorPortfolioAutoML:
             # Usando os nomes das colunas após o processamento no ColetorDadosGCS
             pe_ratio = fund.get('pe_ratio', fund.get('fund_pe_ratio', np.nan))
             roe = fund.get('roe', fund.get('fund_roe', np.nan))
-            justification.append(f"Fundamentos: P/L {pe_ratio:.2f}, ROE {roe:.2f}%")
+            justification.append(f"Fundamentos: P/L {pe_ratio:.2f}, ROE {roe*100:.2f}%") # ROE vem como decimal do GCS
             
             proba_up = self.predicoes_ml.get(simbolo, {}).get('predicted_proba_up', 0.5)
             # CORRIGIDO: usa np.nan se não carregado, o que será exibido como N/A
@@ -814,7 +1009,7 @@ class ConstrutorPortfolioAutoML:
         self.calcular_volatilidades_garch()
         # Otimização do ML removida do front-end, mas a função treinar_modelos_ensemble é chamada
         self.treinar_modelos_ensemble(dias_lookback_ml=ml_lookback_days, otimizar=False) 
-        self.pontuar_e_selecionar_ativos(horizonte_tempo=horizonte_tempo)
+        self.pontuar_e_selecionar_ativos(horizonte_tempo=horizonte_tempo) # Lógica de seleção por cluster agora está aqui
         self.alocacao_portfolio = self.otimizar_alocacao(nivel_risco=nivel_risco)
         self.calcular_metricas_portfolio()
         self.gerar_justificativas()
@@ -822,19 +1017,25 @@ class ConstrutorPortfolioAutoML:
         return True
 
 # =============================================================================
-# 12. CLASSE: ANALISADOR INDIVIDUAL DE ATIVOS (ADAPTADA COM PCA/KMEANS)
+# 12. CLASSE: ANALISADOR INDIVIDUAL DE ATIVOS (ADAPTADA COM PCA/KMEANS OTIMIZADO)
 # =============================================================================
 
 class AnalisadorIndividualAtivos:
     """Análise completa de ativos individuais com máximo de features."""
     
     @staticmethod
-    def realizar_clusterizacao_pca(dados_ativos: pd.DataFrame, n_clusters: int = 5) -> tuple[pd.DataFrame | None, PCA | None, KMeans | None]:
-        """Realiza clusterização K-means após redução de dimensionalidade com PCA."""
+    def realizar_clusterizacao_pca(dados_ativos: pd.DataFrame, max_clusters: int = 10) -> tuple[pd.DataFrame | None, PCA | None, KMeans | None, int | None]:
+        """
+        Realiza clusterização K-means após PCA, encontrando o número ótimo de clusters (K)
+        via Silhouette Score.
+        """
         
         # Filtra as features importantes para a clusterização
-        features_cluster = ['sharpe', 'retorno_anual', 'volatilidade_anual', 'max_drawdown', 
-                            'pe_ratio', 'pb_ratio', 'roe', 'debt_to_equity', 'revenue_growth']
+        features_cluster = [
+            'sharpe', 'retorno_anual', 'volatilidade_anual', 'max_drawdown', 
+            'pe_ratio', 'pb_ratio', 'roe', 'debt_to_equity', 'revenue_growth',
+            'div_yield', 'beta', 'garch_volatility'
+        ]
         
         # Garante que as colunas existam e não sejam vazias
         features_numericas = dados_ativos.filter(items=features_cluster).select_dtypes(include=[np.number]).copy()
@@ -853,9 +1054,9 @@ class AnalisadorIndividualAtivos:
         # Remove colunas com variação próxima de zero
         features_numericas = features_numericas.loc[:, (features_numericas.std() > 1e-6)]
 
-        # Condição de Falha
-        if features_numericas.empty or len(features_numericas) < n_clusters:
-            return None, None, None
+        # Condição de Falha: Precisa de pelo menos 3 ativos para clusterizar (K=2)
+        if features_numericas.empty or len(features_numericas) < 3:
+            return None, None, None, None
             
         scaler = StandardScaler()
         dados_normalizados = scaler.fit_transform(features_numericas)
@@ -865,10 +1066,33 @@ class AnalisadorIndividualAtivos:
         pca = PCA(n_components=n_pca_components)
         componentes_pca = pca.fit_transform(dados_normalizados)
         
-        # KMeans
-        actual_n_clusters = min(n_clusters, len(features_numericas))
-        # Ajusta n_init para evitar warning
-        kmeans = KMeans(n_clusters=actual_n_clusters, random_state=42, n_init='auto') 
+        # --- Encontrar K Ótimo (Silhouette Score) ---
+        best_score = -1
+        optimal_k = 2 # K mínimo é 2
+        
+        # O K máximo não pode ser maior que N-1 amostras
+        k_range = range(2, min(max_clusters + 1, len(features_numericas))) 
+
+        if not k_range: # Se len(features_numericas) for 2 ou 3, k_range pode ser vazio ou pequeno
+             if len(features_numericas) >= 2:
+                 optimal_k = 2
+             else:
+                 return None, None, None, None # Impossível clusterizar
+        else:
+            for k in k_range:
+                try:
+                    kmeans_k = KMeans(n_clusters=k, random_state=42, n_init='auto')
+                    clusters_k = kmeans_k.fit_predict(componentes_pca)
+                    score = silhouette_score(componentes_pca, clusters_k)
+                    
+                    if score > best_score:
+                        best_score = score
+                        optimal_k = k
+                except Exception:
+                    continue # Ignora falhas em K específico
+        
+        # --- KMeans Final com K Ótimo ---
+        kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init='auto') 
         clusters = kmeans.fit_predict(componentes_pca)
         
         resultado_pca = pd.DataFrame(
@@ -878,7 +1102,7 @@ class AnalisadorIndividualAtivos:
         )
         resultado_pca['Cluster'] = clusters
         
-        return resultado_pca, pca, kmeans
+        return resultado_pca, pca, kmeans, optimal_k
 
 # =============================================================================
 # 13. INTERFACE STREAMLIT - REESTRUTURADA COM AJUSTES DE DESIGN
@@ -917,23 +1141,12 @@ def configurar_pagina():
             font-weight: 600;
         }
 
-        /* --- CORREÇÃO DO BUG (Início) --- */
-        /* REMOVIDA a regra global que quebrava os ícones:
-         html, body, [class*="st-"] {
-            font-family: 'Arial', sans-serif;
-         }
-         Isso impedia que a fonte 'Material Icons' do Streamlit fosse carregada nos botões.
-         A fonte 'Arial' agora é aplicada seletivamente abaixo.
-        */
-        
         /* Aplica a fonte Arial especificamente onde queremos, sem quebrar os ícones */
         .stButton button, .stDownloadButton button, .stFormSubmitButton button, 
         .stTabs [data-baseweb="tab"], .stMetric label, .main-header, .info-box,
         h1, h2, h3, h4, h5, p, body {
              font-family: 'Arial', sans-serif !important;
         }
-        /* --- CORREÇÃO DO BUG (Fim) --- */
-
         
         /* Correção CRÍTICA para sobreposição de texto em botões/widgets */
         .stButton button, .stDownloadButton button, .stFormSubmitButton button {
@@ -1001,8 +1214,25 @@ def configurar_pagina():
         .stMetric delta { font-weight: 700; color: #28a745; }
         .stMetric delta[style*="color: red"] { color: #dc3545 !important; }
         
-        /* REMOVIDA a regra '.key' que era perigosa e poderia causar conflitos.
-        */
+        /* Estilo para referências bibliográficas */
+        .reference-block {
+            background-color: #fdfdfd;
+            border: 1px solid var(--border-color);
+            padding: 12px;
+            margin-bottom: 12px;
+            border-radius: 6px;
+        }
+        .reference-block p {
+            margin-bottom: 5px;
+        }
+        .reference-block .explanation {
+            font-style: italic;
+            color: var(--secondary-color);
+            font-size: 0.95em;
+            border-top: 1px dashed #e0e0e0;
+            padding-top: 8px;
+            margin-top: 8px;
+        }
         
         </style>
     """, unsafe_allow_html=True)
@@ -1104,32 +1334,36 @@ def aba_introducao():
             | **Técnicos** | RSI e MACD (Momentum) | Baixo | **Alto** |
             | **Machine Learning**| Probabilidade de Alta (Sinal) | Médio | Médio |
             
-            Os 5 ativos com maior *Score Total* são pré-selecionados, com uma regra de diversificação setorial.
+            Os ativos são então filtrados, mantendo-se apenas aqueles com **Score Total acima do Percentil 85** (ou seja, os 15% melhores do universo analisado).
             """)
             
-        with st.expander("Etapa 2.3: Otimização (Teoria Moderna de Portfólio - MPT)"):
+        with st.expander("Etapa 2.3: Seleção por Cluster (KMeans/PCA)"):
             st.markdown("""
-            Após selecionar os 5 melhores ativos, o sistema usa a **Teoria Moderna de Portfólio (MPT)** de Harry Markowitz para definir o peso (percentual) de cada ativo na carteira.
+            Para garantir a diversificação, os ativos filtrados (acima do Percentil 85) são agrupados por similaridade usando **KMeans/PCA**.
+            
+            1.  **PCA (Principal Component Analysis):** Reduz dezenas de métricas (P/L, ROE, Sharpe, Volatilidade) em 2 ou 3 "Componentes Principais", capturando a "essência" financeira de cada ativo.
+            2.  **KMeans:** Agrupa (clusteriza) os ativos com base nesses componentes. O número de clusters é definido dinamicamente (usando *Silhouette Score*) para encontrar os agrupamentos mais naturais.
+            
+            O sistema então seleciona os 5 ativos finais (para o portfólio) seguindo esta regra:
+            
+            - **Rank 1:** Pega o ativo com **maior Score Total** de cada cluster.
+            - **Rank 2:** Se ainda faltarem ativos para completar os 5, ele pega o **segundo melhor** ativo de cada cluster (priorizando pelo maior score).
+            - **...e assim por diante** até 5 ativos serem selecionados.
+            
+            Essa abordagem garante um portfólio diversificado, selecionando os "campeões" de diferentes perfis financeiros (ex: 1 ativo de "Crescimento", 1 de "Valor", 1 de "Baixa Volatilidade", etc.).
+            """)
+            
+        with st.expander("Etapa 2.4: Otimização (Teoria Moderna de Portfólio - MPT)"):
+            st.markdown("""
+            Após selecionar os 5 melhores e mais diversos ativos, o sistema usa a **Teoria Moderna de Portfólio (MPT)** de Harry Markowitz para definir o peso (percentual) de cada ativo na carteira.
             
             O objetivo é encontrar a carteira na "Fronteira Eficiente" – o ponto que oferece o maior retorno esperado para um dado nível de risco (volatilidade).
-            
-            
             
             O **Nível de Risco** do seu perfil determina *qual* ponto da fronteira o sistema irá buscar:
             
             - **Conservador/Intermediário:** Busca a carteira de **Mínima Volatilidade (MinVolatility)**. Foco total em reduzir o risco.
             - **Moderado:** Busca a carteira com o **Máximo Sharpe Ratio (MaxSharpe)**. O melhor equilíbrio entre risco e retorno.
             - **Avançado:** Otimiza usando **CVaR (Conditional Value at Risk)**. Foca em minimizar a perda média nos piores cenários (ex: 5% piores dias), buscando proteção contra "eventos de cauda".
-            """)
-            
-        with st.expander("Etapa 2.4: Análise de Similaridade (PCA/KMeans)"):
-            st.markdown("""
-            Na Aba 4 (Análise Individual), o sistema utiliza aprendizado não supervisionado para agrupar ativos com características similares.
-            
-            1.  **PCA (Principal Component Analysis):** Reduz a dimensionalidade de dezenas de métricas (Sharpe, P/L, ROE, Volatilidade, etc.) em apenas 2 ou 3 "Componentes Principais" que explicam a maior parte da variação.
-            2.  **KMeans:** Agrupa (clusteriza) os ativos com base nesses componentes.
-            
-            O resultado permite identificar quais ativos se comportam de forma financeiramente similar, independentemente do setor (ex: um banco e uma empresa de energia podem cair no mesmo cluster se tiverem P/L, ROE e volatilidade parecidos).
             """)
 
     st.markdown("---")
@@ -1276,33 +1510,61 @@ def aba_construtor_portfolio():
         
         col_question1, col_question2 = st.columns(2)
         
-        # Correção de Keys para o Formulário - APLICADA V8.4
-        with st.form("investor_profile_form", clear_on_submit=False): 
-            options_score = list(SCORE_MAP.keys())
-            options_reaction = list(SCORE_MAP_REACTION.keys())
-            options_level_abc = list(SCORE_MAP_CONHECIMENTO.keys())
-            options_time_horizon = [
-                'A: Curto (até 1 ano - Foco em liquidez)', 'B: Médio (1-5 anos - Foco em crescimento balanceado)', 'C: Longo (5+ anos - Foco em valor e qualidade)'
-            ]
-            options_liquidez = [
-                'A: Menos de 6 meses (Alta liquidez requerida)', 'B: Entre 6 meses e 2 anos (Liquidez moderada)', 'C: Mais de 2 anos (Baixa necessidade de liquidez imediata)'
-            ]
+        with st.form("investor_profile_form_v8_5", clear_on_submit=False): 
             
             with col_question1:
                 st.markdown("#### Tolerância ao Risco")
-                # Chaves únicas e descritivas (v8.4)
-                p2_risk = st.radio("**1. Volatilidade de Curto Prazo:** Aceito volatilidade em busca de retornos superiores.", options=options_score, index=2, key='risk_accept_radio_v8_q1')
-                p3_gain = st.radio("**2. Objetivo Primário:** Maximizar o retorno, mesmo com maior exposição ao risco.", options=options_score, index=2, key='max_gain_radio_v8_q2')
-                p4_stable = st.radio("**3. Estabilidade vs. Ganhos:** Priorizo a estabilidade e a preservação do capital.", options=options_score, index=2, key='stable_growth_radio_v8_q3')
-                p5_loss = st.radio("**4. Prevenção de Perdas:** A prevenção de perdas é mais crítica do que a busca por crescimento acelerado.", options=options_score, index=2, key='avoid_loss_radio_v8_q4')
-                p511_reaction = st.radio("**5. Reação a Queda de 10%:** Qual seria sua reação diante dessa queda?", options=options_reaction, index=1, key='reaction_radio_v8_q5')
-                p_level = st.radio("**6. Nível de Conhecimento:** Qual seu nível de conhecimento sobre o mercado financeiro?", options=options_level_abc, index=1, key='level_radio_v8_q6')
+                
+                # Pergunta 1 (Concorda)
+                p2_risk_desc = st.radio(
+                    "**1. Tolerância à Volatilidade:** Como você se sente sobre flutuações significativas (ex: quedas de 15-20%) no valor do seu portfólio em um único ano?", 
+                    options=OPTIONS_CONCORDA, index=2, key='risk_accept_radio_v8_q1'
+                )
+                
+                # Pergunta 2 (Concorda)
+                p3_gain_desc = st.radio(
+                    "**2. Foco em Retorno Máximo:** Meu objetivo principal é maximizar o retorno, mesmo que isso signifique assumir riscos substancialmente maiores.", 
+                    options=OPTIONS_CONCORDA, index=2, key='max_gain_radio_v8_q2'
+                )
+                
+                # Pergunta 3 (Discorda - Invertido)
+                p4_stable_desc = st.radio(
+                    "**3. Prioridade de Estabilidade:** Priorizo a estabilidade e a preservação do meu capital acima do potencial de grandes ganhos.", 
+                    options=OPTIONS_DISCORDA, index=2, key='stable_growth_radio_v8_q3'
+                )
+                
+                # Pergunta 4 (Discorda - Invertido)
+                p5_loss_desc = st.radio(
+                    "**4. Aversão à Perda:** A prevenção de perdas de curto prazo é mais crítica para mim do que a busca por crescimento acelerado no longo prazo.", 
+                    options=OPTIONS_DISCORDA, index=2, key='avoid_loss_radio_v8_q4'
+                )
+                
+                # Pergunta 5 (Reação)
+                p511_reaction_desc = st.radio(
+                    "**5. Reação a Queda de 10%:** Se um ativo em sua carteira caísse 10% rapidamente, qual seria sua reação mais provável?", 
+                    options=OPTIONS_REACTION_DETALHADA, index=1, key='reaction_radio_v8_q5'
+                )
+                
+                # Pergunta 6 (Conhecimento)
+                p_level_desc = st.radio(
+                    "**6. Nível de Conhecimento:** Qual seu nível de conhecimento sobre o mercado financeiro e tipos de investimento?", 
+                    options=OPTIONS_CONHECIMENTO_DETALHADA, index=1, key='level_radio_v8_q6'
+                )
             
             with col_question2:
                 st.markdown("#### Horizonte e Capital")
-                # Chaves únicas e descritivas (v8.4)
-                p211_time = st.radio("**7. Prazo Estratégico:** Prazo máximo para reavaliação estratégica do portfólio.", options=options_time_horizon, index=2, key='time_purpose_radio_v8_q7')
-                p311_liquid = st.radio("**8. Liquidez:** Prazo mínimo para resgate/necessidade de liquidez.", options=options_liquidez, index=2, key='liquidity_radio_v8_q8')
+                
+                # Pergunta 7 (Horizonte)
+                p211_time_desc = st.radio(
+                    "**7. Horizonte de Investimento:** Por quanto tempo você pretende manter este investimento antes de precisar de uma reavaliação estratégica ou do capital?", 
+                    options=OPTIONS_TIME_HORIZON_DETALHADA, index=2, key='time_purpose_radio_v8_q7'
+                )
+                
+                # Pergunta 8 (Liquidez)
+                p311_liquid_desc = st.radio(
+                    "**8. Necessidade de Liquidez:** Qual é o prazo mínimo que você pode garantir que *não* precisará resgatar este capital?", 
+                    options=OPTIONS_LIQUIDEZ_DETALHADA, index=2, key='liquidity_radio_v8_q8'
+                )
                 
                 st.markdown("---")
                 investment = st.number_input(
@@ -1310,23 +1572,30 @@ def aba_construtor_portfolio():
                     min_value=1000, max_value=10000000, value=100000, step=10000, key='investment_amount_input_v8'
                 )
             
-            submitted = st.form_submit_button("🚀 Gerar Alocação Otimizada", type="primary", key='submit_optimization_button_v8') # Botão unificado e claro
+            submitted = st.form_submit_button("🚀 Gerar Alocação Otimizada", type="primary", key='submit_optimization_button_v8')
             
             if submitted:
-                # 1. Analisa perfil
-                risk_answers = {
-                    'risk_accept': p2_risk, 'max_gain': p3_gain, 'stable_growth': p4_stable, 'avoid_loss': p5_loss,
-                    'reaction': p511_reaction, 'level': p_level, 
-                    'time_purpose': p211_time, 'liquidity': p311_liquid
+                # 1. Mapeia respostas descritivas para as chaves de pontuação ORIGINAIS
+                risk_answers_originais = {
+                    'risk_accept': MAP_CONCORDA.get(p2_risk_desc, 'N: Neutro'),
+                    'max_gain': MAP_CONCORDA.get(p3_gain_desc, 'N: Neutro'),
+                    'stable_growth': MAP_DISCORDA.get(p4_stable_desc, 'N: Neutro'),
+                    'avoid_loss': MAP_DISCORDA.get(p5_loss_desc, 'N: Neutro'),
+                    'reaction': MAP_REACTION.get(p511_reaction_desc, 'B: Manteria e reavaliaria a tese'),
+                    'level': MAP_CONHECIMENTO.get(p_level_desc, 'B: Intermediário (Conhecimento básico sobre mercados e ativos)'),
+                    'time_purpose': p211_time_desc, # A lógica de horizonte já usa a string (A, B, C)
+                    'liquidity': p311_liquid_desc,  # A lógica de horizonte já usa a string (A, B, C)
                 }
+                
+                # 2. Analisa perfil (usando a lógica de pontuação original e inalterada)
                 analyzer = AnalisadorPerfilInvestidor()
-                risk_level, horizon, lookback, score = analyzer.calcular_perfil(risk_answers)
+                risk_level, horizon, lookback, score = analyzer.calcular_perfil(risk_answers_originais)
                 
                 st.session_state.profile = {
                     'risk_level': risk_level, 'time_horizon': horizon, 'ml_lookback_days': lookback, 'risk_score': score
                 }
                 
-                # 2. Cria construtor
+                # 3. Cria construtor
                 try:
                     builder_local = ConstrutorPortfolioAutoML(investment)
                     st.session_state.builder = builder_local
@@ -1334,7 +1603,7 @@ def aba_construtor_portfolio():
                     st.error(f"Erro fatal ao inicializar o construtor do portfólio: {e}")
                     return
 
-                # 3. Executa pipeline
+                # 4. Executa pipeline
                 with st.spinner(f'Executando pipeline de fatores para **PERFIL {risk_level}** ({horizon})...'):
                     success = builder_local.executar_pipeline(
                         simbolos_customizados=st.session_state.ativos_para_analise,
@@ -1342,7 +1611,7 @@ def aba_construtor_portfolio():
                     )
                     
                     if not success:
-                        st.error("Falha na aquisição ou processamento dos dados. Verifique a disponibilidade dos arquivos CSV no GCS.")
+                        st.error("Falha na aquisição ou processamento dos dados. Verifique a disponibilidade dos arquivos CSV no GCS ou se há ativos suficientes.")
                         st.session_state.builder = None; st.session_state.profile = {}; return
                     
                     st.session_state.builder_complete = True
@@ -1553,18 +1822,38 @@ def aba_construtor_portfolio():
             st.markdown('#### Ranqueamento Final e Justificativas Detalhadas')
             
             st.markdown(f"**Pesos Adaptativos Usados:** Performance: {builder.pesos_atuais['Performance']:.2f} | Fundamentos: {builder.pesos_atuais['Fundamentos']:.2f} | Técnicos: {builder.pesos_atuais['Técnicos']:.2f} | ML: {builder.pesos_atuais['ML']:.2f}")
+            st.markdown(f"**Estratégia de Seleção:** Clusterização (KMeans/PCA) com threshold de Score no Percentil {SCORE_PERCENTILE_THRESHOLD*100:.0f}.")
             st.markdown("---")
             
             # Ajusta colunas para usar macd_diff (diferença) e pe/roe simples
-            df_scores_display = builder.scores_combinados[['total_score', 'performance_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 'sharpe_ratio', 'pe_ratio', 'roe', 'rsi_14', 'macd_diff', 'ML_Proba']].copy()
-            df_scores_display.columns = ['Score Total', 'Score Perf.', 'Score Fund.', 'Score Téc.', 'Score ML', 'Sharpe', 'P/L', 'ROE', 'RSI 14', 'MACD Hist.', 'Prob. Alta ML']
-            df_scores_display = df_scores_display.iloc[:15]
+            cols_to_display_scores = [
+                'total_score', 'performance_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 
+                'sharpe_ratio', 'pe_ratio', 'roe', 'rsi_14', 'macd_diff', 'ML_Proba'
+            ]
+            # Garante que apenas colunas existentes sejam selecionadas
+            cols_existentes = [col for col in cols_to_display_scores if col in builder.scores_combinados.columns]
             
-            st.markdown("##### Ranqueamento Ponderado Multi-Fatorial (Top 15 Tickers)")
-            st.dataframe(df_scores_display.style.background_gradient(cmap='YlGn', subset=['Score Total']), use_container_width=True)
+            df_scores_display = builder.scores_combinados[cols_existentes].copy()
+            df_scores_display.columns = [
+                'Score Total', 'Score Perf.', 'Score Fund.', 'Score Téc.', 'Score ML', 
+                'Sharpe', 'P/L', 'ROE', 'RSI 14', 'MACD Hist.', 'Prob. Alta ML'
+            ]
+            # Converte ROE para percentual
+            if 'ROE' in df_scores_display.columns:
+                 df_scores_display['ROE'] = df_scores_display['ROE'] * 100
+                 
+            df_scores_display = df_scores_display.iloc[:15] # Mostra o Top 15
+            
+            st.markdown("##### Ranqueamento Ponderado Multi-Fatorial (Top 15 Tickers do Universo Analisado)")
+            st.dataframe(df_scores_display.style.format(
+                {
+                    'Score Total': '{:.3f}', 'Score Perf.': '{:.3f}', 'Score Fund.': '{:.3f}', 'Score Téc.': '{:.3f}', 'Score ML': '{:.3f}',
+                    'Sharpe': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}%', 'RSI 14': '{:.2f}', 'MACD Hist.': '{:.4f}', 'Prob. Alta ML': '{:.2f}'
+                }
+            ).background_gradient(cmap='YlGn', subset=['Score Total']), use_container_width=True)
             
             st.markdown("---")
-            st.markdown('##### Resumo da Seleção de Ativos')
+            st.markdown('##### Resumo da Seleção de Ativos (Portfólio Final)')
             
             if not builder.justificativas_selecao:
                 st.warning("Nenhuma justificativa gerada.")
@@ -1630,19 +1919,20 @@ def aba_analise_individual():
             if builder_existe and ativo_selecionado in st.session_state.builder.dados_por_ativo:
                 builder = st.session_state.builder
                 df_completo = builder.dados_por_ativo[ativo_selecionado].copy().dropna(how='all')
-                features_fund_raw = builder.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
-                # Adapta o dict de fundamentos para usar os nomes simples P/L e ROE
-                features_fund = features_fund_raw.copy()
-                features_fund['pe_ratio'] = features_fund.get('pe_ratio', features_fund_raw.get('fund_pe_ratio'))
-                features_fund['roe'] = features_fund.get('roe', features_fund_raw.get('fund_roe'))
+                
+                # Puxa dos dados fundamentalistas consolidados do builder
+                if ativo_selecionado in builder.dados_fundamentalistas.index:
+                    features_fund = builder.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
+                else:
+                    # Fallback se não estiver nos dados consolidados (deve estar)
+                    _, features_fund = ColetorDadosGCS().coletar_ativo_unico_gcs(ativo_selecionado)
 
-            
             # 2. Se falhar ou não houver cache, coleta sob demanda
             if df_completo is None or df_completo.empty or features_fund is None:
                 df_completo, features_fund = ColetorDadosGCS().coletar_ativo_unico_gcs(ativo_selecionado)
                 if df_completo is not None: df_completo = df_completo.dropna(how='all')
 
-            if df_completo is None or df_completo.empty or 'Close' not in df_completo.columns:
+            if df_completo is None or df_completo.empty or 'Close' not in df_completo.columns or features_fund is None:
                 st.error(f"❌ Não foi possível obter dados (Histórico/Features) válidos do GCS para **{ativo_selecionado.replace('.SA', '')}**. Verifique a configuração do GCS.")
                 return
 
@@ -1659,7 +1949,7 @@ def aba_analise_individual():
                 col1, col2, col3, col4, col5 = st.columns(5)
                 
                 preco_atual = df_completo['Close'].iloc[-1]
-                variacao_dia = df_completo['returns'].iloc[-1] * 100 if 'returns' in df_completo.columns else 0.0
+                variacao_dia = df_completo['returns'].iloc[-1] * 100 if 'returns' in df_completo.columns and not df_completo['returns'].empty else 0.0
                 volume_medio = df_completo['Volume'].mean() if 'Volume' in df_completo.columns else 0.0
                 
                 col1.metric("Preço de Fechamento", f"R$ {preco_atual:.2f}", f"{variacao_dia:+.2f}%")
@@ -1688,16 +1978,16 @@ def aba_analise_individual():
                 
                 col1.metric("P/L (Valuation)", f"{features_fund.get('pe_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('pe_ratio')) else "N/A")
                 col2.metric("P/VP", f"{features_fund.get('pb_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('pb_ratio')) else "N/A")
-                col3.metric("ROE (Rentabilidade)", f"{features_fund.get('roe', np.nan):.2f}%" if not pd.isna(features_fund.get('roe')) else "N/A")
-                col4.metric("Margem Operacional", f"{features_fund.get('operating_margin', np.nan):.2f}%" if not pd.isna(features_fund.get('operating_margin')) else "N/A")
-                col5.metric("Cresc. Receita Anual", f"{features_fund.get('revenue_growth', np.nan):.2f}%" if not pd.isna(features_fund.get('revenue_growth')) else "N/A")
+                col3.metric("ROE (Rentabilidade)", f"{features_fund.get('roe', np.nan)*100:.2f}%" if not pd.isna(features_fund.get('roe')) else "N/A") # GCS ROE é decimal
+                col4.metric("Margem Operacional", f"{features_fund.get('operating_margin', np.nan)*100:.2f}%" if not pd.isna(features_fund.get('operating_margin')) else "N/A") # GCS Margem é decimal
+                col5.metric("Cresc. Receita Anual", f"{features_fund.get('revenue_growth', np.nan)*100:.2f}%" if not pd.isna(features_fund.get('revenue_growth')) else "N/A") # GCS Cresc. é decimal
                 
                 st.markdown("#### Saúde Financeira e Dividendo")
                 col1, col2, col3, col4 = st.columns(4)
                 
                 col1.metric("Dívida/Patrimônio", f"{features_fund.get('debt_to_equity', np.nan):.2f}" if not pd.isna(features_fund.get('debt_to_equity')) else "N/A")
                 col2.metric("Current Ratio", f"{features_fund.get('current_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('current_ratio')) else "N/A")
-                col3.metric("Dividend Yield", f"{features_fund.get('div_yield', np.nan):.2f}%" if not pd.isna(features_fund.get('div_yield')) else "N/A")
+                col3.metric("Dividend Yield", f"{features_fund.get('div_yield', np.nan):.2f}%" if not pd.isna(features_fund.get('div_yield')) else "N/A") # GCS DY é percentual
                 col4.metric("Beta (Risco Sistêmico)", f"{features_fund.get('beta', np.nan):.2f}" if not pd.isna(features_fund.get('beta')) else "N/A")
                 
                 st.markdown("---")
@@ -1761,16 +2051,19 @@ def aba_analise_individual():
                 if 'roe' not in df_comparacao.columns and 'fund_roe' in df_comparacao.columns:
                     df_comparacao['roe'] = df_comparacao['fund_roe']
                 
-                # As features de clusterização são definidas na função realizar_clusterizacao_pca
-                
                 if len(df_comparacao) < 10:
                     st.warning("Dados insuficientes para realizar a clusterização (menos de 10 ativos com métricas completas).")
                     return
                     
                 # Chama a função de clusterização (que agora usa a lógica completa)
-                resultado_pca, pca, kmeans = AnalisadorIndividualAtivos.realizar_clusterizacao_pca(df_comparacao, n_clusters=5)
+                resultado_pca, pca, kmeans, optimal_k = AnalisadorIndividualAtivos.realizar_clusterizacao_pca(
+                    df_comparacao, 
+                    max_clusters=min(10, len(df_comparacao) - 1)
+                )
                 
                 if resultado_pca is not None:
+                    st.info(f"Análise de clusterização encontrou **{optimal_k} clusters** ótimos (via Silhouette Score).")
+                    
                     # Garantir que o nome do ativo seja desformatado para hover
                     hover_names = resultado_pca.index.str.replace('.SA', '')
 
@@ -1778,19 +2071,19 @@ def aba_analise_individual():
                         fig_pca = px.scatter_3d(
                             resultado_pca, 
                             x='PC1', y='PC2', z='PC3', 
-                            color='Cluster', 
+                            color=resultado_pca['Cluster'].astype(str), # Converte cluster para string para cor categórica
                             hover_name=hover_names, 
                             title='Similaridade de Tickers (PCA/K-means - 3D)',
-                            color_continuous_scale=px.colors.qualitative.Plotly # Usar escala qualitativa para clusters
+                            color_discrete_sequence=px.colors.qualitative.Plotly
                         )
                     else:
                         fig_pca = px.scatter(
                             resultado_pca, 
                             x='PC1', y='PC2', 
-                            color='Cluster', 
+                            color=resultado_pca['Cluster'].astype(str), # Converte cluster para string para cor categórica
                             hover_name=hover_names, 
                             title='Similaridade de Tickers (PCA/K-means - 2D)',
-                            color_continuous_scale=px.colors.qualitative.Plotly
+                            color_discrete_sequence=px.colors.qualitative.Plotly
                         )
                     
                     fig_pca.update_layout(**obter_template_grafico(), height=600)
@@ -1801,7 +2094,7 @@ def aba_analise_individual():
                         ativos_similares_df = resultado_pca[resultado_pca['Cluster'] == cluster_ativo]
                         ativos_similares = [a for a in ativos_similares_df.index.tolist() if a != ativo_selecionado]
                         
-                        st.success(f"**{ativo_selecionado.replace('.SA', '')}** pertence ao Cluster {cluster_ativo}")
+                        st.success(f"**{ativo_selecionado.replace('.SA', '')}** pertence ao **Cluster {cluster_ativo}**")
                         
                         if ativos_similares:
                             st.markdown(f"#### Tickers Similares no Cluster {cluster_ativo}:")
@@ -1814,7 +2107,137 @@ def aba_analise_individual():
         
         except Exception as e:
             st.error(f"Erro ao analisar o ticker {ativo_selecionado}: {str(e)}")
-            
+            import traceback
+            st.code(traceback.format_exc())
+
+# =============================================================================
+# Aba 5: Referências (NOVA)
+# =============================================================================
+
+def aba_referencias():
+    """Aba 5: Referências Bibliográficas das Ementas."""
+    
+    st.markdown("## 📚 Referências e Bibliografia")
+    st.markdown("Esta seção consolida as referências bibliográficas indicadas nas ementas das disciplinas relacionadas (GRDECO222 e GRDECO203).")
+
+    st.markdown("---")
+    
+    st.markdown("### GRDECO222: Machine Learning (Prof. Rafael Martins de Souza)")
+    
+    st.markdown("#### Bibliografia Obrigatória")
+    st.markdown(
+        """
+        <div class="reference-block">
+            <p><strong>1. Jupter Notebooks apresentados em sala de aula.</strong></p>
+            <p class="explanation">
+            Explicação: O material principal do curso é prático, baseado nos códigos e exemplos desenvolvidos
+            pelo professor durante as aulas.
+            </p>
+        </div>
+        <div class="reference-block">
+            <p><strong>2. Géron, A. Mãos à Obra: Aprendizado de Máquina com Scikit-Learn, Keras e TensorFlow.</strong></p>
+            <p class="explanation">
+            Explicação: Considerado um dos principais livros-texto práticos sobre Machine Learning.
+            Cobre desde os fundamentos (Regressão, SVMs, Árvores de Decisão) até tópicos avançados
+            de Deep Learning, com foco na implementação usando bibliotecas Python populares.
+            </p>
+        </div>
+        """, unsafe_allow_html=True
+    )
+    
+    st.markdown("#### Bibliografia Complementar")
+    st.markdown(
+        """
+        <div class="reference-block">
+            <p><strong>1. Coleman, C., Spencer Lyon, S., Jesse Perla, J. QuantEcon Data Science, Introduction to Economic Modeling and Data Science. (https://datascience.quantecon.org/)</strong></p>
+            <p class="explanation">
+            Explicação: Um recurso online focado na aplicação de Ciência de Dados especificamente
+            para modelagem econômica, alinhado com os objetivos da disciplina.
+            </p>
+        </div>
+        <div class="reference-block">
+            <p><strong>2. Sargent, T. J., Stachurski, J., Quantitative Economics with Python. (https://python.quantecon.org/)</strong></p>
+            <p class="explanation">
+            Explicação: Outro projeto da QuantEcon, focado em métodos quantitativos e economia computacional
+            usando Python. É uma referência padrão para economistas que programam.
+            </p>
+        </div>
+        """, unsafe_allow_html=True
+    )
+
+    st.markdown("---")
+    
+    st.markdown("### GRDECO203: Laboratório de Ciência de Dados Aplicados à Finanças (Prof. Diogo Tavares Robaina)")
+
+    st.markdown("#### Bibliografia Básica")
+    st.markdown(
+        """
+        <div class="reference-block">
+            <p><strong>1. HILPISCH, Y. J. Python for finance: analyze big financial dat. O'Reilly Media, 2015.</strong></p>
+            <p class="explanation">
+            Explicação: Uma referência clássica para finanças quantitativas em Python. Cobre manipulação
+            de dados financeiros (séries temporais), análise de risco, e implementação de estratégias
+            de trading e precificação de derivativos.
+            </p>
+        </div>
+        <div class="reference-block">
+            <p><strong>2. ARRATIA, A. Computational finance an introductory course with R. Atlantis, 2014.</strong></p>
+            <p class="explanation">
+            Explicação: Focado em finanças computacionais usando a linguagem R, abordando conceitos
+            introdutórios e modelagem.
+            </p>
+        </div>
+        <div class="reference-block">
+            <p><strong>3. RASCHKA, S. Python machine learning: unlock deeper insights... Packt Publishing, 2015.</strong></p>
+            <p class="explanation">
+            Explicação: Um guia popular focado na aplicação prática de algoritmos de Machine Learning
+            com Scikit-Learn em Python, similar ao livro de Géron.
+            </p>
+        </div>
+        <div class="reference-block">
+            <p><strong>4. MAINDONALD, J., and Braun, J. Data analysis and graphics using R: an example-based approach. Cambridge University Press, 2006.</strong></p>
+            <p class="explanation">
+            Explicação: Livro focado em análise de dados e visualização gráfica utilizando a linguagem R.
+            </p>
+        </div>
+        <div class="reference-block">
+            <p><strong>5. REYES, J. M. M. Introduction to Data Science for Social and Policy Research. Cambridge University Press, 2017.</strong></p>
+            <p class="explanation">
+            Explicação: Aborda a aplicação de Ciência de Dados no contexto de ciências sociais e pesquisa
+            de políticas públicas, relevante para a análise econômica.
+            </p>
+        </div>
+        """, unsafe_allow_html=True
+    )
+    
+    st.markdown("#### Bibliografia Complementar")
+    st.markdown(
+        """
+        <div class="reference-block">
+            <p><strong>1. TEAM, R. Core. "R language definition." R foundation for statistical computing (2000).</strong></p>
+            <p class="explanation">Explicação: A documentação oficial da linguagem R.</p>
+        </div>
+        <div class="reference-block">
+            <p><strong>2. MISHRA, R.; RAM, B. Portfolio Selection Using R. Yugoslav Journal of Operations Research, 2020.</strong></p>
+            <p class="explanation">Explicação: Um artigo de pesquisa focado especificamente na aplicação da
+            linguagem R para otimização e seleção de portfólios, muito relevante para a disciplina.
+            </p>
+        </div>
+        <div class="reference-block">
+            <p><strong>3. WICKHAM, H., et al. (dplyr, Tidy data, Advanced R, ggplot2, R for data science).</strong></p>
+            <p class="explanation">
+            Explicação: Múltiplas referências de Hadley Wickham, o criador do "Tidyverse" em R.
+            São os pacotes e livros fundamentais para a manipulação de dados moderna (dplyr),
+            organização (Tidy data) e visualização (ggplot2) na linguagem R.
+            </p>
+        </div>
+        """, unsafe_allow_html=True
+    )
+
+# =============================================================================
+# 14. FUNÇÃO PRINCIPAL
+# =============================================================================
+
 def main():
     """Função principal que orquestra a interface Streamlit."""
     
@@ -1828,13 +2251,14 @@ def main():
     configurar_pagina()
     
     # Novo Título Principal
-    st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos (v8.5)</h1>', unsafe_allow_html=True)
     
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📚 Metodologia",
         "🎯 Seleção de Ativos",
         "🏗️ Construtor de Portfólio",
-        "🔍 Análise Individual"
+        "🔍 Análise Individual",
+        "📖 Referências" # NOVA ABA
     ])
     
     with tab1:
@@ -1848,6 +2272,9 @@ def main():
     
     with tab4:
         aba_analise_individual()
+        
+    with tab5:
+        aba_referencias() # NOVA FUNÇÃO
 
 if __name__ == "__main__":
     main()
