@@ -8,7 +8,14 @@ Adaptação do Sistema AutoML para usar dados pré-processados (CSV/GCS)
 gerados pelo gerador_financeiro.py, eliminando a dependência do yfinance
 na interface Streamlit e adotando uma linguagem profissional.
 
-Versão: 8.6.1 (CORRIGIDA) - Ajuste na leitura de CSVs do GCS (index_col=0)
+Versão: 8.7.0 (ML Detalhado)
+- Modificado `carregar_dados_ativo_gcs_csv` para carregar `_ml_metadata.csv`
+  com índice múltiplo (`ticker`, `target_name`).
+- Modificado `ColetorDadosGCS.coletar_ativo_unico_gcs` para carregar e
+  retornar os metadados de ML.
+- Adicionada nova aba "Fatores de Machine Learning" na "Análise Individual"
+  para exibir importâncias de features (JSON), performance do ensemble
+  (JSON) e probabilidades para cada horizonte de ML (Curto, Médio, Longo).
 =============================================================================
 """
 
@@ -23,6 +30,7 @@ import time
 from datetime import datetime, timedelta
 from tqdm import tqdm
 import json
+import traceback
 
 # --- 2. SCIENTIFIC / STATISTICAL TOOLS ---
 from scipy.optimize import minimize
@@ -66,6 +74,13 @@ NUM_ATIVOS_PORTFOLIO = 5
 TAXA_LIVRE_RISCO = 0.1075
 LOOKBACK_ML = 30
 SCORE_PERCENTILE_THRESHOLD = 0.85 # Percentil 85 (Ajustado do 90/95 para garantir seleção)
+
+# Mapeamento de Prazos (usado na Aba 4, com base no gerador_financeiro.py)
+LOOKBACK_ML_DAYS_MAP = {
+    'curto_prazo': 84,
+    'medio_prazo': 168,
+    'longo_prazo': 252
+}
 
 # =============================================================================
 # 2. PONDERAÇÕES E REGRAS DE OTIMIZAÇÃO
@@ -372,45 +387,59 @@ class EngenheiroFeatures:
             return (max_val - serie_clipped) / (max_val - min_val)
 
 # =============================================================================
-# 9. FUNÇÕES DE COLETA DE DADOS GCS (CORRIGIDO)
+# 9. FUNÇÕES DE COLETA DE DADOS GCS (CORRIGIDO v8.7.0)
 # =============================================================================
 
 @st.cache_data(ttl=3600) # Cache de 1 hora para dados GCS
 def carregar_dados_ativo_gcs_csv(base_url: str, ticker: str, file_suffix: str) -> pd.DataFrame:
     """
     Carrega o DataFrame de um único ativo via URL pública do GCS (formato CSV).
-    *** CORREÇÃO v8.6.1: Usa index_col=0 para ler o índice salvo pelo gerador_financeiro.py ***
+    *** CORREÇÃO v8.7.0: Define o(s) índice(s) com base no sufixo ANTES de carregar ***
     """
     file_name = f"{ticker}{file_suffix}" 
     full_url = f"{base_url}{file_name}"
     
     try:
-        # --- ALTERAÇÃO PRINCIPAL ---
-        # Carrega o CSV, assumindo que a primeira coluna (0) é o índice
-        # Isso corrige o problema de leitura, pois o gerador_financeiro.py salva com index=True
-        df_ativo = pd.read_csv(full_url, index_col=0)
+        # --- ALTERAÇÃO v8.7.0 ---
+        # Define o(s) índice(s) com base no sufixo ANTES de carregar
+        if file_suffix == '_ml_metadata.csv':
+            df_ativo = pd.read_csv(full_url, index_col=[0, 1]) # ticker, target_name
+            df_ativo.index.names = ['ticker', 'target_name']
+        elif file_suffix == '_tecnicos.csv':
+            df_ativo = pd.read_csv(full_url, index_col=0) # Date
+            df_ativo.index.name = 'Date'
+        else: # _fundamentos.csv, _ml_results.csv
+            df_ativo = pd.read_csv(full_url, index_col=0) # Ticker
+            df_ativo.index.name = 'Ticker'
         
+        # --- FIM DA ALTERAÇÃO ---
+
         # 1. Pós-processamento para _tecnicos.csv
         if file_suffix == '_tecnicos.csv':
-            df_ativo.index.name = 'Date'
-            # 2. Conversão para Datetime e remoção de timezone
+            # Conversão para Datetime e remoção de timezone
             if df_ativo.index.dtype == object:
                 df_ativo.index = pd.to_datetime(df_ativo.index)
-            
             if df_ativo.index.tz is not None:
                  df_ativo.index = df_ativo.index.tz_convert(None) 
 
         # 2. Pós-processamento para _fundamentos.csv
+        # (Já tratado pelo index_col=0 e nome 'Ticker')
         elif file_suffix == '_fundamentos.csv':
-            df_ativo.index.name = 'Ticker'
+            pass # Índice já é 'Ticker'
         
         # 3. Pós-processamento para _ml_results.csv
+        # (Já tratado pelo index_col=0 e nome 'Ticker')
         elif file_suffix == '_ml_results.csv':
-            df_ativo.index.name = 'Ticker'
-            
-        # 4. Conversão de colunas numéricas (para todos)
+            pass # Índice já é 'Ticker'
+        
+        # 4. Pós-processamento para _ml_metadata.csv
+        # (Já tratado pelo index_col=[0, 1])
+        elif file_suffix == '_ml_metadata.csv':
+            pass # Índice já é ['ticker', 'target_name']
+        
+        # 5. Conversão de colunas numéricas (para todos)
         # Garante que colunas de ID não sejam convertidas
-        id_cols = ['ticker', 'sector', 'industry', 'recommendation', 'Date', 'index', 'Ticker']
+        id_cols = ['ticker', 'sector', 'industry', 'recommendation', 'Date', 'index', 'Ticker', 'target_name'] # <-- ATUALIZADO v8.7.0
         for col in df_ativo.columns:
             if col not in id_cols:
                 # Força a conversão para float, ignorando erros
@@ -491,7 +520,6 @@ class ColetorDadosGCS(object):
             self.dados_por_ativo[simbolo] = df_tecnicos.dropna(how='all')
             self.ativos_sucesso.append(simbolo)
             
-            # --- ALTERAÇÃO v8.6.1 ---
             # Extrai a linha única de fundamentos usando .loc[simbolo]
             # (O DataFrame agora é indexado por 'Ticker' (simbolo))
             if simbolo not in df_fundamentos.index:
@@ -501,7 +529,6 @@ class ColetorDadosGCS(object):
             
             # 4. Adiciona dados ML à última linha do DataFrame Temporal
             if not df_ml_results.empty and simbolo in df_ml_results.index:
-                # --- ALTERAÇÃO v8.6.1 ---
                 # Usa .loc[simbolo]
                 ml_row = df_ml_results.loc[simbolo] 
                 # Tenta encontrar a coluna de proba mais longa (252d é o padrão de longo prazo)
@@ -558,17 +585,17 @@ class ColetorDadosGCS(object):
                 
         return True
 
-    def coletar_ativo_unico_gcs(self, ativo_selecionado: str) -> tuple[pd.DataFrame | None, dict | None]:
-        """Coleta e retorna dados de um único ativo sob demanda (Aba 4)."""
+    def coletar_ativo_unico_gcs(self, ativo_selecionado: str) -> tuple[pd.DataFrame | None, dict | None, pd.DataFrame | None]:
+        """Coleta e retorna dados de um único ativo sob demanda (Aba 4), incluindo metadados de ML."""
         
         df_tecnicos = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, ativo_selecionado, file_suffix='_tecnicos.csv')
         df_fundamentos = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, ativo_selecionado, file_suffix='_fundamentos.csv')
+        df_ml_metadata = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, ativo_selecionado, file_suffix='_ml_metadata.csv') # <-- NOVA LINHA v8.7.0
         
         # Validação: Garante que o ticker carregado está no índice
         if df_tecnicos.empty or df_fundamentos.empty or 'Close' not in df_tecnicos.columns or ativo_selecionado not in df_fundamentos.index:
-            return None, None
+            return None, None, None # <-- MUDANÇA v8.7.0
         
-        # --- ALTERAÇÃO v8.6.1 ---
         # Usa .loc[ativo_selecionado] para buscar a linha de fundamentos
         fund_row = df_fundamentos.loc[ativo_selecionado]
         features_fund = self._get_fundamental_metrics_from_df(fund_row)
@@ -586,7 +613,6 @@ class ColetorDadosGCS(object):
                 
             # Adiciona ML
             if not df_ml_results.empty and ativo_selecionado in df_ml_results.index:
-                # --- ALTERAÇÃO v8.6.1 ---
                 # Usa .loc[ativo_selecionado]
                 ml_row = df_ml_results.loc[ativo_selecionado] 
                 ml_proba_col = next((c for c in ml_row.index if c.startswith('ml_proba_') and not pd.isna(ml_row[c])), 'ml_proba_252d')
@@ -595,7 +621,7 @@ class ColetorDadosGCS(object):
                 # CORRIGIDO: Não usar mock, usar np.nan se a coluna não for carregada.
                 df_tecnicos.loc[last_index, 'ML_Confidence'] = ml_row.get('auc_roc_score_best_model', np.nan) 
         
-        return df_tecnicos.dropna(how='all'), features_fund
+        return df_tecnicos.dropna(how='all'), features_fund, df_ml_metadata # <-- MUDANÇA v8.7.0
 
 # =============================================================================
 # 10. CLASSE: OTIMIZADOR DE PORTFÓLIO (Inalterada)
@@ -1065,7 +1091,6 @@ class ConstrutorPortfolioAutoML:
         
         except Exception as e:
             st.error(f"Erro durante a execução do pipeline: {e}")
-            import traceback
             st.code(traceback.format_exc())
             return False
             
@@ -1382,7 +1407,7 @@ def aba_introducao():
             - **`[TICKER]_tecnicos.csv`**: A série temporal completa (OHLCV, Retornos, RSI, MACD, etc.).
             - **`[TICKER]_fundamentos.csv`**: Uma *única linha* estática (P/L, ROE, Sharpe, Setor, Vol. GARCH).
             - **`[TICKER]_ml_results.csv`**: Uma *única linha* com a probabilidade final do *Ensemble* de ML.
-            - **`[TICKER]_ml_metadata.csv`**: Logs detalhados do treino (não usados pelo painel).
+            - **`[TICKER]_ml_metadata.csv`**: Logs detalhados do treino (JSONs com importâncias, pesos do ensemble, etc.).
             """)
 
     # --- Coluna 2: O PAINEL ---
@@ -1649,7 +1674,7 @@ def aba_construtor_portfolio():
                 st.markdown("---")
                 investment = st.number_input(
                     "Capital Total a ser Alocado (R$)",
-                    min_value=1000, max_value=10000000, value=100000, step=10000, key='investment_amount_input_v8'
+                    min_value=1000, max_value=10000000, value=10000, step=1000, key='investment_amount_input_v8'
                 )
             
             submitted = st.form_submit_button("🚀 Gerar Alocação Otimizada", type="primary", key='submit_optimization_button_v8')
@@ -1958,7 +1983,7 @@ def aba_construtor_portfolio():
 
 
 # =============================================================================
-# Aba 4: Análise Individual (Mantido)
+# Aba 4: Análise Individual (MODIFICADA v8.7.0)
 # =============================================================================
 
 def aba_analise_individual():
@@ -2003,6 +2028,7 @@ def aba_analise_individual():
         try:
             df_completo = None
             features_fund = None
+            df_ml_meta = None # <-- NOVA VARIÁVEL v8.7.0
             
             # 1. Tenta usar o cache do construtor (se executado)
             builder_existe = 'builder' in st.session_state and st.session_state.builder is not None
@@ -2015,21 +2041,27 @@ def aba_analise_individual():
                     features_fund = builder.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
                 else:
                     # Fallback se não estiver nos dados consolidados (deve estar)
-                    _, features_fund = ColetorDadosGCS().coletar_ativo_unico_gcs(ativo_selecionado)
+                    _, features_fund, df_ml_meta = ColetorDadosGCS().coletar_ativo_unico_gcs(ativo_selecionado)
+                
+                # Carrega os metadados de ML separadamente, pois o builder não os armazena
+                if df_ml_meta is None:
+                    df_ml_meta = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, ativo_selecionado, file_suffix='_ml_metadata.csv') # <-- NOVA LINHA v8.7.0
 
             # 2. Se falhar ou não houver cache, coleta sob demanda
-            if df_completo is None or df_completo.empty or features_fund is None:
-                df_completo, features_fund = ColetorDadosGCS().coletar_ativo_unico_gcs(ativo_selecionado)
+            if df_completo is None or df_completo.empty or features_fund is None or df_ml_meta is None:
+                df_completo, features_fund, df_ml_meta = ColetorDadosGCS().coletar_ativo_unico_gcs(ativo_selecionado) # <-- MUDANÇA NA CHAMADA v8.7.0
                 if df_completo is not None: df_completo = df_completo.dropna(how='all')
 
             if df_completo is None or df_completo.empty or 'Close' not in df_completo.columns or features_fund is None:
                 st.error(f"❌ Não foi possível obter dados (Histórico/Features) válidos do GCS para **{ativo_selecionado.replace('.SA', '')}**. Verifique a configuração do GCS.")
                 return
 
-            tab1, tab2, tab3, tab4 = st.tabs([
+            # --- MUDANÇA v8.7.0: Adicionar a nova aba de ML ---
+            tab1, tab2, tab3, tab4, tab5 = st.tabs([
                 "📊 Histórico e Visão Geral",
                 "💼 Fatores Fundamentalistas",
                 "🔧 Fatores Técnicos e Momentum",
+                "🤖 Fatores de Machine Learning", # <-- NOVA ABA
                 "🔬 Similaridade e Clusterização"
             ])
             
@@ -2129,7 +2161,109 @@ def aba_analise_individual():
                 
                 st.plotly_chart(fig_osc, use_container_width=True)
 
+            # --- INÍCIO DA NOVA ABA v8.7.0 ---
             with tab4:
+                st.markdown("### Fatores de Machine Learning (Ensemble)")
+                
+                if df_ml_meta is None or df_ml_meta.empty:
+                    st.warning(f"Não foi possível carregar os metadados de ML para {ativo_selecionado.replace('.SA', '')}. Verifique o arquivo `_ml_metadata.csv` no GCS.")
+                else:
+                    try:
+                        # O df_ml_meta está indexado por ['ticker', 'target_name']
+                        # O ticker já está selecionado (ativo_selecionado)
+                        # Precisamos apenas dos 'target_name' para este ticker
+                        targets_disponiveis = df_ml_meta.index.get_level_values('target_name').unique()
+                        
+                        target_selecionado = st.selectbox(
+                            "Selecione o Horizonte de Predição (Target) para analisar:",
+                            options=targets_disponiveis,
+                            format_func=lambda x: f"{x.replace('_', ' ').title()} ({LOOKBACK_ML_DAYS_MAP.get(x, 'N/A')}d)"
+                        )
+                        
+                        # Seleciona a linha específica do metadata usando o índice múltiplo
+                        meta_row = df_ml_meta.loc[(ativo_selecionado, target_selecionado)]
+                        
+                        st.markdown(f"#### Análise do Target: {target_selecionado.replace('_', ' ').title()}")
+                        
+                        col1, col2, col3 = st.columns(3)
+                        proba_final = meta_row.get('final_ensemble_proba', np.nan)
+                        features_count = meta_row.get('features_selected_count', 0)
+                        
+                        col1.metric("Probabilidade de Alta (Ensemble)", f"{proba_final*100:.2f}%" if not pd.isna(proba_final) else "N/A")
+                        col2.metric("Features Selecionadas", f"{features_count} / {meta_row.get('features_original_count', '?')}")
+                        col3.metric("Target (Dias)", f"{meta_row.get('target_days', 'N/A')} dias")
+
+                        st.markdown("---")
+                        
+                        # 1. Dados dos Modelos (JSON)
+                        st.markdown("##### Performance do Ensemble (Pós-WFCV)")
+                        models_data_json = meta_row.get('models_data', '{}')
+                        models_data = json.loads(models_data_json)
+                        
+                        models_df_data = []
+                        if models_data:
+                            for model_name, data in models_data.items():
+                                models_df_data.append({
+                                    'Modelo': model_name.upper(),
+                                    'AUC (HPO)': data.get('hpo_auc', np.nan),
+                                    'Peso (WFCV)': data.get('wfc_weight', np.nan),
+                                    'Proba. Individual': data.get('final_proba', np.nan)
+                                })
+                            
+                            models_df = pd.DataFrame(models_df_data)
+                            st.dataframe(models_df.style.format({
+                                'AUC (HPO)': '{:.3f}',
+                                'Peso (WFCV)': '{:.3f}',
+                                'Proba. Individual': '{:.3f}'
+                            }).background_gradient(cmap='Greys', subset=['Peso (WFCV)']), use_container_width=True, hide_index=True)
+                        else:
+                            st.info("Dados de performance do ensemble não disponíveis.")
+
+                        # 2. Features Mais Importantes (JSON)
+                        st.markdown("---")
+                        st.markdown("##### Features Mais Importantes (Random Forest)")
+                        importances_json = meta_row.get('rf_importances', '{}')
+                        importances_data = json.loads(importances_json)
+                        
+                        if importances_data:
+                            importances_series = pd.Series(importances_data).sort_values(ascending=False)
+                            
+                            # Filtra apenas as features selecionadas
+                            features_selecionadas_json = meta_row.get('features_selected_list', '[]')
+                            features_selecionadas = json.loads(features_selecionadas_json)
+                            
+                            importances_df = importances_series.to_frame(name='Importância (Gini)')
+                            importances_df['Selecionada'] = importances_df.index.isin(features_selecionadas)
+                            
+                            # Top 20
+                            importances_top20 = importances_df.head(20)
+                            
+                            fig_imp = px.bar(
+                                importances_top20, 
+                                y='Importância (Gini)', 
+                                x=importances_top20.index, 
+                                color='Selecionada',
+                                color_discrete_map={True: '#212529', False: '#adb5bd'}, # Preto e Cinza
+                                title=f"Top 20 Features por Importância (Target: {target_selecionado})"
+                            )
+                            fig_imp.update_layout(**obter_template_grafico(), height=450)
+                            st.plotly_chart(fig_imp, use_container_width=True)
+                            
+                            with st.expander("Visualizar todas as features e importâncias"):
+                                st.dataframe(importances_df.style.format({'Importância (Gini)': '{:.5f}'}), use_container_width=True)
+                        else:
+                            st.info("Dados de importância de features não disponíveis.")
+
+                    except KeyError:
+                        st.error(f"Erro ao processar os metadados. O ticker {ativo_selecionado} ou o target {target_selecionado} não foi encontrado no índice do arquivo.")
+                    except json.JSONDecodeError:
+                        st.error("Erro ao decodificar os dados JSON (importâncias ou modelos) dos metadados.")
+                    except Exception as e:
+                        st.error(f"Ocorreu um erro inesperado ao exibir os dados de ML: {e}")
+                        st.code(traceback.format_exc())
+            # --- FIM DA NOVA ABA v8.7.0 ---
+
+            with tab5: # <-- MUDANÇA v8.7.0 (era tab4)
                 st.markdown("### Análise de Similaridade e Clusterização")
                 
                 if not builder_existe or builder.metricas_performance.empty or builder.dados_fundamentalistas.empty:
@@ -2204,7 +2338,6 @@ def aba_analise_individual():
         
         except Exception as e:
             st.error(f"Erro ao analisar o ticker {ativo_selecionado}: {str(e)}")
-            import traceback
             st.code(traceback.format_exc())
 
 # =============================================================================
@@ -2348,7 +2481,7 @@ def main():
     configurar_pagina()
     
     # Novo Título Principal
-    st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos (v8.6)</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos (v8.7)</h1>', unsafe_allow_html=True)
     
     # As abas agora serão centralizadas pelo CSS injetado em configurar_pagina()
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
@@ -2356,7 +2489,7 @@ def main():
         "🎯 Seleção de Ativos",
         "🏗️ Construtor de Portfólio",
         "🔍 Análise Individual",
-        "📖 Referências" # NOVA ABA
+        "📖 Referências"
     ])
     
     with tab1:
@@ -2372,7 +2505,7 @@ def main():
         aba_analise_individual()
         
     with tab5:
-        aba_referencias() # NOVA FUNÇÃO
+        aba_referencias()
 
 if __name__ == "__main__":
     main()
