@@ -8,7 +8,7 @@ Adaptação do Sistema AutoML para usar dados pré-processados (CSV/GCS)
 gerados pelo gerador_financeiro.py, eliminando a dependência do yfinance
 na interface Streamlit e adotando uma linguagem profissional.
 
-Versão: 8.6.0 - Novo Tema (Neutro/Preto), Barra de Progresso e Abas Centralizadas
+Versão: 8.6.1 (CORRIGIDA) - Ajuste na leitura de CSVs do GCS (index_col=0)
 =============================================================================
 """
 
@@ -372,36 +372,47 @@ class EngenheiroFeatures:
             return (max_val - serie_clipped) / (max_val - min_val)
 
 # =============================================================================
-# 9. FUNÇÕES DE COLETA DE DADOS GCS (Mantido)
+# 9. FUNÇÕES DE COLETA DE DADOS GCS (CORRIGIDO)
 # =============================================================================
 
 @st.cache_data(ttl=3600) # Cache de 1 hora para dados GCS
 def carregar_dados_ativo_gcs_csv(base_url: str, ticker: str, file_suffix: str) -> pd.DataFrame:
-    """Carrega o DataFrame de um único ativo via URL pública do GCS (formato CSV)."""
+    """
+    Carrega o DataFrame de um único ativo via URL pública do GCS (formato CSV).
+    *** CORREÇÃO v8.6.1: Usa index_col=0 para ler o índice salvo pelo gerador_financeiro.py ***
+    """
     file_name = f"{ticker}{file_suffix}" 
     full_url = f"{base_url}{file_name}"
     
     try:
-        # Tenta carregar o arquivo
-        df_ativo = pd.read_csv(full_url)
+        # --- ALTERAÇÃO PRINCIPAL ---
+        # Carrega o CSV, assumindo que a primeira coluna (0) é o índice
+        # Isso corrige o problema de leitura, pois o gerador_financeiro.py salva com index=True
+        df_ativo = pd.read_csv(full_url, index_col=0)
         
-        # 1. Configuração do Índice (Date)
-        if 'Date' in df_ativo.columns:
-            df_ativo = df_ativo.set_index('Date')
-        elif 'index' in df_ativo.columns:
-            df_ativo = df_ativo.set_index('index')
+        # 1. Pós-processamento para _tecnicos.csv
+        if file_suffix == '_tecnicos.csv':
             df_ativo.index.name = 'Date'
+            # 2. Conversão para Datetime e remoção de timezone
+            if df_ativo.index.dtype == object:
+                df_ativo.index = pd.to_datetime(df_ativo.index)
             
-        # 2. Conversão para Datetime e remoção de timezone
-        if df_ativo.index.dtype == object:
-            df_ativo.index = pd.to_datetime(df_ativo.index)
-        
-        if df_ativo.index.tz is not None:
-             df_ativo.index = df_ativo.index.tz_convert(None) 
+            if df_ativo.index.tz is not None:
+                 df_ativo.index = df_ativo.index.tz_convert(None) 
 
-        # 3. Conversão de colunas numéricas
+        # 2. Pós-processamento para _fundamentos.csv
+        elif file_suffix == '_fundamentos.csv':
+            df_ativo.index.name = 'Ticker'
+        
+        # 3. Pós-processamento para _ml_results.csv
+        elif file_suffix == '_ml_results.csv':
+            df_ativo.index.name = 'Ticker'
+            
+        # 4. Conversão de colunas numéricas (para todos)
+        # Garante que colunas de ID não sejam convertidas
+        id_cols = ['ticker', 'sector', 'industry', 'recommendation', 'Date', 'index', 'Ticker']
         for col in df_ativo.columns:
-            if col not in ['ticker', 'sector', 'industry', 'recommendation', 'Date', 'index']:
+            if col not in id_cols:
                 # Força a conversão para float, ignorando erros
                 df_ativo[col] = pd.to_numeric(df_ativo[col], errors='coerce')
         
@@ -410,6 +421,7 @@ def carregar_dados_ativo_gcs_csv(base_url: str, ticker: str, file_suffix: str) -
     except Exception as e:
         # print(f"❌ Erro ao carregar {ticker} com sufixo {file_suffix} da URL: {full_url}. Erro: {e}")
         return pd.DataFrame()
+
 
 class ColetorDadosGCS(object):
     """
@@ -479,13 +491,19 @@ class ColetorDadosGCS(object):
             self.dados_por_ativo[simbolo] = df_tecnicos.dropna(how='all')
             self.ativos_sucesso.append(simbolo)
             
-            # Extrai a linha única de fundamentos
-            fund_row = df_fundamentos.iloc[0] 
+            # --- ALTERAÇÃO v8.6.1 ---
+            # Extrai a linha única de fundamentos usando .loc[simbolo]
+            # (O DataFrame agora é indexado por 'Ticker' (simbolo))
+            if simbolo not in df_fundamentos.index:
+                continue # Pula se o símbolo não for encontrado no índice
+            fund_row = df_fundamentos.loc[simbolo] 
             fund_data = self._get_fundamental_metrics_from_df(fund_row)
             
             # 4. Adiciona dados ML à última linha do DataFrame Temporal
-            if not df_ml_results.empty:
-                ml_row = df_ml_results.iloc[0] 
+            if not df_ml_results.empty and simbolo in df_ml_results.index:
+                # --- ALTERAÇÃO v8.6.1 ---
+                # Usa .loc[simbolo]
+                ml_row = df_ml_results.loc[simbolo] 
                 # Tenta encontrar a coluna de proba mais longa (252d é o padrão de longo prazo)
                 ml_proba_col = next((c for c in ml_row.index if c.startswith('ml_proba_') and not pd.isna(ml_row[c])), 'ml_proba_252d')
                 
@@ -546,10 +564,13 @@ class ColetorDadosGCS(object):
         df_tecnicos = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, ativo_selecionado, file_suffix='_tecnicos.csv')
         df_fundamentos = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, ativo_selecionado, file_suffix='_fundamentos.csv')
         
-        if df_tecnicos.empty or df_fundamentos.empty or 'Close' not in df_tecnicos.columns:
+        # Validação: Garante que o ticker carregado está no índice
+        if df_tecnicos.empty or df_fundamentos.empty or 'Close' not in df_tecnicos.columns or ativo_selecionado not in df_fundamentos.index:
             return None, None
         
-        fund_row = df_fundamentos.iloc[0]
+        # --- ALTERAÇÃO v8.6.1 ---
+        # Usa .loc[ativo_selecionado] para buscar a linha de fundamentos
+        fund_row = df_fundamentos.loc[ativo_selecionado]
         features_fund = self._get_fundamental_metrics_from_df(fund_row)
         
         df_ml_results = carregar_dados_ativo_gcs_csv(GCS_BASE_URL, ativo_selecionado, file_suffix='_ml_results.csv')
@@ -564,8 +585,10 @@ class ColetorDadosGCS(object):
                      df_tecnicos.loc[last_index, key] = value
                 
             # Adiciona ML
-            if not df_ml_results.empty:
-                ml_row = df_ml_results.iloc[0] 
+            if not df_ml_results.empty and ativo_selecionado in df_ml_results.index:
+                # --- ALTERAÇÃO v8.6.1 ---
+                # Usa .loc[ativo_selecionado]
+                ml_row = df_ml_results.loc[ativo_selecionado] 
                 ml_proba_col = next((c for c in ml_row.index if c.startswith('ml_proba_') and not pd.isna(ml_row[c])), 'ml_proba_252d')
                 
                 df_tecnicos.loc[last_index, 'ML_Proba'] = ml_row.get(ml_proba_col, 0.5)
