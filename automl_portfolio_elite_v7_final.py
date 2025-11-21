@@ -5,12 +5,12 @@ SISTEMA DE PORTFÓLIOS ADAPTATIVOS - OTIMIZAÇÃO QUANTITATIVA
 =============================================================================
 
 Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
-- Preços: Estratégia Híbrida (TvDatafeed Primário -> YFinance Backup).
+- Preços: Estratégia Tripla (TvDatafeed -> YFinance -> Fallback Estático).
 - Fundamentos via Pynvest (Fundamentus).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V8.7): Estritamente alinhado ao original (Textos Exaustivos).
 
-Versão: 9.7.0 (Hybrid Data Engine: TvDatafeed + YFinance Fallback)
+Versão: 9.9.0 (Ultimate Fallback: Static Fundamentalist Mode)
 =============================================================================
 """
 
@@ -416,75 +416,83 @@ class ColetorDadosLive(object):
             # Se tvDatafeed falhar na inicialização, tenta YFinance direto como fallback global
             st.warning("tvDatafeed indisponível. Tentando modo de fallback total via YFinance...")
         
-        # --- LOOP DE COLETA ---
+        # --- LOOP DE COLETA COM RETRY AUTOMÁTICO ---
         for simbolo in simbolos:
             df_tecnicos = pd.DataFrame()
+            usando_fallback_estatico = False # Flag para identificar modo estático
             
-            # --- TENTATIVA 1: TVDATAFEED (TRADINGVIEW) ---
-            if self.tv_ativo:
-                simbolo_tv = simbolo.replace('.SA', '')
+            # Sistema de Retry (3 Tentativas com Espera Exponencial)
+            MAX_RETRIES = 3
+            for attempt in range(MAX_RETRIES):
+                
+                # TENTATIVA 1: TVDATAFEED
+                if self.tv_ativo:
+                    simbolo_tv = simbolo.replace('.SA', '')
+                    try:
+                        df_tecnicos = self.tv.get_hist(
+                            symbol=simbolo_tv, 
+                            exchange='BMFBOVESPA', 
+                            interval=Interval.in_daily, 
+                            n_bars=1260
+                        )
+                    except Exception:
+                        pass
+                
+                # Validação TV
+                if df_tecnicos is not None and not df_tecnicos.empty and 'close' in [c.lower() for c in df_tecnicos.columns]:
+                    break # Sucesso TV, sai do loop de retry
+                
+                # TENTATIVA 2: YFINANCE (BACKUP)
                 try:
-                    # Coleta ~5 anos de dados diários (1260 dias de trading)
-                    df_tecnicos = self.tv.get_hist(
-                        symbol=simbolo_tv, 
-                        exchange='BMFBOVESPA', 
-                        interval=Interval.in_daily, 
-                        n_bars=1260
-                    )
-                except Exception:
-                    pass
-            
-            # --- TENTATIVA 2: YFINANCE (FALLBACK) ---
-            # Se o dataframe estiver vazio ou não tiver colunas, ativa o Plano B
-            if df_tecnicos is None or df_tecnicos.empty:
-                try:
-                    # Cria sessão customizada para "enganar" o Yahoo e evitar bloqueio
                     session = requests.Session()
                     session.headers.update({
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                     })
-                    
-                    # Tenta baixar individualmente (mais lento, mas mais seguro que bulk)
                     ticker_obj = yf.Ticker(simbolo, session=session)
                     df_tecnicos = ticker_obj.history(period=self.periodo)
-                    
-                    if df_tecnicos.empty:
-                        # Última tentativa sem sessão (às vezes funciona melhor dependendo da rede)
-                        time.sleep(0.5)
-                        ticker_obj = yf.Ticker(simbolo)
-                        df_tecnicos = ticker_obj.history(period=self.periodo)
-                        
                 except Exception:
                     pass
-
-            # --- PÓS-PROCESSAMENTO E VALIDAÇÃO ---
-            if df_tecnicos is None or df_tecnicos.empty:
-                continue # Desiste desse ativo se ambos falharem
                 
-            # Normalização de Colunas (TvDatafeed usa minúsculas, YFinance usa Maiúsculas)
-            rename_map = {
-                'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
-            }
-            df_tecnicos.rename(columns=rename_map, inplace=True)
-            
-            # Tratamento para nomes compostos do TvDatafeed (ex: 'BMFBOVESPA:ABEV3:close')
-            for col in df_tecnicos.columns:
-                if ':' in str(col):
-                    base_col = str(col).split(':')[-1] # Pega a última parte
-                    if base_col in rename_map:
-                        df_tecnicos.rename(columns={col: rename_map[base_col]}, inplace=True)
+                # Validação YF
+                if df_tecnicos is not None and not df_tecnicos.empty and 'Close' in df_tecnicos.columns:
+                    break # Sucesso YF, sai do loop de retry
+                
+                # Se chegou aqui, ambas falharam.
+                if attempt < MAX_RETRIES - 1:
+                    time.sleep(2 ** attempt)
 
-            # Garante que temos a coluna essencial 'Close'
-            if 'Close' not in df_tecnicos.columns:
-                continue
+            # --- PÓS-PROCESSAMENTO E VALIDAÇÃO FINAL ---
+            if df_tecnicos is None or df_tecnicos.empty:
+                # --- PLANO C: MODO ESTÁTICO (SOMENTE FUNDAMENTOS) ---
+                usando_fallback_estatico = True
+                # Cria dataframe vazio estruturado para evitar erros downstream
+                df_tecnicos = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'rsi_14', 'macd', 'vol_20d'])
+                # Adiciona uma linha de NaNs com data de hoje para permitir acesso a .iloc[-1]
+                df_tecnicos.loc[pd.Timestamp.today()] = [np.nan] * len(df_tecnicos.columns)
+            else:
+                # Normalização de Colunas (se houver dados reais)
+                rename_map = {
+                    'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
+                }
+                df_tecnicos.rename(columns=rename_map, inplace=True)
+                
+                for col in df_tecnicos.columns:
+                    if ':' in str(col):
+                        base_col = str(col).split(':')[-1]
+                        if base_col in rename_map:
+                            df_tecnicos.rename(columns={col: rename_map[base_col]}, inplace=True)
 
-            df_tecnicos = df_tecnicos.dropna(subset=['Close'])
-            if df_tecnicos.empty: continue
+                if 'Close' in df_tecnicos.columns:
+                    df_tecnicos = df_tecnicos.dropna(subset=['Close'])
+                    if not df_tecnicos.empty:
+                        # Enriquecimento Técnico (RSI, MACD...)
+                        df_tecnicos = CalculadoraTecnica.enriquecer_dados_tecnicos(df_tecnicos)
+                    else:
+                       usando_fallback_estatico = True 
+                else:
+                    usando_fallback_estatico = True
 
-            # Enriquecimento com Indicadores
-            df_tecnicos = CalculadoraTecnica.enriquecer_dados_tecnicos(df_tecnicos)
-            
-            # Coleta de Fundamentos (Pynvest) - Mantida Igual
+            # Coleta de Fundamentos (Pynvest)
             fund_data = {}
             if self.pynvest_ativo:
                 try:
@@ -497,22 +505,31 @@ class ColetorDadosLive(object):
                 except Exception:
                     fund_data = {'sector': 'Unknown', 'industry': 'Unknown'}
             
-            # Métricas de Risco/Retorno
-            retornos = df_tecnicos['returns'].dropna()
-            if len(retornos) > 30:
-                vol_anual = retornos.std() * np.sqrt(252)
-                ret_anual = retornos.mean() * 252
-                sharpe = (ret_anual - TAXA_LIVRE_RISCO) / vol_anual if vol_anual > 0 else 0
-                cum_prod = (1 + retornos).cumprod()
-                peak = cum_prod.expanding(min_periods=1).max()
-                dd = (cum_prod - peak) / peak
-                max_dd = dd.min()
+            # Se estiver no modo estático e não tiver fundamentos, aí sim desistimos
+            if usando_fallback_estatico and (not fund_data or fund_data.get('sector') == 'Unknown'):
+                continue # Ativo fantasma (sem preço e sem fundamento)
+
+            # Métricas de Risco/Retorno (Calculadas apenas se tiver preço)
+            if not usando_fallback_estatico and 'returns' in df_tecnicos.columns:
+                retornos = df_tecnicos['returns'].dropna()
+                if len(retornos) > 30:
+                    vol_anual = retornos.std() * np.sqrt(252)
+                    ret_anual = retornos.mean() * 252
+                    sharpe = (ret_anual - TAXA_LIVRE_RISCO) / vol_anual if vol_anual > 0 else 0
+                    cum_prod = (1 + retornos).cumprod()
+                    peak = cum_prod.expanding(min_periods=1).max()
+                    dd = (cum_prod - peak) / peak
+                    max_dd = dd.min()
+                else:
+                    vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0 # Defaults conservadores
             else:
-                vol_anual, ret_anual, sharpe, max_dd = np.nan, np.nan, np.nan, np.nan
+                # Valores neutros para modo estático
+                vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0 
 
             fund_data.update({
                 'Ticker': simbolo, 'sharpe_ratio': sharpe, 'annual_return': ret_anual,
-                'annual_volatility': vol_anual, 'max_drawdown': max_dd, 'garch_volatility': vol_anual
+                'annual_volatility': vol_anual, 'max_drawdown': max_dd, 'garch_volatility': vol_anual,
+                'static_mode': usando_fallback_estatico
             })
             
             self.dados_por_ativo[simbolo] = df_tecnicos
@@ -525,7 +542,6 @@ class ColetorDadosLive(object):
                 'volatilidade_anual': vol_anual, 'max_drawdown': max_dd,
             })
             
-            # Pequeno delay para ser gentil com as APIs
             time.sleep(0.1)
 
         if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO: return False
@@ -535,10 +551,14 @@ class ColetorDadosLive(object):
         self.volatilidades_garch_raw = garch_vols 
         
         for simbolo in self.ativos_sucesso:
-            last_idx = self.dados_por_ativo[simbolo].index[-1]
-            for k, v in self.dados_fundamentalistas.loc[simbolo].items():
-                 if k not in self.dados_por_ativo[simbolo].columns:
-                      self.dados_por_ativo[simbolo].loc[last_idx, k] = v
+            if simbolo in self.dados_por_ativo:
+                df_local = self.dados_por_ativo[simbolo]
+                # Verifica se o dataframe tem linhas antes de tentar acessar iloc
+                if not df_local.empty:
+                    last_idx = df_local.index[-1]
+                    for k, v in self.dados_fundamentalistas.loc[simbolo].items():
+                        if k not in df_local.columns:
+                            df_local.loc[last_idx, k] = v
 
         return True
 
@@ -691,6 +711,11 @@ class ConstrutorPortfolioAutoML:
                     for col in [f for f in features_ml if f not in df.columns]:
                         if col in fund_data: df[col] = fund_data[col]
                 
+                # Verificação de Modo Estático (Sem histórico suficiente para ML)
+                if df.empty or len(df) < 60 or 'Close' not in df.columns or df['Close'].isnull().all():
+                     self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.5, 'model_name': 'Modo Estático (Sem Preço)'}
+                     continue
+
                 df['Future_Direction'] = np.where(df['Close'].pct_change(dias_lookback_ml).shift(-dias_lookback_ml) > 0, 1, 0)
                 current_features = [f for f in features_ml if f in df.columns]
                 df_model = df.dropna(subset=current_features + ['Future_Direction'])
@@ -761,9 +786,15 @@ class ConstrutorPortfolioAutoML:
         for symbol in combined.index:
             if symbol in self.dados_por_ativo:
                 df = self.dados_por_ativo[symbol]
-                combined.loc[symbol, 'rsi_current'] = df['rsi_14'].iloc[-1]
-                combined.loc[symbol, 'macd_current'] = df['macd'].iloc[-1]
-                combined.loc[symbol, 'vol_current'] = df['vol_20d'].iloc[-1]
+                if not df.empty and 'rsi_14' in df.columns:
+                    combined.loc[symbol, 'rsi_current'] = df['rsi_14'].iloc[-1]
+                    combined.loc[symbol, 'macd_current'] = df['macd'].iloc[-1]
+                    combined.loc[symbol, 'vol_current'] = df['vol_20d'].iloc[-1]
+                else:
+                    # Fallback para valores neutros se estiver em modo estático
+                    combined.loc[symbol, 'rsi_current'] = 50
+                    combined.loc[symbol, 'macd_current'] = 0
+                    combined.loc[symbol, 'vol_current'] = 0
 
         scores = pd.DataFrame(index=combined.index)
         scores['performance_score'] = (EngenheiroFeatures._normalize_score(combined['sharpe'], True) * 0.6 + EngenheiroFeatures._normalize_score(combined['retorno_anual'], True) * 0.4) * W_PERF_GLOBAL
@@ -809,12 +840,34 @@ class ConstrutorPortfolioAutoML:
         if not self.ativos_selecionados or len(self.ativos_selecionados) < 1:
             self.metodo_alocacao_atual = "ERRO: Ativos Insuficientes"; return {}
         
-        available_assets_returns = {s: self.dados_por_ativo[s]['returns'] for s in self.ativos_selecionados if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s]}
+        # Verifica se há ativos suficientes com retorno para otimização de Markowitz
+        available_assets_returns = {}
+        ativos_sem_dados = []
+        
+        for s in self.ativos_selecionados:
+            if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s] and not self.dados_por_ativo[s]['returns'].dropna().empty:
+                available_assets_returns[s] = self.dados_por_ativo[s]['returns']
+            else:
+                ativos_sem_dados.append(s)
+        
         final_returns_df = pd.DataFrame(available_assets_returns).dropna()
         
-        if final_returns_df.shape[0] < 50:
-            weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
-            self.metodo_alocacao_atual = 'PESOS IGUAIS (Dados insuficientes)'; return self._formatar_alocacao(weights)
+        # Se houver ativos sem dados de preço (Modo Estático) ou poucos dados, usa heurística
+        if final_returns_df.shape[0] < 50 or len(ativos_sem_dados) > 0:
+            if len(ativos_sem_dados) > 0:
+                st.warning(f"⚠️ Alguns ativos ({', '.join(ativos_sem_dados)}) não possuem histórico de preços. A otimização de variância (Markowitz) será substituída por alocação baseada em Score/Pesos Iguais.")
+            
+            # Alocação Proporcional ao Score (Fallback inteligente)
+            scores = self.scores_combinados.loc[self.ativos_selecionados, 'total_score']
+            total_score = scores.sum()
+            if total_score > 0:
+                weights = (scores / total_score).to_dict()
+                self.metodo_alocacao_atual = 'PONDERAÇÃO POR SCORE (Modo Estático)'
+            else:
+                weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
+                self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
+                
+            return self._formatar_alocacao(weights)
 
         garch_vols_filtered = {asset: self.volatilidades_garch.get(asset, final_returns_df[asset].std() * np.sqrt(252)) for asset in final_returns_df.columns}
         optimizer = OtimizadorPortfolioAvancado(final_returns_df, garch_vols=garch_vols_filtered)
@@ -838,19 +891,36 @@ class ConstrutorPortfolioAutoML:
     def calcular_metricas_portfolio(self):
         if not self.alocacao_portfolio: return {}
         weights_dict = {s: data['weight'] for s, data in self.alocacao_portfolio.items()}
-        returns_df_raw = {s: self.dados_por_ativo[s]['returns'] for s in weights_dict.keys() if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s]}
-        returns_df = pd.DataFrame(returns_df_raw).dropna()
+        
+        # Filtra apenas ativos com retorno para o cálculo do portfólio histórico
+        available_returns = {s: self.dados_por_ativo[s]['returns'] for s in weights_dict.keys() if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s] and not self.dados_por_ativo[s]['returns'].dropna().empty}
+        
+        if not available_returns:
+             self.metricas_portfolio = {
+                'annual_return': 0, 'annual_volatility': 0, 'sharpe_ratio': 0, 'max_drawdown': 0, 'total_investment': self.valor_investimento
+            }
+             return self.metricas_portfolio
+
+        returns_df = pd.DataFrame(available_returns).dropna()
         if returns_df.empty: return {}
-        weights = np.array([weights_dict[s] for s in returns_df.columns])
-        weights = weights / np.sum(weights) 
-        portfolio_returns = (returns_df * weights).sum(axis=1)
-        metrics = {
-            'annual_return': portfolio_returns.mean() * 252,
-            'annual_volatility': portfolio_returns.std() * np.sqrt(252),
-            'sharpe_ratio': (portfolio_returns.mean() * 252 - TAXA_LIVRE_RISCO) / (portfolio_returns.std() * np.sqrt(252)) if portfolio_returns.std() > 0 else 0,
-            'max_drawdown': ((1 + portfolio_returns).cumprod() / (1 + portfolio_returns).cumprod().expanding().max() - 1).min(),
-            'total_investment': self.valor_investimento
-        }
+        
+        # Rebalanceia pesos apenas dos ativos com dados para métricas históricas
+        valid_assets = returns_df.columns
+        valid_weights = np.array([weights_dict[s] for s in valid_assets])
+        if valid_weights.sum() > 0:
+            valid_weights = valid_weights / valid_weights.sum()
+            portfolio_returns = (returns_df * valid_weights).sum(axis=1)
+            
+            metrics = {
+                'annual_return': portfolio_returns.mean() * 252,
+                'annual_volatility': portfolio_returns.std() * np.sqrt(252),
+                'sharpe_ratio': (portfolio_returns.mean() * 252 - TAXA_LIVRE_RISCO) / (portfolio_returns.std() * np.sqrt(252)) if portfolio_returns.std() > 0 else 0,
+                'max_drawdown': ((1 + portfolio_returns).cumprod() / (1 + portfolio_returns).cumprod().expanding().max() - 1).min(),
+                'total_investment': self.valor_investimento
+            }
+        else:
+             metrics = {'annual_return': 0, 'annual_volatility': 0, 'sharpe_ratio': 0, 'max_drawdown': 0}
+             
         self.metricas_portfolio = metrics
         return metrics
 
@@ -858,9 +928,17 @@ class ConstrutorPortfolioAutoML:
         self.justificativas_selecao = {}
         for simbolo in self.ativos_selecionados:
             justification = []
-            perf = self.metricas_performance.loc[simbolo] if simbolo in self.metricas_performance.index else pd.Series({})
-            fund = self.dados_fundamentalistas.loc[simbolo] if simbolo in self.dados_fundamentalistas.index else pd.Series({})
-            justification.append(f"Perf: Sharpe {perf.get('sharpe', np.nan):.2f}, Ret {perf.get('retorno_anual', np.nan)*100:.1f}%")
+            
+            is_static = False
+            if simbolo in self.dados_fundamentalistas.index:
+                 is_static = self.dados_fundamentalistas.loc[simbolo].get('static_mode', False)
+
+            if is_static:
+                justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
+            else:
+                perf = self.metricas_performance.loc[simbolo] if simbolo in self.metricas_performance.index else pd.Series({})
+                justification.append(f"Perf: Sharpe {perf.get('sharpe', np.nan):.2f}, Ret {perf.get('retorno_anual', np.nan)*100:.1f}%")
+                
             ml_prob = self.predicoes_ml.get(simbolo, {}).get('predicted_proba_up', 0.5)
             ml_auc = self.predicoes_ml.get(simbolo, {}).get('auc_roc_score', 0.5)
             justification.append(f"ML: Prob {ml_prob*100:.1f}% (Conf {ml_auc:.2f})")
