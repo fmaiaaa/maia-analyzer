@@ -381,39 +381,36 @@ class ColetorDadosLive(object):
         garch_vols = {}
         metricas_simples_list = []
 
-        # --- ESTRATÉGIA ROBUSTA PARA YFINANCE ---
-        # 1. Cria sessão customizada
+        # --- ESTRATÉGIA DEFENSIVA: USER-AGENT MODERNO ---
         session = requests.Session()
         session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0'
         })
 
         dados_yf = pd.DataFrame()
 
-        # 2. Tenta DOWNLOAD EM MASSA (Rápido, mas propenso a falhas)
+        # --- ETAPA 1: TENTATIVA DE DOWNLOAD EM MASSA ---
         try:
-            # threads=False é CRÍTICO para evitar bloqueios em alguns ambientes
             dados_yf = yf.download(
                 simbolos, 
                 period=self.periodo, 
                 group_by='ticker', 
                 progress=False, 
-                threads=False, 
+                threads=False, # Crucial para evitar conflitos de thread com o Yahoo
                 session=session
             )
         except Exception:
-            # Se falhar o lote inteiro, não faz mal, tentaremos individualmente abaixo
+            # Engole o erro do lote para tentar individualmente depois
             pass
 
-        # 3. Processa cada símbolo (com fallback para download individual)
+        # --- ETAPA 2: ITERAÇÃO COM FALLBACK AGRESSIVO ---
         for i, simbolo in enumerate(simbolos):
             df_tecnicos = pd.DataFrame()
             
-            # Tenta extrair do dataframe em lote se existir
+            # Tenta pegar do lote
             if not dados_yf.empty:
                 try:
                     if len(simbolos) > 1:
-                        # Verifica se o ticker está no nível superior das colunas
                         if simbolo in dados_yf.columns.get_level_values(0):
                              df_tecnicos = dados_yf[simbolo].copy()
                     else:
@@ -421,25 +418,31 @@ class ColetorDadosLive(object):
                 except Exception:
                     pass
 
-            # 4. FALLBACK: Se o lote falhou ou veio vazio para este ativo
-            if df_tecnicos.empty or 'Close' not in df_tecnicos.columns or df_tecnicos['Close'].dropna().empty:
-                # Pequeno delay para não sobrecarregar a API (Rate Limiting)
-                time.sleep(0.2) 
+            # --- FALLBACK: SE O LOTE FALHOU, BAIXA INDIVIDUALMENTE ---
+            # Verifica se o dataframe está vazio ou se a coluna Close está vazia/inexistente
+            dados_validos = False
+            if not df_tecnicos.empty and 'Close' in df_tecnicos.columns:
+                if not df_tecnicos['Close'].dropna().empty:
+                    dados_validos = True
+
+            if not dados_validos:
+                # Atraso intencional para evitar Rate Limit (429/Expecting Value)
+                time.sleep(1.5) 
                 
                 try:
-                    # Tenta endpoint alternativo via Ticker object
+                    # Tenta endpoint alternativo via Ticker.history (mais robusto que download)
                     ticker_obj = yf.Ticker(simbolo, session=session)
                     df_tecnicos = ticker_obj.history(period=self.periodo)
                 except Exception:
-                    # Última tentativa desesperada sem sessão
+                    # Última tentativa: sem sessão, delay maior
                     try:
-                        time.sleep(0.5)
+                        time.sleep(2.0)
                         ticker_obj = yf.Ticker(simbolo)
                         df_tecnicos = ticker_obj.history(period=self.periodo)
                     except Exception:
                         pass
 
-            # Se ainda assim estiver vazio, pula o ativo
+            # Validação Final
             if df_tecnicos.empty or 'Close' not in df_tecnicos.columns:
                 continue
             
