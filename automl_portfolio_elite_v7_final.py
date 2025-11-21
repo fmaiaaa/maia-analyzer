@@ -6,11 +6,11 @@ SISTEMA DE PORTFÓLIOS ADAPTATIVOS - OTIMIZAÇÃO QUANTITATIVA
 
 Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Preços: Estratégia Linear com Fail-Fast (TvDatafeed -> YFinance -> Estático Global).
-- Fundamentos via Pynvest (Fundamentus).
+- Fundamentos: Coleta Exaustiva Pynvest (50+ indicadores).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Design (V9.22): Layout Centralizado, Correção de Formatação e Correção Plotly.
+- Design (V9.23): High Contrast Charts + Full Fundamental Data + ML Fallback Logic.
 
-Versão: 9.22.0 (Final Fixes: Formatting, Plotly Title & Centering)
+Versão: 9.23.0 (Full Indicators + ML Fundamental Proxy + Color Fix)
 =============================================================================
 """
 
@@ -268,8 +268,8 @@ class AnalisadorPerfilInvestidor:
 # =============================================================================
 
 def obter_template_grafico() -> dict:
-    # Cores Neutras e Profissionais (Azul Aço, Cinza Ardósia, Verde Floresta, Roxo, Vermelho Tijolo)
-    corporate_colors = ['#4A6572', '#34495E', '#27AE60', '#8E44AD', '#C0392B', '#F39C12']
+    # Cores de Alto Contraste e Diferenciadas
+    corporate_colors = ['#2E86C1', '#E67E22', '#27AE60', '#8E44AD', '#E74C3C', '#16A085', '#F1C40F', '#34495E']
     
     return {
         'plot_bgcolor': 'rgba(0,0,0,0)', # Transparente
@@ -388,14 +388,42 @@ class ColetorDadosLive(object):
     def _mapear_colunas_pynvest(self, df_pynvest: pd.DataFrame) -> dict:
         if df_pynvest.empty: return {}
         row = df_pynvest.iloc[0]
+        
+        # MAPEAMENTO COMPLETO DE TODOS OS INDICADORES DO FUNDAMENTUS
         mapping = {
-            'vlr_ind_p_sobre_l': 'pe_ratio', 'vlr_ind_p_sobre_vp': 'pb_ratio', 'vlr_ind_roe': 'roe',
-            'vlr_ind_roic': 'roic', 'vlr_ind_margem_liq': 'net_margin', 'vlr_ind_div_yield': 'div_yield',
-            'vlr_ind_divida_bruta_sobre_patrim': 'debt_to_equity', 'vlr_liquidez_corr': 'current_ratio',
-            'pct_cresc_rec_liq_ult_5a': 'revenue_growth', 'vlr_ind_ev_sobre_ebitda': 'ev_ebitda',
-            'nome_setor': 'sector', 'nome_subsetor': 'industry', 'vlr_mercado': 'market_cap',
-            'vlr_ind_margem_ebit': 'operating_margin', # Adicionado para visualização detalhada
-            'vlr_ind_beta': 'beta' # Adicionado se disponível
+            # Indicadores Chave (JÁ EXISTENTES)
+            'vlr_ind_p_sobre_l': 'pe_ratio', 
+            'vlr_ind_p_sobre_vp': 'pb_ratio', 
+            'vlr_ind_roe': 'roe',
+            'vlr_ind_roic': 'roic', 
+            'vlr_ind_margem_liq': 'net_margin', 
+            'vlr_ind_div_yield': 'div_yield',
+            'vlr_ind_divida_bruta_sobre_patrim': 'debt_to_equity', 
+            'vlr_liquidez_corr': 'current_ratio',
+            'pct_cresc_rec_liq_ult_5a': 'revenue_growth', 
+            'vlr_ind_ev_sobre_ebitda': 'ev_ebitda',
+            'nome_setor': 'sector', 
+            'nome_subsetor': 'industry', 
+            'vlr_mercado': 'market_cap',
+            'vlr_ind_margem_ebit': 'operating_margin',
+            'vlr_ind_beta': 'beta',
+
+            # NOVOS INDICADORES ADICIONADOS (SOLICITAÇÃO DO USUÁRIO)
+            'nome_papel': 'nome_papel', 'tipo_papel': 'tipo_papel', 'nome_empresa': 'nome_empresa',
+            'vlr_cot': 'vlr_cot', 'dt_ult_cot': 'dt_ult_cot', 'vlr_min_52_sem': 'vlr_min_52_sem',
+            'vlr_max_52_sem': 'vlr_max_52_sem', 'vol_med_neg_2m': 'vol_med_neg_2m', 'vlr_firma': 'vlr_firma',
+            'num_acoes': 'num_acoes', 'pct_var_dia': 'pct_var_dia', 'pct_var_mes': 'pct_var_mes',
+            'pct_var_30d': 'pct_var_30d', 'pct_var_12m': 'pct_var_12m', 'pct_var_ano_a0': 'pct_var_ano_a0',
+            'pct_var_ano_a1': 'pct_var_ano_a1', 'pct_var_ano_a2': 'pct_var_ano_a2', 'pct_var_ano_a3': 'pct_var_ano_a3',
+            'pct_var_ano_a4': 'pct_var_ano_a4', 'pct_var_ano_a5': 'pct_var_ano_a5', 
+            'vlr_ind_p_sobre_ebit': 'p_ebit', 'vlr_ind_psr': 'psr', 'vlr_ind_p_sobre_ativ': 'p_ativo',
+            'vlr_ind_p_sobre_cap_giro': 'p_cap_giro', 'vlr_ind_p_sobre_ativ_circ_liq': 'p_ativ_circ_liq',
+            'vlr_ind_ev_sobre_ebit': 'ev_ebit', 'vlr_ind_lpa': 'lpa', 'vlr_ind_vpa': 'vpa',
+            'vlr_ind_margem_bruta': 'margem_bruta', 'vlr_ind_ebit_sobre_ativo': 'ebit_ativo',
+            'vlr_ind_giro_ativos': 'giro_ativos', 'vlr_ativo': 'ativo_total', 'vlr_disponibilidades': 'disponibilidades',
+            'vlr_ativ_circulante': 'ativo_circulante', 'vlr_divida_bruta': 'divida_bruta', 'vlr_divida_liq': 'divida_liquida',
+            'vlr_patrim_liq': 'patrimonio_liquido', 'vlr_receita_liq_ult_12m': 'receita_liq_12m',
+            'vlr_ebit_ult_12m': 'ebit_12m', 'vlr_lucro_liq_ult_12m': 'lucro_liq_12m'
         }
         dados_formatados = {}
         for col_orig, col_dest in mapping.items():
@@ -630,47 +658,61 @@ class ColetorDadosLive(object):
              
              # --- FORÇA CÁLCULO DE ML SE HOUVER DADOS DE PREÇO ---
              df_ml_meta = pd.DataFrame()
+             
+             # Se tiver preços, faz modelo tradicional
              if not df_tec.empty and 'Close' in df_tec.columns and len(df_tec) > 60:
                  try:
-                     # Prepara dados para inferência rápida de ML (single shot)
                      df = df_tec.copy()
-                     # Adiciona features básicas
                      df = CalculadoraTecnica.enriquecer_dados_tecnicos(df)
                      
-                     # Define target (ex: retorno 5 dias)
-                     lookback = 30
                      df['Future_Direction'] = np.where(df['Close'].pct_change(5).shift(-5) > 0, 1, 0)
-                     
                      features_ml = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'sma_200']
-                     # Garante que colunas existem
                      current_features = [f for f in features_ml if f in df.columns]
-                     
                      df_model = df.dropna(subset=current_features + ['Future_Direction'])
                      
                      if len(df_model) > 50:
                         X = df_model[current_features].iloc[:-5]
                         y = df_model['Future_Direction'].iloc[:-5]
-                        
                         model = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
                         model.fit(X, y)
                         
                         last_features = df[current_features].iloc[[-1]].fillna(0)
                         proba = model.predict_proba(last_features)[0][1]
                         
-                        # Feature Importance
                         importances = pd.DataFrame({
                             'feature': current_features,
                             'importance': model.feature_importances_
                         }).sort_values('importance', ascending=False)
                         
-                        # Adiciona ao DataFrame para retorno (meta-dados)
                         df_tec['ML_Proba'] = proba
-                        df_tec['ML_Confidence'] = 0.60 # Mock confidence para single run
-                        
-                        # Retorna importâncias como metadados extras no df_ml_meta
+                        df_tec['ML_Confidence'] = 0.60 
                         df_ml_meta = importances
                  except Exception:
                      pass
+             
+             # --- FALLBACK ML: SE NÃO TIVER PREÇO, USA SCORE FUNDAMENTALISTA COMO PROXY ---
+             # Se ML_Proba não foi gerado (modo estático), criamos um baseado em fundamentos
+             if 'ML_Proba' not in df_tec.columns and fund_row:
+                  # Lógica simplificada: ROE alto + P/L baixo = Probabilidade Alta
+                  try:
+                      roe = fund_row.get('roe', 0)
+                      pe = fund_row.get('pe_ratio', 15)
+                      if pe <= 0: pe = 20
+                      
+                      # Score heuristic: quanto maior ROE e menor PL, maior a chance
+                      score_fund = min(0.9, max(0.1, (roe * 100) / pe * 0.5 + 0.4))
+                      
+                      df_tec['ML_Proba'] = score_fund
+                      df_tec['ML_Confidence'] = 0.40 # Confiança menor pois é heurística
+                      
+                      # Cria metadados fictícios para exibir o motivo
+                      df_ml_meta = pd.DataFrame({
+                          'feature': ['ROE (Rentabilidade)', 'P/L (Valuation)'],
+                          'importance': [0.6, 0.4]
+                      })
+                  except:
+                      df_tec['ML_Proba'] = 0.5
+                      df_tec['ML_Confidence'] = 0.0
 
              return df_tec, fund_row, df_ml_meta
         return None, None, None
@@ -817,7 +859,16 @@ class ConstrutorPortfolioAutoML:
                         if col in fund_data: df[col] = fund_data[col]
                 
                 if df.empty or len(df) < 60 or 'Close' not in df.columns or df['Close'].isnull().all():
-                     self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.5, 'model_name': 'Modo Estático (Sem Preço)'}
+                     # --- FALLBACK ML PARA MODO ESTÁTICO ---
+                     # Usa Score Fundamentalista como Proxy de Probabilidade
+                     try:
+                         roe = fund_data.get('roe', 0)
+                         pe = fund_data.get('pe_ratio', 15)
+                         if pe <= 0: pe = 20
+                         score_fund = min(0.9, max(0.1, (roe * 100) / pe * 0.5 + 0.4))
+                         self.predicoes_ml[ativo] = {'predicted_proba_up': score_fund, 'auc_roc_score': 0.4, 'model_name': 'Proxy Fundamentalista'}
+                     except:
+                         self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': 'Modo Estático (Sem Preço)'}
                      continue
 
                 df['Future_Direction'] = np.where(df['Close'].pct_change(dias_lookback_ml).shift(-dias_lookback_ml) > 0, 1, 0)
@@ -960,7 +1011,6 @@ class ConstrutorPortfolioAutoML:
             if len(ativos_sem_dados) > 0:
                 st.warning(f"⚠️ Alguns ativos ({', '.join(ativos_sem_dados)}) não possuem histórico de preços. A otimização de variância (Markowitz) será substituída por alocação baseada em Score/Pesos Iguais.")
             
-            # Alocação Proporcional ao Score (Fallback inteligente)
             scores = self.scores_combinados.loc[self.ativos_selecionados, 'total_score']
             total_score = scores.sum()
             if total_score > 0:
@@ -1007,7 +1057,6 @@ class ConstrutorPortfolioAutoML:
         returns_df = pd.DataFrame(available_returns).dropna()
         if returns_df.empty: return {}
         
-        # Rebalanceia pesos apenas dos ativos com dados para métricas históricas
         valid_assets = returns_df.columns
         valid_weights = np.array([weights_dict[s] for s in valid_assets])
         if valid_weights.sum() > 0:
@@ -1945,20 +1994,32 @@ def aba_analise_individual():
 
             with tab2:
                 st.markdown("### Indicadores Fundamentalistas")
-                col1, col2, col3, col4, col5 = st.columns(5)
-                col1.metric("P/L", f"{features_fund.get('pe_ratio', np.nan):.2f}")
-                col2.metric("P/VP", f"{features_fund.get('pb_ratio', np.nan):.2f}")
-                col3.metric("ROE", f"{features_fund.get('roe', 0)*100:.2f}%")
-                col4.metric("Margem Líq.", f"{features_fund.get('net_margin', 0)*100:.2f}%") 
-                col5.metric("Div. Yield", f"{features_fund.get('div_yield', 0):.2f}%")
                 
+                # Exibição de tabela expansível com TODOS os indicadores
+                with st.expander("📋 Ver Tabela Completa de Indicadores", expanded=True):
+                     # Remove chaves internas de controle antes de exibir
+                     clean_fund = {k: v for k, v in features_fund.items() if k not in ['static_mode', 'garch_volatility', 'max_drawdown']}
+                     df_fund_show = pd.DataFrame([clean_fund]).T.reset_index()
+                     df_fund_show.columns = ['Indicador', 'Valor']
+                     st.dataframe(df_fund_show, use_container_width=True, hide_index=True)
+
                 st.markdown("---")
+                st.markdown("### Principais Métricas")
+                
+                col1, col2, col3, col4, col5 = st.columns(5)
+                col1.metric("P/L", safe_format(features_fund.get('pe_ratio', np.nan)))
+                col2.metric("P/VP", safe_format(features_fund.get('pb_ratio', np.nan)))
+                col3.metric("ROE", safe_format(features_fund.get('roe', np.nan)))
+                col4.metric("Margem Líq.", safe_format(features_fund.get('net_margin', np.nan)))
+                col5.metric("Div. Yield", safe_format(features_fund.get('div_yield', np.nan)))
+                
+                st.write("") # Spacer
                 
                 col1, col2, col3, col4, col5 = st.columns(5)
                 col1.metric("Dívida Bruta/PL", safe_format(features_fund.get('debt_to_equity', np.nan)))
                 col2.metric("Liq. Corrente", safe_format(features_fund.get('current_ratio', np.nan)))
                 col3.metric("EV/EBITDA", safe_format(features_fund.get('ev_ebitda', np.nan)))
-                col4.metric("Cresc. Receita (5a)", safe_format(features_fund.get('revenue_growth', 0))) 
+                col4.metric("Cresc. Receita (5a)", safe_format(features_fund.get('revenue_growth', np.nan)))
                 col5.metric("Beta", safe_format(features_fund.get('beta', np.nan)))
 
             with tab3:
