@@ -8,9 +8,9 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Preços: Estratégia Linear com Fail-Fast (TvDatafeed -> YFinance -> Estático Global).
 - Fundamentos via Pynvest (Fundamentus).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Design (V8.7): Estritamente alinhado ao original (Textos Exaustivos).
+- Design (V9.16): Interface Premium, Clusterização 3D e Textos Profissionais.
 
-Versão: 9.15.0 (General Clustering Fix + Imputer + Didactic Intro)
+Versão: 9.16.0 (Premium UX + 3D Clustering)
 =============================================================================
 """
 
@@ -68,7 +68,7 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from sklearn.impute import SimpleImputer # Adicionado para corrigir erro de NaN
+from sklearn.impute import SimpleImputer 
 
 # --- 7. SPECIALIZED TIME SERIES & ECONOMETRICS ---
 from arch import arch_model
@@ -276,7 +276,7 @@ def obter_template_grafico() -> dict:
         'xaxis': {'showgrid': True, 'gridcolor': '#e9ecef', 'showline': True, 'linecolor': '#ced4da', 'linewidth': 1, 'tickfont': {'family': 'Arial, sans-serif', 'color': '#343a40'}, 'title': {'font': {'family': 'Arial, sans-serif', 'color': '#343a40'}}, 'zeroline': False},
         'yaxis': {'showgrid': True, 'gridcolor': '#e9ecef', 'showline': True, 'linecolor': '#ced4da', 'linewidth': 1, 'tickfont': {'family': 'Arial, sans-serif', 'color': '#343a40'}, 'title': {'font': {'family': 'Arial, sans-serif', 'color': '#343a40'}}, 'zeroline': False},
         'legend': {'font': {'family': 'Arial, sans-serif', 'color': '#343a40'}, 'bgcolor': 'rgba(255, 255, 255, 0.8)', 'bordercolor': '#e9ecef', 'borderwidth': 1},
-        'colorway': ['#212529', '#495057', '#6c757d', '#adb5bd', '#ced4da']
+        'colorway': ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'] # Cores mais vibrantes para gráficos
     }
 
 # =============================================================================
@@ -1066,7 +1066,9 @@ class AnalisadorIndividualAtivos:
         scaler = StandardScaler()
         dados_normalizados = scaler.fit_transform(dados_imputed)
         
-        pca = PCA(n_components=min(2, dados_normalizados.shape[1]))
+        # Usar 3 componentes para gráfico 3D
+        n_components = min(3, dados_normalizados.shape[1])
+        pca = PCA(n_components=n_components)
         componentes_pca = pca.fit_transform(dados_normalizados)
         
         n_clusters = min(5, max(3, int(np.sqrt(len(df_model) / 2))))
@@ -1074,7 +1076,9 @@ class AnalisadorIndividualAtivos:
         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init='auto')
         clusters = kmeans.fit_predict(componentes_pca)
         
-        resultado = pd.DataFrame(componentes_pca, columns=['PC1', 'PC2'], index=df_model.index)
+        # Cria DataFrame com PC1, PC2, PC3 (se disponível)
+        cols_pca = [f'PC{i+1}' for i in range(n_components)]
+        resultado = pd.DataFrame(componentes_pca, columns=cols_pca, index=df_model.index)
         resultado['Cluster'] = clusters
         
         return resultado, n_clusters
@@ -1087,26 +1091,91 @@ def configurar_pagina():
     st.set_page_config(page_title="Sistema de Portfólios Adaptativos", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
     st.markdown("""
         <style>
-        :root { --primary-color: #000000; --secondary-color: #6c757d; --background-light: #ffffff; --background-dark: #f8f9fa; --text-color: #212529; --text-color-light: #ffffff; --border-color: #dee2e6; }
-        body { background-color: var(--background-light); color: var(--text-color); }
-        .main-header { font-family: 'Arial', sans-serif; color: var(--primary-color); text-align: center; border-bottom: 2px solid var(--border-color); padding-bottom: 10px; font-size: 2.2rem !important; margin-bottom: 20px; font-weight: 600; }
-        .stButton button, .stDownloadButton button, .stFormSubmitButton button, .stTabs [data-baseweb="tab"], .stMetric label, .main-header, .info-box, h1, h2, h3, h4, h5, p, body { font-family: 'Arial', sans-serif !important; }
-        .stButton button, .stDownloadButton button { border: 1px solid var(--primary-color) !important; color: var(--primary-color) !important; border-radius: 6px; padding: 8px 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: all 0.3s ease; background-color: transparent !important; }
-        .stButton button:hover, .stDownloadButton button:hover { background-color: var(--primary-color) !important; color: var(--text-color-light) !important; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2); }
-        .stButton button[kind="primary"], .stFormSubmitButton button { background-color: var(--primary-color) !important; color: var(--text-color-light) !important; border: none !important; }
-        .stButton button[kind="primary"]:hover, .stFormSubmitButton button:hover { background-color: #333333 !important; color: var(--text-color-light) !important; }
-        .stTabs [data-baseweb="tab-list"] { gap: 24px; border-bottom: 2px solid var(--border-color); display: flex; justify-content: center; width: 100%; }
-        .stTabs [data-baseweb="tab"] { height: 40px; background-color: transparent; border-radius: 4px 4px 0 0; padding-top: 5px; padding-bottom: 5px; color: var(--secondary-color); font-weight: 500; flex-grow: 0 !important; }
-        .stTabs [aria-selected="true"] { background-color: transparent; border-bottom: 2px solid var(--primary-color); color: var(--primary-color); font-weight: 700; }
-        .info-box { background-color: var(--background-dark); border-left: 4px solid var(--primary-color); padding: 15px; margin: 10px 0; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-        .stMetric { padding: 10px 15px; background-color: var(--background-dark); border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); margin-bottom: 10px; }
-        .stMetric label { font-weight: 600; color: var(--text-color); }
-        .stMetric delta { font-weight: 700; color: #28a745; }
-        .stMetric delta[style*="color: red"] { color: #dc3545 !important; }
-        .stProgress > div > div > div > div { background-color: var(--primary-color); }
-        .reference-block { background-color: #fdfdfd; border: 1px solid var(--border-color); padding: 12px; margin-bottom: 12px; border-radius: 6px; }
-        .reference-block p { margin-bottom: 5px; }
-        .reference-block .explanation { font-style: italic; color: var(--secondary-color); font-size: 0.95em; border-top: 1px dashed #e0e0e0; padding-top: 8px; margin-top: 8px; }
+        :root { --primary-color: #000000; --secondary-color: #6c757d; --background-light: #f8f9fa; --background-dark: #ffffff; --text-color: #212529; --text-color-light: #ffffff; --border-color: #dee2e6; }
+        
+        /* Modern Font */
+        body, .stApp { font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important; background-color: var(--background-light); color: var(--text-color); }
+        
+        /* Main Header */
+        .main-header { 
+            font-family: 'Inter', sans-serif; 
+            color: #111; 
+            text-align: center; 
+            padding: 2rem 0; 
+            font-size: 2.5rem !important; 
+            font-weight: 700; 
+            letter-spacing: -1px;
+        }
+        
+        /* Cards */
+        .info-box { 
+            background-color: #ffffff; 
+            border: 1px solid #e0e0e0; 
+            padding: 20px; 
+            border-radius: 12px; 
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05); 
+            margin-bottom: 20px;
+        }
+        
+        /* Metrics */
+        .stMetric { 
+            background-color: #ffffff; 
+            border: 1px solid #eee; 
+            border-radius: 10px; 
+            padding: 15px; 
+            box-shadow: 0 2px 5px rgba(0,0,0,0.03); 
+        }
+        .stMetric label { font-weight: 600; color: #555; font-size: 0.9rem; }
+        .stMetric div[data-testid="stMetricValue"] { font-weight: 700; color: #111; font-size: 1.6rem; }
+        
+        /* Buttons */
+        .stButton button { 
+            border-radius: 8px; 
+            font-weight: 600; 
+            border: 1px solid #333; 
+            color: #333;
+            transition: all 0.2s;
+        }
+        .stButton button:hover { 
+            background-color: #333; 
+            color: white; 
+            border-color: #333;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        }
+        .stButton button[kind="primary"] { 
+            background-color: #111; 
+            color: white; 
+            border: none; 
+        }
+        
+        /* Tabs */
+        .stTabs [data-baseweb="tab-list"] { 
+            border-bottom: 1px solid #eee; 
+            gap: 10px;
+        }
+        .stTabs [data-baseweb="tab"] { 
+            font-weight: 600; 
+            color: #666; 
+            padding: 10px 20px;
+            border-radius: 6px 6px 0 0;
+        }
+        .stTabs [aria-selected="true"] { 
+            color: #111; 
+            background-color: white; 
+            border-bottom: 2px solid #111;
+        }
+        
+        /* Expanders */
+        .streamlit-expanderHeader { 
+            font-weight: 600; 
+            color: #333; 
+            background-color: #fff; 
+            border-radius: 8px;
+        }
+        
+        /* Tables */
+        .dataframe { font-size: 0.9rem; }
         </style>
     """, unsafe_allow_html=True)
 
@@ -1118,69 +1187,82 @@ def aba_introducao():
     st.markdown("""
     <div class="info-box">
     <h3>🎯 O Que é este Sistema?</h3>
-    <p>Este é um <b>Robo-Advisor Quantitativo Híbrido</b> projetado para o mercado brasileiro (B3). Ele não "acha" nada; ele calcula.</p>
-    <p><b>Objetivo Principal:</b> Construir uma carteira de investimentos otimizada (geralmente 5 ativos) que busque o maior retorno possível para o menor risco possível, adaptando-se ao seu perfil de investidor.</p>
+    <p>Este é um <b>Robo-Advisor Quantitativo Híbrido</b> projetado para o mercado brasileiro (B3). Ele utiliza uma abordagem sistemática, eliminando viés emocional da seleção de ativos.</p>
+    <p><b>Objetivo Principal:</b> Construir uma carteira de investimentos otimizada (geralmente 5 ativos) que busque a melhor relação risco-retorno, adaptando-se dinamicamente ao perfil do investidor e às condições de mercado em tempo real.</p>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("---")
-    st.subheader("1. O 'Cérebro' do Sistema (Como ele decide?)")
-    st.write("O sistema utiliza uma abordagem de **Decisão Multicritério**. Isso significa que ele não olha apenas uma coisa (como P/L ou Gráfico), mas sim uma combinação de 4 pilares fundamentais. Dependendo da disponibilidade de dados na internet, ele alterna automaticamente entre dois modos de operação:")
+    st.subheader("1. O 'Cérebro' do Sistema (Motor de Decisão)")
+    st.write("O sistema utiliza uma abordagem de **Decisão Multicritério**. Ele avalia cada ativo sob 4 pilares fundamentais simultaneamente. Dependendo da disponibilidade de dados em tempo real, ele alterna automaticamente entre dois modos de operação para garantir robustez:")
 
     with st.expander("🧠 MODO A: Tradicional (Análise Completa Híbrida) - O Ideal"):
         st.markdown("""
-        Este é o modo padrão quando o sistema consegue acessar **todos** os dados (Preços Históricos + Balanços das Empresas).
+        Este é o modo padrão ativado quando o sistema consegue acessar **todos** os dados necessários (Preços Históricos + Balanços das Empresas).
         
-        Ele pondera a decisão baseada em 4 fatores, cada um com um peso específico na nota final (Score):
+        A nota final (Score) de cada ativo é composta por:
 
-        | Pilar | Peso | O que ele analisa? | Por que importa? |
+        | Pilar | Peso | O que é analisado? | Racional Econômico |
         | :--- | :--- | :--- | :--- |
-        | **1. Performance** | **20% (Fixo)** | **Índice Sharpe** e **Retorno Anual**. | Mostra se o ativo "pagou bem" pelo risco que ofereceu no passado recente. |
-        | **2. Machine Learning** | **20% (Fixo)** | **Probabilidade Estatística**. | Um modelo de Inteligência Artificial (*Random Forest*) treinado na hora tenta prever se o preço vai subir nos próximos dias. |
-        | **3. Fundamentos** | **30% a 70%*** | **Saúde Financeira** (P/L, ROE, Margens). | Analisa se a empresa é "barata" e "lucrativa". *O peso aumenta se você for investidor de Longo Prazo.* |
-        | **4. Técnicos** | **30% a 70%*** | **Momentum** (RSI, MACD, Volatilidade). | Analisa se é um bom "momento" de compra (timing). *O peso aumenta se você for investidor de Curto Prazo.* |
+        | **1. Performance** | **20% (Fixo)** | **Índice Sharpe** e **Retorno Anual**. | Identifica ativos que historicamente entregaram retorno excedente ajustado ao risco. |
+        | **2. Machine Learning** | **20% (Fixo)** | **Probabilidade Estatística**. | Um modelo *Random Forest* (Ensemble) processa padrões não-lineares para estimar a probabilidade de alta futura. |
+        | **3. Fundamentos** | **30% a 70%*** | **Saúde Financeira** (P/L, ROE, Margens). | Avalia a qualidade intrínseca do negócio. *Peso maior para perfis de Longo Prazo.* |
+        | **4. Técnicos** | **30% a 70%*** | **Momentum** (RSI, MACD, Volatilidade). | Avalia o timing e a tendência de curto prazo. *Peso maior para perfis de Curto Prazo.* |
         
-        *Os pesos de Fundamentos e Técnicos variam dinamicamente conforme o seu perfil de horizonte temporal.*
+        *Os pesos dos pilares Fundamentalista e Técnico são ajustados dinamicamente com base no horizonte de investimento selecionado pelo usuário.*
         """)
 
-    with st.expander("🛡️ MODO B: Fallback (Segurança Fundamentalista) - Quando a Internet Falha"):
+    with st.expander("🛡️ MODO B: Fallback (Segurança Fundamentalista) - Alta Resiliência"):
         st.markdown("""
-        A coleta de dados financeiros gratuitos em tempo real é instável. O Yahoo Finance ou TradingView podem bloquear conexões ou falhar.
+        A coleta de dados financeiros em tempo real via APIs públicas pode apresentar instabilidades momentâneas.
         
-        **O que acontece se falhar?** O sistema NÃO trava. Ele ativa o **Modo de Segurança (Fallback)**.
+        **Mecanismo de Fail-Fast:** Se o sistema detectar falhas consecutivas na obtenção de preços, ele ativa automaticamente o **Modo de Segurança**.
         
         Neste modo:
-        1.  **Ignora-se Preço:** Como não temos cotações, ignoramos gráficos, volatilidade e Machine Learning (que depende de preço).
-        2.  **Foco Total em Qualidade:** A nota (Score) do ativo passa a ser **100% baseada nos Fundamentos** (Balanço Patrimonial, DRE, etc.), que são obtidos de uma fonte diferente e mais estável.
-        3.  **Alocação Ajustada:** Em vez de usar cálculos complexos de risco (Markowitz) que exigem preço, o sistema distribui o dinheiro proporcionalmente à "nota de qualidade" da empresa.
+        1.  **Exclusão de Métricas de Preço:** Gráficos, volatilidade e modelos de ML (que dependem de séries temporais) são desativados para evitar dados corrompidos.
+        2.  **Foco em Qualidade (Quality Investing):** O Score do ativo passa a ser **100% derivado dos Fundamentos** (Balanço Patrimonial, DRE, Fluxo de Caixa), obtidos de fontes alternativas.
+        3.  **Alocação Heurística:** A otimização de Markowitz (que exige matriz de covariância) é substituída por uma alocação ponderada pela qualidade fundamentalista (Score).
         
-        *É como pilotar um avião por instrumentos quando a visibilidade externa é zero. Você confia nos dados internos (fundamentos) para chegar ao destino.*
+        *Este mecanismo garante que o usuário sempre receba uma recomendação de investimento válida baseada em dados concretos, mesmo em cenários de falha de API.*
         """)
 
     st.markdown("---")
-    st.subheader("2. O Processo Passo-a-Passo (O Funil)")
+    st.subheader("2. O Processo de Seleção (Funil de Investimento)")
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown("**1️⃣ Coleta (Data Mining)**")
-        st.caption("O sistema varre a internet em busca de dados de ~90 ações do Ibovespa.")
+        st.markdown("""
+        <div class="info-box" style="text-align: center;">
+        <h4>1️⃣ Coleta de Dados</h4>
+        <p style="font-size: 0.9rem;">Mineração em tempo real de ~90 ativos do Ibovespa.</p>
+        </div>
+        """, unsafe_allow_html=True)
     with col2:
-        st.markdown("**2️⃣ Filtragem & Scoring**")
-        st.caption("Cada empresa recebe uma nota de 0 a 100. As ruins são descartadas.")
+        st.markdown("""
+        <div class="info-box" style="text-align: center;">
+        <h4>2️⃣ Scoring & Filtro</h4>
+        <p style="font-size: 0.9rem;">Cálculo de indicadores e eliminação de ativos fracos.</p>
+        </div>
+        """, unsafe_allow_html=True)
     with col3:
-        st.markdown("**3️⃣ Otimização Final**")
-        st.caption("Os sobreviventes são combinados matematicamente para formar a carteira.")
+        st.markdown("""
+        <div class="info-box" style="text-align: center;">
+        <h4>3️⃣ Otimização Final</h4>
+        <p style="font-size: 0.9rem;">Combinação matemática para diversificação eficiente.</p>
+        </div>
+        """, unsafe_allow_html=True)
 
-    with st.expander("🔍 Detalhe: A Clusterização (O Segredo da Diversificação)"):
+    with st.expander("🔍 Detalhe Técnico: A Clusterização (K-Means)"):
         st.write("""
-        Muitos investidores erram ao comprar 5 ações "boas" que são todas iguais (ex: 5 bancos). Se os juros mudam, todos caem juntos.
+        Para garantir uma diversificação real, o sistema não seleciona apenas os "Top 5" melhores Scores. Isso poderia resultar em uma carteira concentrada (ex: 5 bancos).
         
-        Este sistema usa um algoritmo de IA não-supervisionada (**K-Means Clustering**) para agrupar as ações em "famílias" matemáticas.
+        **O Método:**
+        Utilizamos um algoritmo de aprendizado não-supervisionado (**K-Means Clustering**) aplicado sobre os componentes principais (**PCA**) dos indicadores das empresas.
         
-        * **Passo 1:** O sistema olha para todas as ações e as separa em grupos (Clusters) baseados em comportamento similar.
-        * **Passo 2:** Ao montar a carteira, ele é **obrigado** a escolher apenas o melhor ativo de cada grupo diferente.
+        1.  O algoritmo agrupa as empresas em "Clusters" (famílias) com comportamento estatístico e fundamentalista semelhante.
+        2.  Na seleção final, o sistema é forçado a escolher o melhor ativo de **clusters diferentes**.
         
-        **Resultado:** Você nunca terá uma carteira concentrada em um único risco. Você terá automaticamente uma carteira diversificada estatisticamente.
+        **Resultado:** Uma carteira estatisticamente descorrelacionada, reduzindo o risco sistêmico setorial.
         """)
 
 def aba_selecao_ativos():
@@ -1795,15 +1877,33 @@ def aba_analise_individual():
                 if resultado_cluster is not None:
                     st.success(f"Identificados {n_clusters} grupos (clusters) de qualidade fundamentalista.")
                     
-                    # Visualização
-                    fig_pca = px.scatter(
-                        resultado_cluster, x='PC1', y='PC2', 
-                        color=resultado_cluster['Cluster'].astype(str),
-                        hover_name=resultado_cluster.index.str.replace('.SA', ''), 
-                        title=f'Mapa de Similaridade Fundamentalista (Global)',
-                        color_discrete_sequence=obter_template_grafico()['colorway']
-                    )
-                    fig_pca.update_layout(**obter_template_grafico(), height=500)
+                    # Visualização 3D SE TIVER 3 COMPONENTES
+                    if 'PC3' in resultado_cluster.columns:
+                        fig_pca = px.scatter_3d(
+                            resultado_cluster, x='PC1', y='PC2', z='PC3',
+                            color=resultado_cluster['Cluster'].astype(str),
+                            hover_name=resultado_cluster.index.str.replace('.SA', ''), 
+                            title=f'Mapa de Similaridade 3D (Global)',
+                            color_discrete_sequence=obter_template_grafico()['colorway'],
+                            opacity=0.8,
+                            labels={'Cluster': 'Grupo'}
+                        )
+                        fig_pca.update_layout(
+                            scene=dict(xaxis_title='PCA 1', yaxis_title='PCA 2', zaxis_title='PCA 3'),
+                            margin=dict(l=0, r=0, b=0, t=40),
+                            height=600
+                        )
+                    else:
+                        # Fallback para 2D se PCA 3D falhar (poucos dados)
+                        fig_pca = px.scatter(
+                            resultado_cluster, x='PC1', y='PC2', 
+                            color=resultado_cluster['Cluster'].astype(str),
+                            hover_name=resultado_cluster.index.str.replace('.SA', ''), 
+                            title=f'Mapa de Similaridade 2D (Global)',
+                            color_discrete_sequence=obter_template_grafico()['colorway']
+                        )
+                        fig_pca.update_layout(**obter_template_grafico(), height=500)
+                    
                     st.plotly_chart(fig_pca, use_container_width=True)
                     
                     # Identifica pares
@@ -1836,115 +1936,67 @@ def aba_referencias():
     
     st.markdown("### GRDECO222: Machine Learning (Prof. Rafael Martins de Souza)")
     
-    with st.expander("Bibliografia Obrigatória"):
-        st.markdown(
-            """
-            <div class="reference-block">
-                <p><strong>1. Jupter Notebooks apresentados em sala de aula.</strong></p>
-                <p class="explanation">
-                Explicação: O material principal do curso é prático, baseado nos códigos e exemplos desenvolvidos
-                pelo professor durante as aulas.
-                </p>
-            </div>
-            <div class="reference-block">
-                <p><strong>2. Géron, A. Mãos à Obra: Aprendizado de Máquina com Scikit-Learn, Keras e TensorFlow.</strong></p>
-                <p class="explanation">
-                Explicação: Considerado um dos principais livros-texto práticos sobre Machine Learning.
-                Cobre desde os fundamentos (Regressão, SVMs, Árvores de Decisão) até tópicos avançados
-                de Deep Learning, com foco na implementação usando bibliotecas Python populares.
-                </p>
-            </div>
-            """, unsafe_allow_html=True
-        )
+    st.markdown("**Bibliografia Obrigatória**")
     
-    with st.expander("Bibliografia Complementar"):
-        st.markdown(
-            """
-            <div class="reference-block">
-                <p><strong>1. Coleman, C., Spencer Lyon, S., Jesse Perla, J. QuantEcon Data Science, Introduction to Economic Modeling and Data Science. (https://datascience.quantecon.org/)</strong></p>
-                <p class="explanation">
-                Explicação: Um recurso online focado na aplicação de Ciência de Dados especificamente
-                para modelagem econômica, alinhado com os objetivos da disciplina.
-                </p>
-            </div>
-            <div class="reference-block">
-                <p><strong>2. Sargent, T. J., Stachurski, J., Quantitative Economics with Python. (https://python.quantecon.org/)</strong></p>
-                <p class="explanation">
-                Explicação: Outro projeto da QuantEcon, focado em métodos quantitativos e economia computacional
-                usando Python. É uma referência padrão para economistas que programam.
-                </p>
-            </div>
-            """, unsafe_allow_html=True
-        )
+    st.markdown("1. **Jupter Notebooks apresentados em sala de aula.**")
+    with st.expander("Entenda a aplicação"):
+        st.write("O material principal do curso é prático, baseado nos códigos e exemplos desenvolvidos pelo professor durante as aulas.")
+        
+    st.markdown("2. **Géron, A. Mãos à Obra: Aprendizado de Máquina com Scikit-Learn, Keras e TensorFlow.**")
+    with st.expander("Entenda a aplicação"):
+        st.write("Considerado um dos principais livros-texto práticos sobre Machine Learning. Cobre desde os fundamentos (Regressão, SVMs, Árvores de Decisão) até tópicos avançados de Deep Learning, com foco na implementação usando bibliotecas Python populares.")
 
+    st.markdown("---")
+    st.markdown("**Bibliografia Complementar**")
+    
+    st.markdown("1. **Coleman, C., Spencer Lyon, S., Jesse Perla, J. QuantEcon Data Science, Introduction to Economic Modeling and Data Science. (https://datascience.quantecon.org/)**")
+    with st.expander("Entenda a aplicação"):
+        st.write("Um recurso online focado na aplicação de Ciência de Dados especificamente para modelagem econômica, alinhado com os objetivos da disciplina.")
+
+    st.markdown("2. **Sargent, T. J., Stachurski, J., Quantitative Economics with Python. (https://python.quantecon.org/)**")
+    with st.expander("Entenda a aplicação"):
+        st.write("Outro projeto da QuantEcon, focado em métodos quantitativos e economia computacional usando Python. É uma referência padrão para economistas que programam.")
+    
     st.markdown("---")
     
     st.markdown("### GRDECO203: Laboratório de Ciência de Dados Aplicados à Finanças (Prof. Diogo Tavares Robaina)")
 
-    with st.expander("Bibliografia Básica"):
-        st.markdown(
-            """
-            <div class="reference-block">
-                <p><strong>1. HILPISCH, Y. J. Python for finance: analyze big financial dat. O'Reilly Media, 2015.</strong></p>
-                <p class="explanation">
-                Explicação: Uma referência clássica para finanças quantitativas em Python. Cobre manipulação
-                de dados financeiros (séries temporais), análise de risco, e implementação de estratégias
-                de trading e precificação de derivativos.
-                </p>
-            </div>
-            <div class="reference-block">
-                <p><strong>2. ARRATIA, A. Computational finance an introductory course with R. Atlantis, 2014.</strong></p>
-                <p class="explanation">
-                Explicação: Focado em finanças computacionais usando a linguagem R, abordando conceitos
-                introdutórios e modelagem.
-                </p>
-            </div>
-            <div class="reference-block">
-                <p><strong>3. RASCHKA, S. Python machine learning: unlock deeper insights... Packt Publishing, 2015.</strong></p>
-                <p class="explanation">
-                Explicação: Um guia popular focado na aplicação prática de algoritmos de Machine Learning
-                com Scikit-Learn em Python, similar ao livro de Géron.
-                </p>
-            </div>
-            <div class="reference-block">
-                <p><strong>4. MAINDONALD, J., and Braun, J. Data analysis and graphics using R: an example-based approach. Cambridge University Press, 2006.</strong></p>
-                <p class="explanation">
-                Explicação: Livro focado em análise de dados e visualização gráfica utilizando a linguagem R.
-                </p>
-            </div>
-            <div class="reference-block">
-                <p><strong>5. REYES, J. M. M. Introduction to Data Science for Social and Policy Research. Cambridge University Press, 2017.</strong></p>
-                <p class="explanation">
-                Explicação: Aborda a aplicação de Ciência de Dados no contexto de ciências sociais e pesquisa
-                de políticas públicas, relevante para a análise econômica.
-                </p>
-            </div>
-            """, unsafe_allow_html=True
-        )
+    st.markdown("**Bibliografia Básica**")
     
-    with st.expander("Bibliografia Complementar"):
-        st.markdown(
-            """
-            <div class="reference-block">
-                <p><strong>1. TEAM, R. Core. "R language definition." R foundation for statistical computing (2000).</strong></p>
-                <p class="explanation">Explicação: A documentação oficial da linguagem R.</p>
-            </div>
-            <div class="reference-block">
-                <p><strong>2. MISHRA, R.; RAM, B. Portfolio Selection Using R. Yugoslav Journal of Operations Research, 2020.</strong></p>
-                <p class="explanation">Explicação: Um artigo de pesquisa focado especificamente na aplicação da
-                linguagem R para otimização e seleção de portfólios, muito relevante para a disciplina.
-                </p>
-            </div>
-            <div class="reference-block">
-                <p><strong>3. WICKHAM, H., et al. (dplyr, Tidy data, Advanced R, ggplot2, R for data science).</strong></p>
-                <p class="explanation">
-                Explicação: Múltiplas referências de Hadley Wickham, o criador do "Tidyverse" em R.
-                São os pacotes e livros fundamentais para a manipulação de dados moderna (dplyr),
-                organização (Tidy data) e visualização (ggplot2) na linguagem R.
-                </p>
-            </div>
-            """, unsafe_allow_html=True
-        )
+    st.markdown("1. **HILPISCH, Y. J. Python for finance: analyze big financial dat. O'Reilly Media, 2015.**")
+    with st.expander("Entenda a aplicação"):
+        st.write("Uma referência clássica para finanças quantitativas em Python. Cobre manipulação de dados financeiros (séries temporais), análise de risco, e implementação de estratégias de trading e precificação de derivativos.")
+
+    st.markdown("2. **ARRATIA, A. Computational finance an introductory course with R. Atlantis, 2014.**")
+    with st.expander("Entenda a aplicação"):
+        st.write("Focado em finanças computacionais usando a linguagem R, abordando conceitos introdutórios e modelagem.")
+    
+    st.markdown("3. **RASCHKA, S. Python machine learning: unlock deeper insights... Packt Publishing, 2015.**")
+    with st.expander("Entenda a aplicação"):
+        st.write("Um guia popular focado na aplicação prática de algoritmos de Machine Learning com Scikit-Learn em Python, similar ao livro de Géron.")
+    
+    st.markdown("4. **MAINDONALD, J., and Braun, J. Data analysis and graphics using R: an example-based approach. Cambridge University Press, 2006.**")
+    with st.expander("Entenda a aplicação"):
+        st.write("Livro focado em análise de dados e visualização gráfica utilizando a linguagem R.")
+    
+    st.markdown("5. **REYES, J. M. M. Introduction to Data Science for Social and Policy Research. Cambridge University Press, 2017.**")
+    with st.expander("Entenda a aplicação"):
+        st.write("Aborda a aplicação de Ciência de Dados no contexto de ciências sociais e pesquisa de políticas públicas, relevante para a análise econômica.")
+    
+    st.markdown("---")
+    st.markdown("**Bibliografia Complementar**")
+
+    st.markdown("1. **TEAM, R. Core. 'R language definition.' R foundation for statistical computing (2000).**")
+    with st.expander("Entenda a aplicação"):
+        st.write("A documentação oficial da linguagem R.")
+
+    st.markdown("2. **MISHRA, R.; RAM, B. Portfolio Selection Using R. Yugoslav Journal of Operations Research, 2020.**")
+    with st.expander("Entenda a aplicação"):
+        st.write("Um artigo de pesquisa focado especificamente na aplicação da linguagem R para otimização e seleção de portfólios, muito relevante para a disciplina.")
+
+    st.markdown("3. **WICKHAM, H., et al. (dplyr, Tidy data, Advanced R, ggplot2, R for data science).**")
+    with st.expander("Entenda a aplicação"):
+        st.write("Múltiplas referências de Hadley Wickham, o criador do 'Tidyverse' em R. São os pacotes e livros fundamentais para a manipulação de dados moderna (dplyr), organização (Tidy data) e visualização (ggplot2) na linguagem R.")
 
 def main():
     if 'builder' not in st.session_state:
