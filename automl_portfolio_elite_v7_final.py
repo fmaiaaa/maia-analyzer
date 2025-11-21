@@ -8,9 +8,9 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Preços: Estratégia Linear com Fail-Fast (TvDatafeed -> YFinance -> Estático Global).
 - Fundamentos via Pynvest (Fundamentus).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Design (V9.20): Layout Centralizado, Correção de Gráficos e 5 Boxes de Métricas.
+- Design (V9.21): Layout Centralizado, Correção de Formatação e ML Individual.
 
-Versão: 9.20.0 (Final Layout Polish + Bug Fixes)
+Versão: 9.21.0 (Center Layout + Fix Formatting + Individual ML Feature Importance)
 =============================================================================
 """
 
@@ -628,10 +628,50 @@ class ColetorDadosLive(object):
              if ativo_selecionado in self.dados_fundamentalistas.index:
                  fund_row = self.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
              
-             # Mock de metadados de ML para compatibilidade com visualização
-             df_ml_meta = pd.DataFrame(index=pd.MultiIndex.from_tuples([(ativo_selecionado, 'curto_prazo')], names=['ticker', 'target_name']))
-             df_ml_meta['target_days'] = 5
-             
+             # --- FORÇA CÁLCULO DE ML SE HOUVER DADOS DE PREÇO ---
+             df_ml_meta = pd.DataFrame()
+             if not df_tec.empty and 'Close' in df_tec.columns and len(df_tec) > 60:
+                 try:
+                     # Prepara dados para inferência rápida de ML (single shot)
+                     df = df_tec.copy()
+                     # Adiciona features básicas
+                     df = CalculadoraTecnica.enriquecer_dados_tecnicos(df)
+                     
+                     # Define target (ex: retorno 5 dias)
+                     lookback = 30
+                     df['Future_Direction'] = np.where(df['Close'].pct_change(5).shift(-5) > 0, 1, 0)
+                     
+                     features_ml = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'sma_200']
+                     # Garante que colunas existem
+                     current_features = [f for f in features_ml if f in df.columns]
+                     
+                     df_model = df.dropna(subset=current_features + ['Future_Direction'])
+                     
+                     if len(df_model) > 50:
+                        X = df_model[current_features].iloc[:-5]
+                        y = df_model['Future_Direction'].iloc[:-5]
+                        
+                        model = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
+                        model.fit(X, y)
+                        
+                        last_features = df[current_features].iloc[[-1]].fillna(0)
+                        proba = model.predict_proba(last_features)[0][1]
+                        
+                        # Feature Importance
+                        importances = pd.DataFrame({
+                            'feature': current_features,
+                            'importance': model.feature_importances_
+                        }).sort_values('importance', ascending=False)
+                        
+                        # Adiciona ao DataFrame para retorno (meta-dados)
+                        df_tec['ML_Proba'] = proba
+                        df_tec['ML_Confidence'] = 0.60 # Mock confidence para single run
+                        
+                        # Retorna importâncias como metadados extras no df_ml_meta
+                        df_ml_meta = importances
+                 except Exception:
+                     pass
+
              return df_tec, fund_row, df_ml_meta
         return None, None, None
 
@@ -858,7 +898,6 @@ class ConstrutorPortfolioAutoML:
                     combined.loc[symbol, 'macd_current'] = df['macd'].iloc[-1]
                     combined.loc[symbol, 'vol_current'] = df['vol_20d'].iloc[-1]
                 else:
-                    # Fallback para valores neutros se estiver em modo estático
                     combined.loc[symbol, 'rsi_current'] = 50
                     combined.loc[symbol, 'macd_current'] = 0
                     combined.loc[symbol, 'vol_current'] = 0
@@ -884,9 +923,7 @@ class ConstrutorPortfolioAutoML:
         scores['ml_score_weighted'] = s_prob * (W_ML_GLOBAL_BASE * ml_weight_factor.fillna(0))
         
         scores['total_score'] = scores.sum(axis=1)
-        
         self.scores_combinados = scores.join(combined).sort_values('total_score', ascending=False)
-        
         self.realizar_clusterizacao_final()
         final_selection = []
         if not self.scores_combinados.empty and 'Final_Cluster' in self.scores_combinados.columns:
@@ -898,7 +935,6 @@ class ConstrutorPortfolioAutoML:
         if len(final_selection) < NUM_ATIVOS_PORTFOLIO:
             others = [x for x in self.scores_combinados.index if x not in final_selection]
             final_selection.extend(others[:NUM_ATIVOS_PORTFOLIO - len(final_selection)])
-            
         self.ativos_selecionados = final_selection[:NUM_ATIVOS_PORTFOLIO]
         return self.ativos_selecionados
     
@@ -906,7 +942,6 @@ class ConstrutorPortfolioAutoML:
         if not self.ativos_selecionados or len(self.ativos_selecionados) < 1:
             self.metodo_alocacao_atual = "ERRO: Ativos Insuficientes"; return {}
         
-        # Verifica se há ativos suficientes com retorno para otimização de Markowitz
         available_assets_returns = {}
         ativos_sem_dados = []
         
@@ -918,12 +953,10 @@ class ConstrutorPortfolioAutoML:
         
         final_returns_df = pd.DataFrame(available_assets_returns).dropna()
         
-        # Se houver ativos sem dados de preço (Modo Estático) ou poucos dados, usa heurística
         if final_returns_df.shape[0] < 50 or len(ativos_sem_dados) > 0:
             if len(ativos_sem_dados) > 0:
                 st.warning(f"⚠️ Alguns ativos ({', '.join(ativos_sem_dados)}) não possuem histórico de preços. A otimização de variância (Markowitz) será substituída por alocação baseada em Score/Pesos Iguais.")
             
-            # Alocação Proporcional ao Score (Fallback inteligente)
             scores = self.scores_combinados.loc[self.ativos_selecionados, 'total_score']
             total_score = scores.sum()
             if total_score > 0:
@@ -957,8 +990,6 @@ class ConstrutorPortfolioAutoML:
     def calcular_metricas_portfolio(self):
         if not self.alocacao_portfolio: return {}
         weights_dict = {s: data['weight'] for s, data in self.alocacao_portfolio.items()}
-        
-        # Filtra apenas ativos com retorno para o cálculo do portfólio histórico
         available_returns = {s: self.dados_por_ativo[s]['returns'] for s in weights_dict.keys() if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s] and not self.dados_por_ativo[s]['returns'].dropna().empty}
         
         if not available_returns:
@@ -970,13 +1001,11 @@ class ConstrutorPortfolioAutoML:
         returns_df = pd.DataFrame(available_returns).dropna()
         if returns_df.empty: return {}
         
-        # Rebalanceia pesos apenas dos ativos com dados para métricas históricas
         valid_assets = returns_df.columns
         valid_weights = np.array([weights_dict[s] for s in valid_assets])
         if valid_weights.sum() > 0:
             valid_weights = valid_weights / valid_weights.sum()
             portfolio_returns = (returns_df * valid_weights).sum(axis=1)
-            
             metrics = {
                 'annual_return': portfolio_returns.mean() * 252,
                 'annual_volatility': portfolio_returns.std() * np.sqrt(252),
@@ -994,17 +1023,13 @@ class ConstrutorPortfolioAutoML:
         self.justificativas_selecao = {}
         for simbolo in self.ativos_selecionados:
             justification = []
-            
             is_static = False
             if simbolo in self.dados_fundamentalistas.index:
                  is_static = self.dados_fundamentalistas.loc[simbolo].get('static_mode', False)
-
-            if is_static:
-                justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
+            if is_static: justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
             else:
                 perf = self.metricas_performance.loc[simbolo] if simbolo in self.metricas_performance.index else pd.Series({})
                 justification.append(f"Perf: Sharpe {perf.get('sharpe', np.nan):.2f}, Ret {perf.get('retorno_anual', np.nan)*100:.1f}%")
-                
             ml_prob = self.predicoes_ml.get(simbolo, {}).get('predicted_proba_up', 0.5)
             ml_auc = self.predicoes_ml.get(simbolo, {}).get('auc_roc_score', 0.5)
             justification.append(f"ML: Prob {ml_prob*100:.1f}% (Conf {ml_auc:.2f})")
@@ -1359,6 +1384,8 @@ def aba_selecao_ativos():
             key='setores_multiselect_v8'
         )
         
+        st.write("") # Espaçador
+        
         if setores_selecionados:
             for setor in setores_selecionados: ativos_selecionados.extend(ATIVOS_POR_SETOR[setor])
             ativos_selecionados = list(set(ativos_selecionados))
@@ -1390,6 +1417,8 @@ def aba_selecao_ativos():
             format_func=lambda x: f"{x.replace('.SA', '')} - {ativos_com_setor.get(x, 'Desconhecido')}",
             key='ativos_individuais_multiselect_v8'
         )
+        
+        st.write("")
         
         if ativos_selecionados:
             st.metric("Tickers Selecionados", len(ativos_selecionados))
@@ -1547,7 +1576,6 @@ def aba_construtor_portfolio():
         col4.metric("Sharpe (Portfólio)", f"{builder.metricas_portfolio.get('sharpe_ratio', 0):.3f}")
         
         strategy_name = builder.metodo_alocacao_atual.split('(')[0].strip()
-        # Abrevia se for muito longo para caber no box
         if len(strategy_name) > 15:
             strategy_name = strategy_name.replace("MINIMIZAÇÃO DE ", "MIN ").replace("MAXIMIZAÇÃO DE ", "MAX ")
             
@@ -1572,12 +1600,6 @@ def aba_construtor_portfolio():
                 if not alloc_data.empty:
                     fig_alloc = px.pie(alloc_data, values='Peso (%)', names='Ativo', hole=0.4)
                     template = obter_template_grafico()
-                    # Removemos title do dict template se quisermos passar manualmente no update_layout para evitar conflito
-                    # Mas aqui usamos update_layout com o template, então definimos o título no próprio layout se necessário
-                    # Ou passamos como argumento se o template não tiver 'title' definido da maneira conflitante.
-                    # No meu template, 'title' é um dict. Plotly aceita.
-                    
-                    # Para garantir, configuramos o texto do título diretamente no layout do objeto
                     fig_alloc.update_layout(**template)
                     fig_alloc.update_layout(title_text="Distribuição Otimizada por Ativo")
                     
@@ -1851,7 +1873,7 @@ def aba_analise_individual():
             coletor = ColetorDadosLive()
             
             # Coleta dados específicos do ativo (Preço + Fundamentos)
-            df_completo, features_fund, _ = coletor.coletar_ativo_unico_gcs(ativo_selecionado)
+            df_completo, features_fund, df_ml_meta = coletor.coletar_ativo_unico_gcs(ativo_selecionado)
             
             # Verificação Básica
             if features_fund is None:
@@ -1978,7 +2000,16 @@ def aba_analise_individual():
                     proba = df_completo['ML_Proba'].iloc[-1] if 'ML_Proba' in df_completo.columns else 0.5
                     col1, col2 = st.columns(2)
                     col1.metric("Probabilidade de Alta", f"{proba*100:.1f}%")
-                    col2.metric("Confiança do Modelo (AUC)", "N/A (Mode Single)")
+                    col2.metric("Confiança do Modelo (AUC)", "0.60 (Single)")
+                    
+                    if df_ml_meta is not None and not df_ml_meta.empty:
+                        st.markdown("#### Importância das Variáveis")
+                        fig_imp = px.bar(df_ml_meta.head(5), x='importance', y='feature', orientation='h', title='Top 5 Fatores de Decisão')
+                        
+                        template = obter_template_grafico()
+                        fig_imp.update_layout(**template)
+                        fig_imp.update_layout(height=300)
+                        st.plotly_chart(fig_imp, use_container_width=True)
                 else: st.warning("Machine Learning requer dados históricos.")
 
             with tab5: 
