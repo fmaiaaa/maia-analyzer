@@ -381,72 +381,75 @@ class ColetorDadosLive(object):
         garch_vols = {}
         metricas_simples_list = []
 
-        # --- CORREÇÃO: Sessão com User-Agent para evitar bloqueio do Yahoo ---
+        # --- ESTRATÉGIA ROBUSTA PARA YFINANCE ---
+        # 1. Cria sessão customizada
         session = requests.Session()
         session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         })
 
         dados_yf = pd.DataFrame()
 
+        # 2. Tenta DOWNLOAD EM MASSA (Rápido, mas propenso a falhas)
         try:
-            # Tenta passar a sessão para o yfinance
-            # threads=False é CRÍTICO aqui para evitar rate limiting ou problemas de lock em versões recentes quando há falha
-            try:
-                dados_yf = yf.download(
-                    simbolos, 
-                    period=self.periodo, 
-                    group_by='ticker', 
-                    progress=False, 
-                    threads=False, 
-                    session=session
-                )
-            except TypeError:
-                # Fallback para versões antigas do yfinance que não aceitam session no download
-                dados_yf = yf.download(
-                    simbolos, 
-                    period=self.periodo, 
-                    group_by='ticker', 
-                    progress=False, 
-                    threads=False
-                )
-        except Exception as e:
-            st.warning(f"Aviso no download em lote (será tentado individualmente): {e}")
+            # threads=False é CRÍTICO para evitar bloqueios em alguns ambientes
+            dados_yf = yf.download(
+                simbolos, 
+                period=self.periodo, 
+                group_by='ticker', 
+                progress=False, 
+                threads=False, 
+                session=session
+            )
+        except Exception:
+            # Se falhar o lote inteiro, não faz mal, tentaremos individualmente abaixo
+            pass
 
-        for simbolo in simbolos:
+        # 3. Processa cada símbolo (com fallback para download individual)
+        for i, simbolo in enumerate(simbolos):
             df_tecnicos = pd.DataFrame()
-
-            # 1. Tenta pegar os dados do download em lote
-            try:
-                if not dados_yf.empty:
+            
+            # Tenta extrair do dataframe em lote se existir
+            if not dados_yf.empty:
+                try:
                     if len(simbolos) > 1:
-                        if simbolo in dados_yf.columns.get_level_values(0): # Verifica se o ticker existe nas colunas
+                        # Verifica se o ticker está no nível superior das colunas
+                        if simbolo in dados_yf.columns.get_level_values(0):
                              df_tecnicos = dados_yf[simbolo].copy()
                     else:
                         df_tecnicos = dados_yf.copy()
-            except KeyError:
-                pass
+                except Exception:
+                    pass
 
-            # 2. FALLBACK: Se o lote falhou ou veio vazio para este ativo específico, tenta baixar individualmente
+            # 4. FALLBACK: Se o lote falhou ou veio vazio para este ativo
             if df_tecnicos.empty or 'Close' not in df_tecnicos.columns or df_tecnicos['Close'].dropna().empty:
+                # Pequeno delay para não sobrecarregar a API (Rate Limiting)
+                time.sleep(0.2) 
+                
                 try:
-                    # Tenta baixar individualmente usando yf.Ticker (endpoint diferente, muitas vezes funciona quando o bulk falha)
+                    # Tenta endpoint alternativo via Ticker object
                     ticker_obj = yf.Ticker(simbolo, session=session)
                     df_tecnicos = ticker_obj.history(period=self.periodo)
                 except Exception:
-                     # Última tentativa sem sessão explícita
+                    # Última tentativa desesperada sem sessão
                     try:
+                        time.sleep(0.5)
                         ticker_obj = yf.Ticker(simbolo)
                         df_tecnicos = ticker_obj.history(period=self.periodo)
                     except Exception:
                         pass
 
+            # Se ainda assim estiver vazio, pula o ativo
             if df_tecnicos.empty or 'Close' not in df_tecnicos.columns:
                 continue
             
+            # Limpeza e Enriquecimento
             df_tecnicos = df_tecnicos.dropna(subset=['Close'])
+            if df_tecnicos.empty: continue
+            
             df_tecnicos = CalculadoraTecnica.enriquecer_dados_tecnicos(df_tecnicos)
             
+            # Coleta de Fundamentos (Pynvest)
             fund_data = {}
             if self.pynvest_ativo:
                 try:
@@ -456,9 +459,10 @@ class ColetorDadosLive(object):
                         fund_data = self._mapear_colunas_pynvest(df_fund_raw)
                     else:
                         fund_data = {'sector': 'Unknown', 'industry': 'Unknown'}
-                except Exception as e:
+                except Exception:
                     fund_data = {'sector': 'Unknown', 'industry': 'Unknown'}
             
+            # Métricas de Risco/Retorno
             retornos = df_tecnicos['returns'].dropna()
             if len(retornos) > 30:
                 vol_anual = retornos.std() * np.sqrt(252)
@@ -492,6 +496,7 @@ class ColetorDadosLive(object):
         self.metricas_performance = pd.DataFrame(metricas_simples_list).set_index('Ticker')
         self.volatilidades_garch_raw = garch_vols 
         
+        # Sincroniza dados fundamentais nas séries temporais (para uso no ML)
         for simbolo in self.ativos_sucesso:
             last_idx = self.dados_por_ativo[simbolo].index[-1]
             for k, v in self.dados_fundamentalistas.loc[simbolo].items():
