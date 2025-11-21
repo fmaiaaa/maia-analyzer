@@ -8,9 +8,9 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Preços: Estratégia Linear com Fail-Fast (TvDatafeed -> YFinance -> Estático Global).
 - Fundamentos: Coleta Exaustiva Pynvest (50+ indicadores).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Design (V9.23): High Contrast Charts + Full Fundamental Data + ML Fallback Logic.
+- Design (V9.24): Final Layout Polish + Full Indicators + Robust ML Fallback.
 
-Versão: 9.23.0 (Full Indicators + ML Fundamental Proxy + Color Fix)
+Versão: 9.24.0 (Layout Fix + ML Proxy + Full Data)
 =============================================================================
 """
 
@@ -77,7 +77,7 @@ from arch import arch_model
 # 1. CONFIGURAÇÕES E CONSTANTES GLOBAIS
 # =============================================================================
 
-PERIODO_DADOS = '5y'
+PERIODO_DADOS = '5y' # Mantido 5y para robustez, mas com fallback se falhar
 MIN_DIAS_HISTORICO = 252
 NUM_ATIVOS_PORTFOLIO = 5
 TAXA_LIVRE_RISCO = 0.1075
@@ -268,8 +268,8 @@ class AnalisadorPerfilInvestidor:
 # =============================================================================
 
 def obter_template_grafico() -> dict:
-    # Cores de Alto Contraste e Diferenciadas
-    corporate_colors = ['#2E86C1', '#E67E22', '#27AE60', '#8E44AD', '#E74C3C', '#16A085', '#F1C40F', '#34495E']
+    # Cores de Alto Contraste e Diferenciadas (Evita tons muito claros)
+    corporate_colors = ['#2E86C1', '#D35400', '#27AE60', '#8E44AD', '#C0392B', '#16A085', '#F39C12', '#34495E']
     
     return {
         'plot_bgcolor': 'rgba(0,0,0,0)', # Transparente
@@ -1011,6 +1011,7 @@ class ConstrutorPortfolioAutoML:
             if len(ativos_sem_dados) > 0:
                 st.warning(f"⚠️ Alguns ativos ({', '.join(ativos_sem_dados)}) não possuem histórico de preços. A otimização de variância (Markowitz) será substituída por alocação baseada em Score/Pesos Iguais.")
             
+            # Alocação Proporcional ao Score (Fallback inteligente)
             scores = self.scores_combinados.loc[self.ativos_selecionados, 'total_score']
             total_score = scores.sum()
             if total_score > 0:
@@ -1044,8 +1045,6 @@ class ConstrutorPortfolioAutoML:
     def calcular_metricas_portfolio(self):
         if not self.alocacao_portfolio: return {}
         weights_dict = {s: data['weight'] for s, data in self.alocacao_portfolio.items()}
-        
-        # Filtra apenas ativos com retorno para o cálculo do portfólio histórico
         available_returns = {s: self.dados_por_ativo[s]['returns'] for s in weights_dict.keys() if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s] and not self.dados_por_ativo[s]['returns'].dropna().empty}
         
         if not available_returns:
@@ -1079,17 +1078,13 @@ class ConstrutorPortfolioAutoML:
         self.justificativas_selecao = {}
         for simbolo in self.ativos_selecionados:
             justification = []
-            
             is_static = False
             if simbolo in self.dados_fundamentalistas.index:
                  is_static = self.dados_fundamentalistas.loc[simbolo].get('static_mode', False)
-
-            if is_static:
-                justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
+            if is_static: justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
             else:
                 perf = self.metricas_performance.loc[simbolo] if simbolo in self.metricas_performance.index else pd.Series({})
                 justification.append(f"Perf: Sharpe {perf.get('sharpe', np.nan):.2f}, Ret {perf.get('retorno_anual', np.nan)*100:.1f}%")
-                
             ml_prob = self.predicoes_ml.get(simbolo, {}).get('predicted_proba_up', 0.5)
             ml_auc = self.predicoes_ml.get(simbolo, {}).get('auc_roc_score', 0.5)
             justification.append(f"ML: Prob {ml_prob*100:.1f}% (Conf {ml_auc:.2f})")
@@ -1205,7 +1200,6 @@ def safe_format(value):
         if pd.isna(value):
             return "N/A"
         return f"{value:.2f}"
-    # Se já for string, retorna como está ou tenta limpar
     return str(value)
 
 # =============================================================================
@@ -1986,8 +1980,10 @@ def aba_analise_individual():
                     fig.add_trace(go.Bar(x=df_completo.index, y=df_completo['Volume'], name='Volume'), row=2, col=1)
                     
                     template = obter_template_grafico()
+                    # Correção do Erro de 'title': Atualiza o dicionário do template antes de passar
+                    template['title']['text'] = f"Gráfico Diário - {ativo_selecionado}"
                     fig.update_layout(**template)
-                    fig.update_layout(title_text=f"Gráfico Diário - {ativo_selecionado}", height=600)
+                    fig.update_layout(height=600)
                     
                     st.plotly_chart(fig, use_container_width=True)
                 else: st.info("Gráfico indisponível (Modo Estático Ativo).")
@@ -2034,7 +2030,7 @@ def aba_analise_individual():
                     fig_rsi.add_hline(y=70, line_dash="dash", line_color="red"); fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
                     
                     template = obter_template_grafico()
-                    template['title']['text'] = "RSI (14)" # Sobrescreve titulo no dict
+                    template['title']['text'] = "RSI (14)" 
                     fig_rsi.update_layout(**template)
                     fig_rsi.update_layout(height=300)
                     
@@ -2075,21 +2071,30 @@ def aba_analise_individual():
 
             with tab4:
                 st.markdown("### Predição de Machine Learning")
-                if not static_mode:
-                    proba = df_completo['ML_Proba'].iloc[-1] if 'ML_Proba' in df_completo.columns else 0.5
-                    col1, col2 = st.columns(2)
-                    col1.metric("Probabilidade de Alta", f"{proba*100:.1f}%")
-                    col2.metric("Confiança do Modelo (AUC)", "0.60 (Single)")
+                
+                # Se veio do ML Real (com preço) ou do Fallback (sem preço)
+                ml_proba = df_completo['ML_Proba'].iloc[-1] if 'ML_Proba' in df_completo.columns else 0.5
+                ml_conf = df_completo['ML_Confidence'].iloc[-1] if 'ML_Confidence' in df_completo.columns else 0.0
+                
+                col1, col2 = st.columns(2)
+                col1.metric("Probabilidade de Alta", f"{ml_proba*100:.1f}%")
+                
+                if static_mode:
+                    col2.metric("Confiança (Proxy)", "Baixa (Sem Preço)")
+                    st.info("ℹ️ **Modelo Proxy Fundamentalista Ativo:** A probabilidade foi calculada com base apenas na qualidade dos fundamentos (ROE x P/L), pois não há histórico de preços para o modelo Random Forest.")
+                else:
+                    col2.metric("Confiança do Modelo (AUC)", f"{ml_conf:.2f}")
                     
-                    if df_ml_meta is not None and not df_ml_meta.empty:
-                        st.markdown("#### Importância das Variáveis")
-                        fig_imp = px.bar(df_ml_meta.head(5), x='importance', y='feature', orientation='h', title='Top 5 Fatores de Decisão')
-                        
-                        template = obter_template_grafico()
-                        fig_imp.update_layout(**template)
-                        fig_imp.update_layout(height=300)
-                        st.plotly_chart(fig_imp, use_container_width=True)
-                else: st.warning("Machine Learning requer dados históricos.")
+                if df_ml_meta is not None and not df_ml_meta.empty:
+                    st.markdown("#### Importância dos Fatores na Decisão")
+                    fig_imp = px.bar(df_ml_meta.head(5), x='importance', y='feature', orientation='h', title='Top Fatores')
+                    
+                    template = obter_template_grafico()
+                    # Correção do Erro de 'title' aqui também
+                    template['title']['text'] = 'Top 5 Fatores de Decisão'
+                    fig_imp.update_layout(**template)
+                    fig_imp.update_layout(height=300)
+                    st.plotly_chart(fig_imp, use_container_width=True)
 
             with tab5: 
                 st.markdown("### 🔬 Clusterização Geral (Ibovespa)")
@@ -2108,13 +2113,14 @@ def aba_analise_individual():
                             resultado_cluster, x='PC1', y='PC2', z='PC3',
                             color=resultado_cluster['Cluster'].astype(str),
                             hover_name=resultado_cluster.index.str.replace('.SA', ''), 
-                            title=f'Mapa de Similaridade 3D (Global)',
+                            # title=f'Mapa de Similaridade 3D (Global)', # REMOVIDO DAQUI PARA EVITAR CONFLITO
                             color_discrete_sequence=obter_template_grafico()['colorway'],
                             opacity=0.8,
                             labels={'Cluster': 'Grupo'}
                         )
                         
                         template = obter_template_grafico()
+                        template['title']['text'] = "Mapa de Similaridade 3D (Global)"
                         # Ajusta template para 3D scene
                         fig_pca.update_layout(
                             title=template['title'],
@@ -2131,10 +2137,11 @@ def aba_analise_individual():
                             resultado_cluster, x='PC1', y='PC2', 
                             color=resultado_cluster['Cluster'].astype(str),
                             hover_name=resultado_cluster.index.str.replace('.SA', ''), 
-                            title=f'Mapa de Similaridade 2D (Global)',
+                            # title=f'Mapa de Similaridade 2D (Global)', # REMOVIDO DAQUI
                             color_discrete_sequence=obter_template_grafico()['colorway']
                         )
                         template = obter_template_grafico()
+                        template['title']['text'] = "Mapa de Similaridade 2D (Global)"
                         fig_pca.update_layout(**template)
                         fig_pca.update_layout(height=500)
                     
