@@ -5,17 +5,20 @@ SISTEMA DE PORTFÓLIOS ADAPTATIVOS - OTIMIZAÇÃO QUANTITATIVA
 =============================================================================
 
 Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
-- Preços via tvDatafeed (TradingView) - SUBSTITUIÇÃO AO YAHOO.
+- Preços: Estratégia Híbrida (TvDatafeed Primário -> YFinance Backup).
 - Fundamentos via Pynvest (Fundamentus).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V8.7): Estritamente alinhado ao original (Textos Exaustivos).
 
-Versão: 9.6.1 (TvDatafeed Fork Edition + Logic V9.4 + Design V8.7)
+Versão: 9.7.0 (Hybrid Data Engine: TvDatafeed + YFinance Fallback)
 =============================================================================
 """
 
 # --- 1. CORE LIBRARIES & UTILITIES ---
 import warnings
+# Movemos o filtro para o topo para suprimir SyntaxWarnings de bibliotecas importadas
+warnings.filterwarnings('ignore') 
+
 import numpy as np
 import pandas as pd
 import subprocess
@@ -37,19 +40,20 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import requests
 
-# --- NOVAS IMPORTAÇÕES PARA COLETA LIVE (TVDATAFEED) ---
-# Substitui yfinance para evitar bloqueios
+# --- IMPORTAÇÕES PARA COLETA LIVE (HÍBRIDO) ---
+# 1. TvDatafeed (Primário)
 try:
     from tvDatafeed import TvDatafeed, Interval
 except ImportError:
-    # Mensagem de erro atualizada conforme documentação do fork rongardF
     st.error("""
     Biblioteca 'tvdatafeed' não encontrada. 
-    Para a versão mais robusta (Fork), instale usando o comando:
-    
-    pip install --upgrade --no-cache-dir git+https://github.com/rongardF/tvdatafeed.git
+    Instale usando: pip install --upgrade --no-cache-dir git+https://github.com/rongardF/tvdatafeed.git
     """)
 
+# 2. YFinance (Backup/Fallback)
+import yfinance as yf
+
+# 3. Pynvest (Fundamentos)
 try:
     from pynvest.scrappers.fundamentus import Fundamentus
 except ImportError:
@@ -67,9 +71,6 @@ from sklearn.pipeline import Pipeline
 
 # --- 7. SPECIALIZED TIME SERIES & ECONOMETRICS ---
 from arch import arch_model
-
-# --- 8. CONFIGURATION ---
-warnings.filterwarnings('ignore')
 
 # =============================================================================
 # 1. CONFIGURAÇÕES E CONSTANTES GLOBAIS
@@ -412,50 +413,75 @@ class ColetorDadosLive(object):
         metricas_simples_list = []
 
         if not self.tv_ativo:
-            st.error("tvDatafeed não está disponível. Impossível coletar preços.")
-            return False
-
-        # --- LOOP DE COLETA TVDATAFEED ---
-        # O tvDatafeed trabalha melhor com requisições individuais
+            # Se tvDatafeed falhar na inicialização, tenta YFinance direto como fallback global
+            st.warning("tvDatafeed indisponível. Tentando modo de fallback total via YFinance...")
         
+        # --- LOOP DE COLETA ---
         for simbolo in simbolos:
-            # TradingView usa símbolos sem .SA para B3
-            simbolo_tv = simbolo.replace('.SA', '')
-            
             df_tecnicos = pd.DataFrame()
-            try:
-                # Coleta ~5 anos de dados diários (1260 dias de trading)
-                df_tecnicos = self.tv.get_hist(
-                    symbol=simbolo_tv, 
-                    exchange='BMFBOVESPA', 
-                    interval=Interval.in_daily, 
-                    n_bars=1260
-                )
-            except Exception:
-                pass
             
+            # --- TENTATIVA 1: TVDATAFEED (TRADINGVIEW) ---
+            if self.tv_ativo:
+                simbolo_tv = simbolo.replace('.SA', '')
+                try:
+                    # Coleta ~5 anos de dados diários (1260 dias de trading)
+                    df_tecnicos = self.tv.get_hist(
+                        symbol=simbolo_tv, 
+                        exchange='BMFBOVESPA', 
+                        interval=Interval.in_daily, 
+                        n_bars=1260
+                    )
+                except Exception:
+                    pass
+            
+            # --- TENTATIVA 2: YFINANCE (FALLBACK) ---
+            # Se o dataframe estiver vazio ou não tiver colunas, ativa o Plano B
             if df_tecnicos is None or df_tecnicos.empty:
-                continue
+                try:
+                    # Cria sessão customizada para "enganar" o Yahoo e evitar bloqueio
+                    session = requests.Session()
+                    session.headers.update({
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    })
+                    
+                    # Tenta baixar individualmente (mais lento, mas mais seguro que bulk)
+                    ticker_obj = yf.Ticker(simbolo, session=session)
+                    df_tecnicos = ticker_obj.history(period=self.periodo)
+                    
+                    if df_tecnicos.empty:
+                        # Última tentativa sem sessão (às vezes funciona melhor dependendo da rede)
+                        time.sleep(0.5)
+                        ticker_obj = yf.Ticker(simbolo)
+                        df_tecnicos = ticker_obj.history(period=self.periodo)
+                        
+                except Exception:
+                    pass
+
+            # --- PÓS-PROCESSAMENTO E VALIDAÇÃO ---
+            if df_tecnicos is None or df_tecnicos.empty:
+                continue # Desiste desse ativo se ambos falharem
                 
-            # Renomeia colunas para manter compatibilidade com o resto do sistema (Capitalizadas)
-            # tvDatafeed retorna: symbol, open, high, low, close, volume (minúsculas)
+            # Normalização de Colunas (TvDatafeed usa minúsculas, YFinance usa Maiúsculas)
             rename_map = {
                 'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
             }
             df_tecnicos.rename(columns=rename_map, inplace=True)
             
-            # Se por acaso vier no formato 'SYMBOL:close'
+            # Tratamento para nomes compostos do TvDatafeed (ex: 'BMFBOVESPA:ABEV3:close')
             for col in df_tecnicos.columns:
-                if ':' in col:
-                    base_col = col.split(':')[1] # Pega a parte 'close'
+                if ':' in str(col):
+                    base_col = str(col).split(':')[-1] # Pega a última parte
                     if base_col in rename_map:
                         df_tecnicos.rename(columns={col: rename_map[base_col]}, inplace=True)
 
-            # Garante que temos as colunas necessárias
+            # Garante que temos a coluna essencial 'Close'
             if 'Close' not in df_tecnicos.columns:
                 continue
 
             df_tecnicos = df_tecnicos.dropna(subset=['Close'])
+            if df_tecnicos.empty: continue
+
+            # Enriquecimento com Indicadores
             df_tecnicos = CalculadoraTecnica.enriquecer_dados_tecnicos(df_tecnicos)
             
             # Coleta de Fundamentos (Pynvest) - Mantida Igual
@@ -499,7 +525,7 @@ class ColetorDadosLive(object):
                 'volatilidade_anual': vol_anual, 'max_drawdown': max_dd,
             })
             
-            # Pequeno delay para ser gentil com a API do TradingView
+            # Pequeno delay para ser gentil com as APIs
             time.sleep(0.1)
 
         if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO: return False
@@ -846,7 +872,7 @@ class ConstrutorPortfolioAutoML:
     def executar_pipeline(self, simbolos_customizados: list, perfil_inputs: dict, progress_bar=None) -> bool:
         self.perfil_dashboard = perfil_inputs
         try:
-            if progress_bar: progress_bar.progress(10, text="Coletando dados LIVE (TradingView + Pynvest)...")
+            if progress_bar: progress_bar.progress(10, text="Coletando dados LIVE (TVDATAFEED + Pynvest)...")
             if not self.coletar_e_processar_dados(simbolos_customizados): return False
             if progress_bar: progress_bar.progress(30, text="Calculando métricas setoriais e volatilidade...")
             self.calculate_cross_sectional_features(); self.calcular_volatilidades_garch()
