@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V8.7): Estritamente alinhado ao original (Textos Exaustivos).
 
-Versão: 9.12.2 (Fix: Pandas Merge Overlap & Single Asset Collection)
+Versão: 9.12.3 (Fix: Safe Column Renaming for Static Mode)
 =============================================================================
 """
 
@@ -1587,18 +1587,28 @@ def aba_construtor_portfolio():
             st.markdown(f"**Pesos Adaptativos Usados:** Performance: {builder.pesos_atuais['Performance']:.2f} | Fundamentos: {builder.pesos_atuais['Fundamentos']:.2f} | Técnicos: {builder.pesos_atuais['Técnicos']:.2f} | ML: {builder.pesos_atuais['ML']:.2f}")
             st.markdown("---")
             
-            cols_to_display_scores = [
-                'total_score', 'performance_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 
-                'sharpe_ratio', 'pe_ratio', 'roe', 'rsi_14', 'macd_diff', 'ML_Proba'
-            ]
+            # Mapeamento de nomes para renomeação segura
+            rename_map = {
+                'total_score': 'Score Total', 
+                'performance_score': 'Score Perf.', 
+                'fundamental_score': 'Score Fund.', 
+                'technical_score': 'Score Téc.', 
+                'ml_score_weighted': 'Score ML', 
+                'sharpe_ratio': 'Sharpe', 
+                'pe_ratio': 'P/L', 
+                'roe': 'ROE', 
+                'rsi_14': 'RSI 14', 
+                'macd_diff': 'MACD Hist.', 
+                'ML_Proba': 'Prob. Alta ML'
+            }
             
-            cols_existentes = [col for col in cols_to_display_scores if col in builder.scores_combinados.columns]
+            # Seleciona colunas que existem
+            cols_existentes = [col for col in rename_map.keys() if col in builder.scores_combinados.columns]
             
             df_scores_display = builder.scores_combinados[cols_existentes].copy()
-            df_scores_display.columns = [
-                'Score Total', 'Score Perf.', 'Score Fund.', 'Score Téc.', 'Score ML', 
-                'Sharpe', 'P/L', 'ROE', 'RSI 14', 'MACD Hist.', 'Prob. Alta ML'
-            ]
+            
+            # Renomeia usando o mapa (seguro contra colunas ausentes)
+            df_scores_display.rename(columns=rename_map, inplace=True)
             
             if 'ROE' in df_scores_display.columns:
                  df_scores_display['ROE'] = df_scores_display['ROE'] * 100
@@ -1606,12 +1616,19 @@ def aba_construtor_portfolio():
             df_scores_display = df_scores_display.iloc[:15] 
             
             st.markdown("##### Ranqueamento Ponderado Multi-Fatorial (Top 15 Tickers do Universo Analisado)")
+            
+            # Dicionário de formatação completo
+            format_dict = {
+                'Score Total': '{:.3f}', 'Score Perf.': '{:.3f}', 'Score Fund.': '{:.3f}', 'Score Téc.': '{:.3f}', 'Score ML': '{:.3f}',
+                'Sharpe': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}%', 'RSI 14': '{:.2f}', 'MACD Hist.': '{:.4f}', 'Prob. Alta ML': '{:.2f}'
+            }
+            
+            # Filtra o dicionário de formatação para usar apenas colunas que existem no dataframe final
+            final_format_dict = {k: v for k, v in format_dict.items() if k in df_scores_display.columns}
+            
             st.dataframe(df_scores_display.style.format(
-                {
-                    'Score Total': '{:.3f}', 'Score Perf.': '{:.3f}', 'Score Fund.': '{:.3f}', 'Score Téc.': '{:.3f}', 'Score ML': '{:.3f}',
-                    'Sharpe': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}%', 'RSI 14': '{:.2f}', 'MACD Hist.': '{:.4f}', 'Prob. Alta ML': '{:.2f}'
-                }
-            ).background_gradient(cmap='Greys', subset=['Score Total']), use_container_width=True)
+                final_format_dict
+            ).background_gradient(cmap='Greys', subset=['Score Total'] if 'Score Total' in df_scores_display.columns else None), use_container_width=True)
             
             st.markdown("---")
             st.markdown('##### Resumo da Seleção de Ativos (Portfólio Final)')
