@@ -5,12 +5,12 @@ SISTEMA DE PORTFÓLIOS ADAPTATIVOS - OTIMIZAÇÃO QUANTITATIVA
 =============================================================================
 
 Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
-- Preços: Estratégia Tripla (TvDatafeed -> YFinance -> Fallback Estático).
+- Preços: Estratégia Linear sem Retries (TvDatafeed -> YFinance -> Fallback Estático).
 - Fundamentos via Pynvest (Fundamentus).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V8.7): Estritamente alinhado ao original (Textos Exaustivos).
 
-Versão: 9.9.0 (Ultimate Fallback: Static Fundamentalist Mode)
+Versão: 9.10.0 (Direct Fallback Mode)
 =============================================================================
 """
 
@@ -416,33 +416,35 @@ class ColetorDadosLive(object):
             # Se tvDatafeed falhar na inicialização, tenta YFinance direto como fallback global
             st.warning("tvDatafeed indisponível. Tentando modo de fallback total via YFinance...")
         
-        # --- LOOP DE COLETA COM RETRY AUTOMÁTICO ---
+        # --- LOOP DE COLETA SEM RETRY ---
         for simbolo in simbolos:
             df_tecnicos = pd.DataFrame()
             usando_fallback_estatico = False # Flag para identificar modo estático
+            tem_dados = False
             
-            # Sistema de Retry (3 Tentativas com Espera Exponencial)
-            MAX_RETRIES = 3
-            for attempt in range(MAX_RETRIES):
-                
-                # TENTATIVA 1: TVDATAFEED
-                if self.tv_ativo:
-                    simbolo_tv = simbolo.replace('.SA', '')
-                    try:
-                        df_tecnicos = self.tv.get_hist(
-                            symbol=simbolo_tv, 
-                            exchange='BMFBOVESPA', 
-                            interval=Interval.in_daily, 
-                            n_bars=1260
-                        )
-                    except Exception:
-                        pass
-                
-                # Validação TV
-                if df_tecnicos is not None and not df_tecnicos.empty and 'close' in [c.lower() for c in df_tecnicos.columns]:
-                    break # Sucesso TV, sai do loop de retry
-                
-                # TENTATIVA 2: YFINANCE (BACKUP)
+            # --- TENTATIVA 1: TVDATAFEED ---
+            if self.tv_ativo:
+                simbolo_tv = simbolo.replace('.SA', '')
+                try:
+                    df_tecnicos = self.tv.get_hist(
+                        symbol=simbolo_tv, 
+                        exchange='BMFBOVESPA', 
+                        interval=Interval.in_daily, 
+                        n_bars=1260
+                    )
+                except Exception:
+                    pass
+            
+            # Validação TV
+            if df_tecnicos is not None and not df_tecnicos.empty:
+                 # Normaliza colunas para checar 'close'
+                 cols_lower = [c.lower() for c in df_tecnicos.columns]
+                 if 'close' in cols_lower:
+                     tem_dados = True
+            
+            # --- TENTATIVA 2: YFINANCE (BACKUP) ---
+            # Se a tentativa 1 falhou ou retornou vazio, tenta YFinance UMA VEZ
+            if not tem_dados:
                 try:
                     session = requests.Session()
                     session.headers.update({
@@ -455,15 +457,11 @@ class ColetorDadosLive(object):
                 
                 # Validação YF
                 if df_tecnicos is not None and not df_tecnicos.empty and 'Close' in df_tecnicos.columns:
-                    break # Sucesso YF, sai do loop de retry
-                
-                # Se chegou aqui, ambas falharam.
-                if attempt < MAX_RETRIES - 1:
-                    time.sleep(2 ** attempt)
+                    tem_dados = True
 
-            # --- PÓS-PROCESSAMENTO E VALIDAÇÃO FINAL ---
-            if df_tecnicos is None or df_tecnicos.empty:
-                # --- PLANO C: MODO ESTÁTICO (SOMENTE FUNDAMENTOS) ---
+            # --- TENTATIVA 3: MODO ESTÁTICO (FALLBACK FINAL) ---
+            # Se TV e YFinance falharam, ativa modo estático para não perder o ativo
+            if not tem_dados:
                 usando_fallback_estatico = True
                 # Cria dataframe vazio estruturado para evitar erros downstream
                 df_tecnicos = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'rsi_14', 'macd', 'vol_20d'])
@@ -542,7 +540,7 @@ class ColetorDadosLive(object):
                 'volatilidade_anual': vol_anual, 'max_drawdown': max_dd,
             })
             
-            time.sleep(0.1)
+            time.sleep(0.1) # Pequeno delay para não sobrecarregar a API
 
         if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO: return False
             
