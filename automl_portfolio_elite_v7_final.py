@@ -35,6 +35,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
+import requests # Adicionado para gerenciar sessão do yfinance
 
 # --- NOVAS IMPORTAÇÕES PARA COLETA LIVE ---
 import yfinance as yf
@@ -380,8 +381,32 @@ class ColetorDadosLive(object):
         garch_vols = {}
         metricas_simples_list = []
 
+        # --- CORREÇÃO: Sessão com User-Agent para evitar bloqueio do Yahoo ---
+        session = requests.Session()
+        session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
+
         try:
-            dados_yf = yf.download(simbolos, period=self.periodo, group_by='ticker', progress=False, threads=True)
+            # Tenta passar a sessão para o yfinance
+            try:
+                dados_yf = yf.download(
+                    simbolos, 
+                    period=self.periodo, 
+                    group_by='ticker', 
+                    progress=False, 
+                    threads=True, 
+                    session=session
+                )
+            except TypeError:
+                # Fallback para versões antigas do yfinance que não aceitam session no download
+                dados_yf = yf.download(
+                    simbolos, 
+                    period=self.periodo, 
+                    group_by='ticker', 
+                    progress=False, 
+                    threads=True
+                )
         except Exception as e:
             st.error(f"Erro no download YFinance: {e}")
             return False
