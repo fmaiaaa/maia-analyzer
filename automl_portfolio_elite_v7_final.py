@@ -8,9 +8,9 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Preços: Estratégia Linear com Fail-Fast (TvDatafeed -> YFinance -> Estático Global).
 - Fundamentos via Pynvest (Fundamentus).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Design (V9.21): Layout Centralizado, Correção de Formatação e ML Individual.
+- Design (V9.22): Layout Centralizado, Correção de Formatação e Correção Plotly.
 
-Versão: 9.21.0 (Center Layout + Fix Formatting + Individual ML Feature Importance)
+Versão: 9.22.0 (Final Fixes: Formatting, Plotly Title & Centering)
 =============================================================================
 """
 
@@ -898,6 +898,7 @@ class ConstrutorPortfolioAutoML:
                     combined.loc[symbol, 'macd_current'] = df['macd'].iloc[-1]
                     combined.loc[symbol, 'vol_current'] = df['vol_20d'].iloc[-1]
                 else:
+                    # Fallback para valores neutros se estiver em modo estático
                     combined.loc[symbol, 'rsi_current'] = 50
                     combined.loc[symbol, 'macd_current'] = 0
                     combined.loc[symbol, 'vol_current'] = 0
@@ -942,6 +943,7 @@ class ConstrutorPortfolioAutoML:
         if not self.ativos_selecionados or len(self.ativos_selecionados) < 1:
             self.metodo_alocacao_atual = "ERRO: Ativos Insuficientes"; return {}
         
+        # Verifica se há ativos suficientes com retorno para otimização de Markowitz
         available_assets_returns = {}
         ativos_sem_dados = []
         
@@ -953,10 +955,12 @@ class ConstrutorPortfolioAutoML:
         
         final_returns_df = pd.DataFrame(available_assets_returns).dropna()
         
+        # Se houver ativos sem dados de preço (Modo Estático) ou poucos dados, usa heurística
         if final_returns_df.shape[0] < 50 or len(ativos_sem_dados) > 0:
             if len(ativos_sem_dados) > 0:
                 st.warning(f"⚠️ Alguns ativos ({', '.join(ativos_sem_dados)}) não possuem histórico de preços. A otimização de variância (Markowitz) será substituída por alocação baseada em Score/Pesos Iguais.")
             
+            # Alocação Proporcional ao Score (Fallback inteligente)
             scores = self.scores_combinados.loc[self.ativos_selecionados, 'total_score']
             total_score = scores.sum()
             if total_score > 0:
@@ -990,6 +994,8 @@ class ConstrutorPortfolioAutoML:
     def calcular_metricas_portfolio(self):
         if not self.alocacao_portfolio: return {}
         weights_dict = {s: data['weight'] for s, data in self.alocacao_portfolio.items()}
+        
+        # Filtra apenas ativos com retorno para o cálculo do portfólio histórico
         available_returns = {s: self.dados_por_ativo[s]['returns'] for s in weights_dict.keys() if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s] and not self.dados_por_ativo[s]['returns'].dropna().empty}
         
         if not available_returns:
@@ -1001,6 +1007,7 @@ class ConstrutorPortfolioAutoML:
         returns_df = pd.DataFrame(available_returns).dropna()
         if returns_df.empty: return {}
         
+        # Rebalanceia pesos apenas dos ativos com dados para métricas históricas
         valid_assets = returns_df.columns
         valid_weights = np.array([weights_dict[s] for s in valid_assets])
         if valid_weights.sum() > 0:
@@ -1023,13 +1030,17 @@ class ConstrutorPortfolioAutoML:
         self.justificativas_selecao = {}
         for simbolo in self.ativos_selecionados:
             justification = []
+            
             is_static = False
             if simbolo in self.dados_fundamentalistas.index:
                  is_static = self.dados_fundamentalistas.loc[simbolo].get('static_mode', False)
-            if is_static: justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
+
+            if is_static:
+                justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
             else:
                 perf = self.metricas_performance.loc[simbolo] if simbolo in self.metricas_performance.index else pd.Series({})
                 justification.append(f"Perf: Sharpe {perf.get('sharpe', np.nan):.2f}, Ret {perf.get('retorno_anual', np.nan)*100:.1f}%")
+                
             ml_prob = self.predicoes_ml.get(simbolo, {}).get('predicted_proba_up', 0.5)
             ml_auc = self.predicoes_ml.get(simbolo, {}).get('auc_roc_score', 0.5)
             justification.append(f"ML: Prob {ml_prob*100:.1f}% (Conf {ml_auc:.2f})")
@@ -1252,6 +1263,13 @@ def configurar_pagina():
         [data-testid="stMetric"] {
             text-align: center;
             margin: auto;
+        }
+        
+        /* Centralizar Labels de Métricas */
+        [data-testid="stMetricLabel"] {
+            justify-content: center;
+            text-align: center;
+            width: 100%;
         }
         </style>
     """, unsafe_allow_html=True)
