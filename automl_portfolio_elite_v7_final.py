@@ -8,9 +8,9 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Preços: Estratégia Linear com Fail-Fast (TvDatafeed -> YFinance -> Estático Global).
 - Fundamentos via Pynvest (Fundamentus).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Design (V9.17): Interface Premium, Cores Profissionais e Layout Transparente.
+- Design (V9.18): Interface Premium Neutra, Clusterização Auto-K e Gráficos Técnicos Completos.
 
-Versão: 9.17.0 (Professional UI + Transparent Charts)
+Versão: 9.18.0 (Premium UX + Auto Silhouette + Full Tech Analysis)
 =============================================================================
 """
 
@@ -264,12 +264,12 @@ class AnalisadorPerfilInvestidor:
         return nivel_risco, horizonte_tempo, ml_lookback, pontuacao
 
 # =============================================================================
-# 7. FUNÇÕES DE ESTILO E VISUALIZAÇÃO (Design Original)
+# 7. FUNÇÕES DE ESTILO E VISUALIZAÇÃO (Design Premium Neutro)
 # =============================================================================
 
 def obter_template_grafico() -> dict:
-    # Cores Neutras e Profissionais (Azul Aço, Cinza, Verde Floresta)
-    corporate_colors = ['#2C3E50', '#7F8C8D', '#27AE60', '#C0392B', '#8E44AD', '#2980B9']
+    # Cores Neutras e Profissionais (Azul Aço, Cinza Ardósia, Verde Floresta, Roxo, Vermelho Tijolo)
+    corporate_colors = ['#4A6572', '#34495E', '#27AE60', '#8E44AD', '#C0392B', '#F39C12']
     
     return {
         'plot_bgcolor': 'rgba(0,0,0,0)', # Transparente
@@ -843,6 +843,7 @@ class ConstrutorPortfolioAutoML:
         w_fund_final = W_REMAINING * share_fund
         self.pesos_atuais = {'Performance': W_PERF_GLOBAL, 'Fundamentos': w_fund_final, 'Técnicos': w_tech_final, 'ML': W_ML_GLOBAL_BASE}
         
+        # JOIN SEGURO (RESOLVE O ERRO DE OVERLAP)
         cols_to_drop = [col for col in self.dados_fundamentalistas.columns if col in self.metricas_performance.columns]
         df_fund_clean = self.dados_fundamentalistas.drop(columns=cols_to_drop, errors='ignore')
         combined = self.metricas_performance.join(df_fund_clean, how='inner').copy()
@@ -855,6 +856,7 @@ class ConstrutorPortfolioAutoML:
                     combined.loc[symbol, 'macd_current'] = df['macd'].iloc[-1]
                     combined.loc[symbol, 'vol_current'] = df['vol_20d'].iloc[-1]
                 else:
+                    # Fallback para valores neutros se estiver em modo estático
                     combined.loc[symbol, 'rsi_current'] = 50
                     combined.loc[symbol, 'macd_current'] = 0
                     combined.loc[symbol, 'vol_current'] = 0
@@ -899,6 +901,7 @@ class ConstrutorPortfolioAutoML:
         if not self.ativos_selecionados or len(self.ativos_selecionados) < 1:
             self.metodo_alocacao_atual = "ERRO: Ativos Insuficientes"; return {}
         
+        # Verifica se há ativos suficientes com retorno para otimização de Markowitz
         available_assets_returns = {}
         ativos_sem_dados = []
         
@@ -910,6 +913,7 @@ class ConstrutorPortfolioAutoML:
         
         final_returns_df = pd.DataFrame(available_assets_returns).dropna()
         
+        # Se houver ativos sem dados de preço (Modo Estático) ou poucos dados, usa heurística
         if final_returns_df.shape[0] < 50 or len(ativos_sem_dados) > 0:
             if len(ativos_sem_dados) > 0:
                 st.warning(f"⚠️ Alguns ativos ({', '.join(ativos_sem_dados)}) não possuem histórico de preços. A otimização de variância (Markowitz) será substituída por alocação baseada em Score/Pesos Iguais.")
@@ -1074,9 +1078,19 @@ class AnalisadorIndividualAtivos:
         pca = PCA(n_components=n_components)
         componentes_pca = pca.fit_transform(dados_normalizados)
         
-        n_clusters = min(5, max(3, int(np.sqrt(len(df_model) / 2))))
-        
-        kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init='auto')
+        # AUTO K (Silhouette)
+        best_score = -1
+        best_k = 3
+        for k in range(3, 10):
+            if k >= len(df_model): break
+            kmeans_temp = KMeans(n_clusters=k, random_state=42, n_init='auto')
+            preds = kmeans_temp.fit_predict(componentes_pca)
+            score = silhouette_score(componentes_pca, preds)
+            if score > best_score:
+                best_score = score
+                best_k = k
+
+        kmeans = KMeans(n_clusters=best_k, random_state=42, n_init='auto')
         clusters = kmeans.fit_predict(componentes_pca)
         
         # Cria DataFrame com PC1, PC2, PC3 (se disponível)
@@ -1084,7 +1098,7 @@ class AnalisadorIndividualAtivos:
         resultado = pd.DataFrame(componentes_pca, columns=cols_pca, index=df_model.index)
         resultado['Cluster'] = clusters
         
-        return resultado, n_clusters
+        return resultado, best_k
 
 # =============================================================================
 # 13. INTERFACE STREAMLIT - CONFIGURAÇÃO E CSS ORIGINAL (V8.7)
@@ -1112,7 +1126,7 @@ def configurar_pagina():
         
         /* Cards */
         .info-box { 
-            background-color: #ffffff; 
+            background-color: #f8f9fa; 
             border: 1px solid #e0e0e0; 
             padding: 20px; 
             border-radius: 12px; 
@@ -1220,10 +1234,10 @@ def aba_introducao():
         | :--- | :--- | :--- | :--- |
         | **1. Performance** | **20% (Fixo)** | **Índice Sharpe** e **Retorno Anual**. | Identifica ativos que historicamente entregaram retorno excedente ajustado ao risco. |
         | **2. Machine Learning** | **20% (Fixo)** | **Probabilidade Estatística**. | Um modelo *Random Forest* (Ensemble) processa padrões não-lineares para estimar a probabilidade de alta futura. |
-        | **3. Fundamentos** | **30% a 70%*** | **Saúde Financeira** (P/L, ROE, Margens). | Avalia a qualidade intrínseca do negócio. *Peso maior para perfis de Longo Prazo.* |
-        | **4. Técnicos** | **30% a 70%*** | **Momentum** (RSI, MACD, Volatilidade). | Avalia o timing e a tendência de curto prazo. *Peso maior para perfis de Curto Prazo.* |
+        | **3. Fundamentos** | **Varia (30% dos 60% restantes)** | **Saúde Financeira** (P/L, ROE, Margens). | Avalia a qualidade intrínseca do negócio. |
+        | **4. Técnicos** | **Varia (30% dos 60% restantes)** | **Momentum** (RSI, MACD, Volatilidade). | Avalia o timing e a tendência de curto prazo. |
         
-        *Os pesos dos pilares Fundamentalista e Técnico são ajustados dinamicamente com base no horizonte de investimento selecionado pelo usuário.*
+        *Os pesos dos pilares Fundamentalista e Técnico variam sobre os 60% restantes da pontuação, ajustados dinamicamente com base no horizonte de investimento selecionado pelo usuário.*
         """)
 
     with st.expander("🛡️ MODO B: Fallback (Segurança Fundamentalista) - Alta Resiliência"):
@@ -1858,17 +1872,50 @@ def aba_analise_individual():
                 col3.metric("ROE", f"{features_fund.get('roe', 0)*100:.2f}%")
                 col4.metric("Margem Líq.", f"{features_fund.get('net_margin', 0)*100:.2f}%") 
                 col5.metric("Div. Yield", f"{features_fund.get('div_yield', 0):.2f}%")
+                
                 st.markdown("---")
-                clean_fund = {k: v for k, v in features_fund.items() if k not in ['static_mode', 'garch_volatility', 'max_drawdown']}
-                df_fund_show = pd.DataFrame([clean_fund]).T.reset_index(); df_fund_show.columns = ['Indicador', 'Valor']
-                st.dataframe(df_fund_show, use_container_width=True, hide_index=True)
+                
+                col1, col2, col3, col4, col5 = st.columns(5)
+                col1.metric("Dívida Bruta/PL", f"{features_fund.get('debt_to_equity', np.nan):.2f}")
+                col2.metric("Liq. Corrente", f"{features_fund.get('current_ratio', np.nan):.2f}")
+                col3.metric("EV/EBITDA", f"{features_fund.get('ev_ebitda', np.nan):.2f}")
+                col4.metric("Cresc. Receita (5a)", f"{features_fund.get('revenue_growth', 0):.2f}%") 
+                col5.metric("Beta", f"{features_fund.get('beta', np.nan):.2f}")
 
             with tab3:
                 if not static_mode:
                     st.markdown("### Indicadores Técnicos"); col1, col2, col3 = st.columns(3)
                     col1.metric("RSI (14)", f"{df_completo['rsi_14'].iloc[-1]:.2f}" if 'rsi_14' in df_completo else "N/A")
                     col2.metric("MACD Diff", f"{df_completo['macd_diff'].iloc[-1]:.4f}" if 'macd_diff' in df_completo else "N/A")
-                    col3.metric("Momentum (10d)", f"{df_completo['momentum_10'].iloc[-1]*100:.2f}%" if 'momentum_10' in df_completo else "N/A")
+                    col3.metric("BB Width", f"{df_completo['bb_width'].iloc[-1]:.2f}" if 'bb_width' in df_completo else "N/A")
+                    
+                    # Gráfico RSI
+                    fig_rsi = go.Figure(go.Scatter(x=df_completo.index, y=df_completo['rsi_14'], name='RSI', line=dict(color='#8E44AD')))
+                    fig_rsi.add_hline(y=70, line_dash="dash", line_color="red"); fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
+                    fig_rsi.update_layout(**obter_template_grafico(), title="RSI (14)", height=300)
+                    st.plotly_chart(fig_rsi, use_container_width=True)
+                    
+                    # Gráfico MACD
+                    fig_macd = make_subplots(rows=1, cols=1)
+                    fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd'], name='MACD', line=dict(color='#2980B9')))
+                    fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd_signal'], name='Signal', line=dict(color='#E74C3C')))
+                    fig_macd.add_trace(go.Bar(x=df_completo.index, y=df_completo['macd_diff'], name='Histograma', marker_color='#BDC3C7'))
+                    fig_macd.update_layout(**obter_template_grafico(), title="MACD (12,26,9)", height=300)
+                    st.plotly_chart(fig_macd, use_container_width=True)
+                    
+                    # Gráfico BB
+                    rolling_mean = df_completo['Close'].rolling(window=20).mean()
+                    rolling_std = df_completo['Close'].rolling(window=20).std()
+                    upper_band = rolling_mean + (rolling_std * 2)
+                    lower_band = rolling_mean - (rolling_std * 2)
+                    
+                    fig_bb = go.Figure()
+                    fig_bb.add_trace(go.Scatter(x=df_completo.index, y=upper_band, name='Upper Band', line=dict(color='#95A5A6'), showlegend=False))
+                    fig_bb.add_trace(go.Scatter(x=df_completo.index, y=lower_band, name='Lower Band', line=dict(color='#95A5A6'), fill='tonexty', fillcolor='rgba(149, 165, 166, 0.1)', showlegend=False))
+                    fig_bb.add_trace(go.Scatter(x=df_completo.index, y=df_completo['Close'], name='Close', line=dict(color='#2C3E50')))
+                    fig_bb.update_layout(**obter_template_grafico(), title="Bandas de Bollinger (20, 2)", height=400)
+                    st.plotly_chart(fig_bb, use_container_width=True)
+                    
                 else: st.warning("Análise Técnica não disponível sem histórico de preços.")
 
             with tab4:
@@ -1928,11 +1975,11 @@ def aba_analise_individual():
                         pares = resultado_cluster[resultado_cluster['Cluster'] == cluster_ativo].index.tolist()
                         pares = [p.replace('.SA', '') for p in pares if p != ativo_selecionado]
                         
-                        st.markdown(f"**{ativo_selecionado.replace('.SA', '')}** está no **Cluster {cluster_ativo}**. Outras empresas com perfil financeiro similar (Independente do Setor):")
-                        if pares:
-                            st.write(", ".join(pares))
-                        else:
-                            st.write("Este ativo possui características únicas (Outlier).")
+                        with st.expander(f"📋 Ver {len(pares)} ativos similares no Cluster {cluster_ativo}", expanded=True):
+                            if pares:
+                                st.write(", ".join(pares))
+                            else:
+                                st.write("Este ativo possui características únicas (Outlier).")
                     else:
                         st.warning("Ativo não encontrado no mapa de clusters (provavelmente sem dados suficientes).")
                 else:
@@ -1955,22 +2002,22 @@ def aba_referencias():
     st.markdown("**Bibliografia Obrigatória**")
     
     st.markdown("1. **Jupter Notebooks apresentados em sala de aula.**")
-    with st.expander("Entenda a aplicação"):
+    with st.expander("Explicação"):
         st.write("O material principal do curso é prático, baseado nos códigos e exemplos desenvolvidos pelo professor durante as aulas.")
         
     st.markdown("2. **Géron, A. Mãos à Obra: Aprendizado de Máquina com Scikit-Learn, Keras e TensorFlow.**")
-    with st.expander("Entenda a aplicação"):
+    with st.expander("Explicação"):
         st.write("Considerado um dos principais livros-texto práticos sobre Machine Learning. Cobre desde os fundamentos (Regressão, SVMs, Árvores de Decisão) até tópicos avançados de Deep Learning, com foco na implementação usando bibliotecas Python populares.")
 
     st.markdown("---")
     st.markdown("**Bibliografia Complementar**")
     
     st.markdown("1. **Coleman, C., Spencer Lyon, S., Jesse Perla, J. QuantEcon Data Science, Introduction to Economic Modeling and Data Science. (https://datascience.quantecon.org/)**")
-    with st.expander("Entenda a aplicação"):
+    with st.expander("Explicação"):
         st.write("Um recurso online focado na aplicação de Ciência de Dados especificamente para modelagem econômica, alinhado com os objetivos da disciplina.")
 
     st.markdown("2. **Sargent, T. J., Stachurski, J., Quantitative Economics with Python. (https://python.quantecon.org/)**")
-    with st.expander("Entenda a aplicação"):
+    with st.expander("Explicação"):
         st.write("Outro projeto da QuantEcon, focado em métodos quantitativos e economia computacional usando Python. É uma referência padrão para economistas que programam.")
     
     st.markdown("---")
@@ -1980,38 +2027,38 @@ def aba_referencias():
     st.markdown("**Bibliografia Básica**")
     
     st.markdown("1. **HILPISCH, Y. J. Python for finance: analyze big financial dat. O'Reilly Media, 2015.**")
-    with st.expander("Entenda a aplicação"):
+    with st.expander("Explicação"):
         st.write("Uma referência clássica para finanças quantitativas em Python. Cobre manipulação de dados financeiros (séries temporais), análise de risco, e implementação de estratégias de trading e precificação de derivativos.")
 
     st.markdown("2. **ARRATIA, A. Computational finance an introductory course with R. Atlantis, 2014.**")
-    with st.expander("Entenda a aplicação"):
+    with st.expander("Explicação"):
         st.write("Focado em finanças computacionais usando a linguagem R, abordando conceitos introdutórios e modelagem.")
     
     st.markdown("3. **RASCHKA, S. Python machine learning: unlock deeper insights... Packt Publishing, 2015.**")
-    with st.expander("Entenda a aplicação"):
+    with st.expander("Explicação"):
         st.write("Um guia popular focado na aplicação prática de algoritmos de Machine Learning com Scikit-Learn em Python, similar ao livro de Géron.")
     
     st.markdown("4. **MAINDONALD, J., and Braun, J. Data analysis and graphics using R: an example-based approach. Cambridge University Press, 2006.**")
-    with st.expander("Entenda a aplicação"):
+    with st.expander("Explicação"):
         st.write("Livro focado em análise de dados e visualização gráfica utilizando a linguagem R.")
     
     st.markdown("5. **REYES, J. M. M. Introduction to Data Science for Social and Policy Research. Cambridge University Press, 2017.**")
-    with st.expander("Entenda a aplicação"):
+    with st.expander("Explicação"):
         st.write("Aborda a aplicação de Ciência de Dados no contexto de ciências sociais e pesquisa de políticas públicas, relevante para a análise econômica.")
     
     st.markdown("---")
     st.markdown("**Bibliografia Complementar**")
 
     st.markdown("1. **TEAM, R. Core. 'R language definition.' R foundation for statistical computing (2000).**")
-    with st.expander("Entenda a aplicação"):
+    with st.expander("Explicação"):
         st.write("A documentação oficial da linguagem R.")
 
     st.markdown("2. **MISHRA, R.; RAM, B. Portfolio Selection Using R. Yugoslav Journal of Operations Research, 2020.**")
-    with st.expander("Entenda a aplicação"):
+    with st.expander("Explicação"):
         st.write("Um artigo de pesquisa focado especificamente na aplicação da linguagem R para otimização e seleção de portfólios, muito relevante para a disciplina.")
 
     st.markdown("3. **WICKHAM, H., et al. (dplyr, Tidy data, Advanced R, ggplot2, R for data science).**")
-    with st.expander("Entenda a aplicação"):
+    with st.expander("Explicação"):
         st.write("Múltiplas referências de Hadley Wickham, o criador do 'Tidyverse' em R. São os pacotes e livros fundamentais para a manipulação de dados moderna (dplyr), organização (Tidy data) e visualização (ggplot2) na linguagem R.")
 
 def main():
