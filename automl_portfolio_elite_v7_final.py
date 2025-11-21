@@ -5,12 +5,12 @@ SISTEMA DE PORTFÓLIOS ADAPTATIVOS - OTIMIZAÇÃO QUANTITATIVA
 =============================================================================
 
 Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
-- Preços via yfinance.
+- Preços via tvDatafeed (TradingView) - SUBSTITUIÇÃO AO YAHOO.
 - Fundamentos via Pynvest (Fundamentus).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V8.7): Estritamente alinhado ao original (Textos Exaustivos).
 
-Versão: 9.5.0 (Logic V9.4 + Design V8.7 Strict + Textos Originais)
+Versão: 9.6.1 (TvDatafeed Fork Edition + Logic V9.4 + Design V8.7)
 =============================================================================
 """
 
@@ -35,10 +35,21 @@ import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-import requests # Adicionado para gerenciar sessão do yfinance
+import requests
 
-# --- NOVAS IMPORTAÇÕES PARA COLETA LIVE ---
-import yfinance as yf
+# --- NOVAS IMPORTAÇÕES PARA COLETA LIVE (TVDATAFEED) ---
+# Substitui yfinance para evitar bloqueios
+try:
+    from tvDatafeed import TvDatafeed, Interval
+except ImportError:
+    # Mensagem de erro atualizada conforme documentação do fork rongardF
+    st.error("""
+    Biblioteca 'tvdatafeed' não encontrada. 
+    Para a versão mais robusta (Fork), instale usando o comando:
+    
+    pip install --upgrade --no-cache-dir git+https://github.com/rongardF/tvdatafeed.git
+    """)
+
 try:
     from pynvest.scrappers.fundamentus import Fundamentus
 except ImportError:
@@ -298,6 +309,17 @@ class CalculadoraTecnica:
         if df_ativo.empty: return df_ativo
         
         df = df_ativo.sort_index().copy()
+        
+        # Garante que colunas essenciais existam (compatibilidade com tvDatafeed)
+        required_cols = ['Close', 'Open', 'High', 'Low', 'Volume']
+        for col in required_cols:
+            if col not in df.columns:
+                # Tenta encontrar versão lowercase (comum no tvDatafeed)
+                if col.lower() in df.columns:
+                    df.rename(columns={col.lower(): col}, inplace=True)
+                else:
+                    return pd.DataFrame() # Dados insuficientes
+        
         df['returns'] = df['Close'].pct_change()
         
         # RSI (14)
@@ -336,7 +358,7 @@ class CalculadoraTecnica:
         return df
 
 # =============================================================================
-# 9. FUNÇÕES DE COLETA DE DADOS LIVE (YFINANCE + PYNVEST)
+# 9. FUNÇÕES DE COLETA DE DADOS LIVE (TVDATAFEED + PYNVEST)
 # =============================================================================
 
 class ColetorDadosLive(object):
@@ -347,6 +369,14 @@ class ColetorDadosLive(object):
         self.metricas_performance = pd.DataFrame() 
         self.volatilidades_garch_raw = {}
         self.metricas_simples = {}
+        
+        # Inicializa TradingView Datafeed
+        try:
+            self.tv = TvDatafeed() # Modo guest (sem login)
+            self.tv_ativo = True
+        except Exception as e:
+            st.error(f"Erro ao inicializar tvDatafeed: {e}")
+            self.tv_ativo = False
         
         try:
             self.pynvest_scrapper = Fundamentus()
@@ -381,78 +411,54 @@ class ColetorDadosLive(object):
         garch_vols = {}
         metricas_simples_list = []
 
-        # --- ESTRATÉGIA DEFENSIVA: USER-AGENT MODERNO ---
-        session = requests.Session()
-        session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0'
-        })
+        if not self.tv_ativo:
+            st.error("tvDatafeed não está disponível. Impossível coletar preços.")
+            return False
 
-        dados_yf = pd.DataFrame()
-
-        # --- ETAPA 1: TENTATIVA DE DOWNLOAD EM MASSA ---
-        try:
-            dados_yf = yf.download(
-                simbolos, 
-                period=self.periodo, 
-                group_by='ticker', 
-                progress=False, 
-                threads=False, # Crucial para evitar conflitos de thread com o Yahoo
-                session=session
-            )
-        except Exception:
-            # Engole o erro do lote para tentar individualmente depois
-            pass
-
-        # --- ETAPA 2: ITERAÇÃO COM FALLBACK AGRESSIVO ---
-        for i, simbolo in enumerate(simbolos):
+        # --- LOOP DE COLETA TVDATAFEED ---
+        # O tvDatafeed trabalha melhor com requisições individuais
+        
+        for simbolo in simbolos:
+            # TradingView usa símbolos sem .SA para B3
+            simbolo_tv = simbolo.replace('.SA', '')
+            
             df_tecnicos = pd.DataFrame()
+            try:
+                # Coleta ~5 anos de dados diários (1260 dias de trading)
+                df_tecnicos = self.tv.get_hist(
+                    symbol=simbolo_tv, 
+                    exchange='BMFBOVESPA', 
+                    interval=Interval.in_daily, 
+                    n_bars=1260
+                )
+            except Exception:
+                pass
             
-            # Tenta pegar do lote
-            if not dados_yf.empty:
-                try:
-                    if len(simbolos) > 1:
-                        if simbolo in dados_yf.columns.get_level_values(0):
-                             df_tecnicos = dados_yf[simbolo].copy()
-                    else:
-                        df_tecnicos = dados_yf.copy()
-                except Exception:
-                    pass
-
-            # --- FALLBACK: SE O LOTE FALHOU, BAIXA INDIVIDUALMENTE ---
-            # Verifica se o dataframe está vazio ou se a coluna Close está vazia/inexistente
-            dados_validos = False
-            if not df_tecnicos.empty and 'Close' in df_tecnicos.columns:
-                if not df_tecnicos['Close'].dropna().empty:
-                    dados_validos = True
-
-            if not dados_validos:
-                # Atraso intencional para evitar Rate Limit (429/Expecting Value)
-                time.sleep(1.5) 
-                
-                try:
-                    # Tenta endpoint alternativo via Ticker.history (mais robusto que download)
-                    ticker_obj = yf.Ticker(simbolo, session=session)
-                    df_tecnicos = ticker_obj.history(period=self.periodo)
-                except Exception:
-                    # Última tentativa: sem sessão, delay maior
-                    try:
-                        time.sleep(2.0)
-                        ticker_obj = yf.Ticker(simbolo)
-                        df_tecnicos = ticker_obj.history(period=self.periodo)
-                    except Exception:
-                        pass
-
-            # Validação Final
-            if df_tecnicos.empty or 'Close' not in df_tecnicos.columns:
+            if df_tecnicos is None or df_tecnicos.empty:
                 continue
+                
+            # Renomeia colunas para manter compatibilidade com o resto do sistema (Capitalizadas)
+            # tvDatafeed retorna: symbol, open, high, low, close, volume (minúsculas)
+            rename_map = {
+                'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
+            }
+            df_tecnicos.rename(columns=rename_map, inplace=True)
             
-            # Limpeza e Enriquecimento
+            # Se por acaso vier no formato 'SYMBOL:close'
+            for col in df_tecnicos.columns:
+                if ':' in col:
+                    base_col = col.split(':')[1] # Pega a parte 'close'
+                    if base_col in rename_map:
+                        df_tecnicos.rename(columns={col: rename_map[base_col]}, inplace=True)
+
+            # Garante que temos as colunas necessárias
+            if 'Close' not in df_tecnicos.columns:
+                continue
+
             df_tecnicos = df_tecnicos.dropna(subset=['Close'])
-            if df_tecnicos.empty: continue
-            
             df_tecnicos = CalculadoraTecnica.enriquecer_dados_tecnicos(df_tecnicos)
             
-            # Coleta de Fundamentos (Pynvest)
+            # Coleta de Fundamentos (Pynvest) - Mantida Igual
             fund_data = {}
             if self.pynvest_ativo:
                 try:
@@ -492,6 +498,9 @@ class ColetorDadosLive(object):
                 'Ticker': simbolo, 'sharpe': sharpe, 'retorno_anual': ret_anual,
                 'volatilidade_anual': vol_anual, 'max_drawdown': max_dd,
             })
+            
+            # Pequeno delay para ser gentil com a API do TradingView
+            time.sleep(0.1)
 
         if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO: return False
             
@@ -499,7 +508,6 @@ class ColetorDadosLive(object):
         self.metricas_performance = pd.DataFrame(metricas_simples_list).set_index('Ticker')
         self.volatilidades_garch_raw = garch_vols 
         
-        # Sincroniza dados fundamentais nas séries temporais (para uso no ML)
         for simbolo in self.ativos_sucesso:
             last_idx = self.dados_por_ativo[simbolo].index[-1]
             for k, v in self.dados_fundamentalistas.loc[simbolo].items():
@@ -838,7 +846,7 @@ class ConstrutorPortfolioAutoML:
     def executar_pipeline(self, simbolos_customizados: list, perfil_inputs: dict, progress_bar=None) -> bool:
         self.perfil_dashboard = perfil_inputs
         try:
-            if progress_bar: progress_bar.progress(10, text="Coletando dados LIVE (YF+Pynvest)...")
+            if progress_bar: progress_bar.progress(10, text="Coletando dados LIVE (TradingView + Pynvest)...")
             if not self.coletar_e_processar_dados(simbolos_customizados): return False
             if progress_bar: progress_bar.progress(30, text="Calculando métricas setoriais e volatilidade...")
             self.calculate_cross_sectional_features(); self.calcular_volatilidades_garch()
