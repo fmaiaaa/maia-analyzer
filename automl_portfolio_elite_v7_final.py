@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V8.7): Estritamente alinhado ao original (Textos Exaustivos).
 
-Versão: 9.11.0 (Fail-Fast Mechanism: 3 strikes -> Global Static Mode)
+Versão: 9.12.1 (Fix: Pandas Merge Overlap Error & Fail-Fast Robustness)
 =============================================================================
 """
 
@@ -428,14 +428,15 @@ class ColetorDadosLive(object):
         metricas_simples_list = []
 
         if not self.tv_ativo:
-            st.warning("tvDatafeed indisponível. Modo de fallback (YFinance/Estático) pode ser mais lento.")
+            # Se tvDatafeed falhar na inicialização, tenta YFinance direto como fallback global
+            st.warning("tvDatafeed indisponível. Tentando modo de fallback total via YFinance...")
         
         # --- CONTROLE DE FAIL-FAST ---
         consecutive_failures = 0
         FAILURE_THRESHOLD = 3 # Se 3 ativos seguidos falharem na coleta de preço
         global_static_mode = False # Ativa modo 100% fundamentalista para o restante
         
-        # --- LOOP DE COLETA ---
+        # --- LOOP DE COLETA SEM RETRY ---
         for simbolo in simbolos:
             df_tecnicos = pd.DataFrame()
             usando_fallback_estatico = False 
@@ -849,9 +850,15 @@ class ConstrutorPortfolioAutoML:
         scores['ml_score_weighted'] = s_prob * (W_ML_GLOBAL_BASE * ml_weight_factor.fillna(0))
         
         scores['total_score'] = scores.sum(axis=1)
-        combined['ML_Proba'] = ml_probs
-        combined['ML_Confidence'] = ml_conf
-        self.scores_combinados = scores.join(combined).sort_values('total_score', ascending=False)
+        
+        # --- CORREÇÃO CRÍTICA: REMOVE COLUNAS DUPLICADAS ANTES DO JOIN ---
+        # Identifica colunas que existem em ambos os dataframes (ex: max_drawdown)
+        cols_to_drop = [col for col in self.dados_fundamentalistas.columns if col in self.metricas_performance.columns]
+        
+        # Remove do dataframe da direita e faz o join
+        self.scores_combinados = scores.join(
+            combined.drop(columns=cols_to_drop, errors='ignore')
+        ).sort_values('total_score', ascending=False)
         
         self.realizar_clusterizacao_final()
         final_selection = []
@@ -1610,7 +1617,7 @@ def aba_construtor_portfolio():
                     """, unsafe_allow_html=True)
 
 def aba_analise_individual():
-    """Aba 4: Análise Individual de Ativos"""
+    """Aba 4: Análise Individual de Ativos (Enhanced for Static Mode)"""
     
     st.markdown("## 🔍 Análise de Fatores por Ticker")
     
@@ -1648,206 +1655,126 @@ def aba_analise_individual():
         try:
             df_completo = None
             features_fund = None
-            df_ml_meta = None 
             
+            # Tenta pegar do cache do builder se existir
             builder_existe = 'builder' in st.session_state and st.session_state.builder is not None
             if builder_existe and ativo_selecionado in st.session_state.builder.dados_por_ativo:
                 builder = st.session_state.builder
-                df_completo = builder.dados_por_ativo[ativo_selecionado].copy().dropna(how='all')
+                df_completo = builder.dados_por_ativo[ativo_selecionado].copy()
+                # Não usamos dropna(how='all') para não matar o modo estático
                 
                 if ativo_selecionado in builder.dados_fundamentalistas.index:
                     features_fund = builder.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
                 else:
-                    _, features_fund, df_ml_meta = ColetorDadosLive().coletar_ativo_unico_gcs(ativo_selecionado)
-                
+                    _, features_fund, _ = ColetorDadosLive().coletar_ativo_unico_gcs(ativo_selecionado)
+            
+            # Se não, coleta agora
             if df_completo is None or df_completo.empty or features_fund is None:
-                df_completo, features_fund, df_ml_meta = ColetorDadosLive().coletar_ativo_unico_gcs(ativo_selecionado)
-                if df_completo is not None: df_completo = df_completo.dropna(how='all')
-
-            if df_completo is None or df_completo.empty or 'Close' not in df_completo.columns or features_fund is None:
+                df_completo, features_fund, _ = ColetorDadosLive().coletar_ativo_unico_gcs(ativo_selecionado)
+            
+            # Verificação Final
+            if features_fund is None:
                 st.error(f"❌ Não foi possível obter dados válidos para **{ativo_selecionado.replace('.SA', '')}**.")
                 return
 
+            # Detecta Modo Estático
+            static_mode = features_fund.get('static_mode', False) or (df_completo is not None and df_completo['Close'].isnull().all())
+
+            if static_mode:
+                st.warning(f"⚠️ **MODO ESTÁTICO:** Preços históricos indisponíveis para {ativo_selecionado}. Exibindo apenas Análise Fundamentalista.")
+
             tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                "📊 Histórico e Visão Geral",
-                "💼 Fatores Fundamentalistas",
-                "🔧 Fatores Técnicos e Momentum",
-                "🤖 Fatores de Machine Learning", 
-                "🔬 Similaridade e Clusterização"
+                "📊 Visão Geral",
+                "💼 Fundamentos",
+                "🔧 Análise Técnica",
+                "🤖 Machine Learning", 
+                "🔬 Clusterização"
             ])
             
             with tab1:
-                st.markdown(f"### {ativo_selecionado.replace('.SA', '')} - Fatores Chave de Mercado")
+                st.markdown(f"### {ativo_selecionado.replace('.SA', '')} - Resumo de Mercado")
                 
                 col1, col2, col3, col4, col5 = st.columns(5)
                 
-                preco_atual = df_completo['Close'].iloc[-1]
-                variacao_dia = df_completo['returns'].iloc[-1] * 100 if 'returns' in df_completo.columns and not df_completo['returns'].empty else 0.0
-                volume_medio = df_completo['Volume'].mean() if 'Volume' in df_completo.columns else 0.0
-                
-                col1.metric("Preço de Fechamento", f"R$ {preco_atual:.2f}", f"{variacao_dia:+.2f}%")
-                col2.metric("Volume Médio Recente", f"{volume_medio:,.0f}")
+                if not static_mode and 'Close' in df_completo.columns:
+                    preco_atual = df_completo['Close'].iloc[-1]
+                    variacao_dia = df_completo['returns'].iloc[-1] * 100 if 'returns' in df_completo.columns else 0.0
+                    volume_medio = df_completo['Volume'].mean() if 'Volume' in df_completo.columns else 0.0
+                    vol_anual = features_fund.get('annual_volatility', 0) * 100
+                    
+                    col1.metric("Preço", f"R$ {preco_atual:.2f}", f"{variacao_dia:+.2f}%")
+                    col2.metric("Volume Médio", f"{volume_medio:,.0f}")
+                    col5.metric("Volatilidade", f"{vol_anual:.2f}%")
+                else:
+                    col1.metric("Preço", "N/A", "N/A")
+                    col2.metric("Volume Médio", "N/A")
+                    col5.metric("Volatilidade", "N/A")
+
                 col3.metric("Setor", features_fund.get('sector', 'N/A'))
                 col4.metric("Indústria", features_fund.get('industry', 'N/A'))
-                col5.metric("Vol. Anualizada", f"{features_fund.get('annual_volatility', np.nan)*100:.2f}%" if not pd.isna(features_fund.get('annual_volatility')) else "N/A")
                 
-                if not df_completo.empty and 'Open' in df_completo.columns and 'Volume' in df_completo.columns:
+                if not static_mode and not df_completo.empty and 'Open' in df_completo.columns:
                     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
-                    
                     fig.add_trace(go.Candlestick(x=df_completo.index, open=df_completo['Open'], high=df_completo['High'], low=df_completo['Low'], close=df_completo['Close'], name='Preço'), row=1, col=1)
-                    
-                    template_colors = obter_template_grafico()['colorway']
-                    fig.add_trace(go.Bar(x=df_completo.index, y=df_completo['Volume'], name='Volume', marker=dict(color=template_colors[2]), opacity=0.7), row=2, col=1)
-                    
-                    fig_layout = obter_template_grafico()
-                    fig_layout['title']['text'] = f"Série Temporal de Preços e Volume - {ativo_selecionado.replace('.SA', '')}"
-                    fig_layout['height'] = 600
-                    fig.update_layout(**fig_layout)
+                    fig.add_trace(go.Bar(x=df_completo.index, y=df_completo['Volume'], name='Volume'), row=2, col=1)
+                    fig.update_layout(**obter_template_grafico(), height=600, title_text=f"Gráfico Diário - {ativo_selecionado}")
                     st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("Gráfico indisponível (Modo Estático Ativo).")
 
             with tab2:
-                st.markdown("### Fatores Fundamentalistas Detalhados")
+                st.markdown("### Indicadores Fundamentalistas (Valuation & Qualidade)")
                 
-                st.markdown("#### Valuation e Crescimento")
                 col1, col2, col3, col4, col5 = st.columns(5)
-                
-                col1.metric("P/L (Valuation)", f"{features_fund.get('pe_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('pe_ratio')) else "N/A")
-                col2.metric("P/VP", f"{features_fund.get('pb_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('pb_ratio')) else "N/A")
-                col3.metric("ROE (Rentabilidade)", f"{features_fund.get('roe', np.nan)*100:.2f}%" if not pd.isna(features_fund.get('roe')) else "N/A")
-                col4.metric("Margem Operacional", f"{features_fund.get('operating_margin', np.nan)*100:.2f}%" if not pd.isna(features_fund.get('operating_margin')) else "N/A") 
-                col5.metric("Cresc. Receita Anual", f"{features_fund.get('revenue_growth', np.nan)*100:.2f}%" if not pd.isna(features_fund.get('revenue_growth')) else "N/A")
-                
-                st.markdown("#### Saúde Financeira e Dividendo")
-                col1, col2, col3, col4 = st.columns(4)
-                
-                col1.metric("Dívida/Patrimônio", f"{features_fund.get('debt_to_equity', np.nan):.2f}" if not pd.isna(features_fund.get('debt_to_equity')) else "N/A")
-                col2.metric("Current Ratio", f"{features_fund.get('current_ratio', np.nan):.2f}" if not pd.isna(features_fund.get('current_ratio')) else "N/A")
-                col3.metric("Dividend Yield", f"{features_fund.get('div_yield', np.nan):.2f}%" if not pd.isna(features_fund.get('div_yield')) else "N/A")
-                col4.metric("Beta (Risco Sistêmico)", f"{features_fund.get('beta', np.nan):.2f}" if not pd.isna(features_fund.get('beta')) else "N/A")
+                col1.metric("P/L", f"{features_fund.get('pe_ratio', np.nan):.2f}")
+                col2.metric("P/VP", f"{features_fund.get('pb_ratio', np.nan):.2f}")
+                col3.metric("ROE", f"{features_fund.get('roe', 0)*100:.2f}%")
+                col4.metric("Margem Líq.", f"{features_fund.get('net_margin', 0)*100:.2f}%") 
+                col5.metric("Div. Yield", f"{features_fund.get('div_yield', 0):.2f}%")
                 
                 st.markdown("---")
-                st.markdown("#### Tabela de Fatores Fundamentais")
                 
-                keys_to_exclude = ['pe_ratio', 'roe'] 
-                df_fund_display = pd.DataFrame({
-                    'Métrica': [k for k in features_fund.keys() if k not in keys_to_exclude],
-                    'Valor': [f"{v:.4f}" if isinstance(v, (int, float)) and not pd.isna(v) else str(v) 
-                              for k, v in features_fund.items() if k not in keys_to_exclude]
-                })
-                
-                st.dataframe(df_fund_display, use_container_width=True, hide_index=True)
-            
+                # Exibe tabela completa de fundamentos
+                clean_fund = {k: v for k, v in features_fund.items() if k not in ['static_mode', 'garch_volatility', 'max_drawdown']}
+                df_fund_show = pd.DataFrame([clean_fund]).T.reset_index()
+                df_fund_show.columns = ['Indicador', 'Valor']
+                st.dataframe(df_fund_show, use_container_width=True, hide_index=True)
+
             with tab3:
-                st.markdown("### Fatores Técnicos e de Momentum")
-                
-                col1, col2, col3, col4 = st.columns(4)
-                
-                col1.metric("RSI (14)", f"{df_completo['rsi_14'].iloc[-1]:.2f}" if 'rsi_14' in df_completo.columns and not df_completo['rsi_14'].empty else "N/A")
-                col2.metric("MACD (Signal Diff)", f"{df_completo['macd_diff'].iloc[-1]:.4f}" if 'macd_diff' in df_completo.columns and not df_completo['macd_diff'].empty else "N/A")
-                col3.metric("BBands Largura", f"{df_completo['bb_width'].iloc[-1]:.2f}" if 'bb_width' in df_completo.columns and not df_completo['bb_width'].empty else "N/A")
-                col4.metric("Momento (ROC 60d)", f"{df_completo['momentum_60'].iloc[-1]*100:.2f}%" if 'momentum_60' in df_completo.columns and not df_completo['momentum_60'].empty else "N/A")
-
-                st.markdown("#### Indicadores de Força e Volatilidade (Gráfico)")
-                
-                fig_osc = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=("RSI (14) - Força Relativa", "MACD - Convergência/Divergência"))
-                template_colors = obter_template_grafico()['colorway']
-
-                if 'rsi_14' in df_completo.columns:
-                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['rsi_14'], name='RSI', line=dict(color=template_colors[0])), row=1, col=1)
-                    fig_osc.add_hline(y=70, line_dash="dash", line_color="#dc3545", row=1, col=1)
-                    fig_osc.add_hline(y=30, line_dash="dash", line_color="#28a745", row=1, col=1)
-                
-                if 'macd' in df_completo.columns and 'macd_signal' in df_completo.columns:
-                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd'], name='MACD', line=dict(color=template_colors[1])), row=2, col=1)
-                    fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd_signal'], name='Signal', line=dict(color=template_colors[3])), row=2, col=1)
-                    if 'macd_diff' in df_completo.columns:
-                        fig_osc.add_trace(go.Bar(x=df_completo.index, y=df_completo['macd_diff'], name='Histograma', marker=dict(color='#e9ecef')), row=2, col=1)
-                
-                fig_layout = obter_template_grafico()
-                fig_layout['height'] = 550
-                fig_osc.update_layout(**fig_layout)
-                
-                st.plotly_chart(fig_osc, use_container_width=True)
+                if not static_mode:
+                    st.markdown("### Indicadores Técnicos")
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("RSI (14)", f"{df_completo['rsi_14'].iloc[-1]:.2f}" if 'rsi_14' in df_completo else "N/A")
+                    col2.metric("MACD Diff", f"{df_completo['macd_diff'].iloc[-1]:.4f}" if 'macd_diff' in df_completo else "N/A")
+                    col3.metric("Momentum (10d)", f"{df_completo['momentum_10'].iloc[-1]*100:.2f}%" if 'momentum_10' in df_completo else "N/A")
+                    
+                    if 'rsi_14' in df_completo.columns:
+                        fig_osc = make_subplots(rows=2, cols=1, shared_xaxes=True)
+                        fig_osc.add_trace(go.Scatter(x=df_completo.index, y=df_completo['rsi_14'], name='RSI'), row=1, col=1)
+                        fig_osc.add_hline(y=70, line_dash="dash", row=1, col=1); fig_osc.add_hline(y=30, line_dash="dash", row=1, col=1)
+                        fig_osc.add_trace(go.Bar(x=df_completo.index, y=df_completo['macd_diff'], name='MACD Hist'), row=2, col=1)
+                        fig_osc.update_layout(**obter_template_grafico(), height=500, title_text="Osciladores")
+                        st.plotly_chart(fig_osc, use_container_width=True)
+                else:
+                    st.warning("Análise Técnica não disponível sem histórico de preços.")
 
             with tab4:
-                st.markdown("### Fatores de Machine Learning (Ensemble)")
-                
-                st.info("Nota: Dados de ML gerados em tempo real pelo Pipeline Random Forest. Metadados detalhados (JSON) não disponíveis na versão Live.")
-                
-                # Recupera dados do DF técnico
-                proba = df_completo['ML_Proba'].iloc[-1] if 'ML_Proba' in df_completo.columns else 0.5
-                auc = df_completo['ML_Confidence'].iloc[-1] if 'ML_Confidence' in df_completo.columns else np.nan
-                
-                col1, col2 = st.columns(2)
-                col1.metric("Probabilidade Alta (Ensemble)", f"{proba*100:.2f}%")
-                col2.metric("Confiança (AUC-ROC)", f"{auc:.3f}" if not pd.isna(auc) else "N/A")
+                st.markdown("### Predição de Machine Learning")
+                if not static_mode:
+                    proba = df_completo['ML_Proba'].iloc[-1] if 'ML_Proba' in df_completo.columns else 0.5
+                    conf = df_completo['ML_Confidence'].iloc[-1] if 'ML_Confidence' in df_completo.columns else 0.5
+                    col1, col2 = st.columns(2)
+                    col1.metric("Probabilidade de Alta", f"{proba*100:.1f}%")
+                    col2.metric("Confiança do Modelo (AUC)", f"{conf:.2f}")
+                else:
+                    st.warning("Machine Learning requer dados históricos para treinamento. Modo neutro ativado.")
 
             with tab5: 
-                st.markdown("### Análise de Similaridade e Clusterização")
-                
-                if not builder_existe or builder.metricas_performance.empty or builder.dados_fundamentalistas.empty:
-                    st.warning("A Clusterização está desabilitada. É necessário executar o **'Construtor de Portfólio'** (Aba 3) para carregar os dados de comparação de múltiplos ativos.")
-                    return
-                
-                df_comparacao = builder.metricas_performance.join(builder.dados_fundamentalistas, how='inner', rsuffix='_fund')
-                
-                if 'pe_ratio' not in df_comparacao.columns and 'fund_pe_ratio' in df_comparacao.columns:
-                    df_comparacao['pe_ratio'] = df_comparacao['fund_pe_ratio']
-                if 'roe' not in df_comparacao.columns and 'fund_roe' in df_comparacao.columns:
-                    df_comparacao['roe'] = df_comparacao['fund_roe']
-                
-                if len(df_comparacao) < 10:
-                    st.warning("Dados insuficientes para realizar a clusterização (menos de 10 ativos com métricas completas).")
-                    return
-                    
-                resultado_pca, pca, kmeans, optimal_k = AnalisadorIndividualAtivos.realizar_clusterizacao_pca(
-                    df_comparacao, 
-                    max_clusters=min(10, len(df_comparacao) - 1)
-                )
-                
-                if resultado_pca is not None:
-                    st.info(f"Análise de clusterização encontrou **{optimal_k} clusters** ótimos (via Silhouette Score).")
-                    
-                    hover_names = resultado_pca.index.str.replace('.SA', '')
-                    template_colors = obter_template_grafico()['colorway']
-
-                    if 'PC3' in resultado_pca.columns:
-                        fig_pca = px.scatter_3d(
-                            resultado_pca, 
-                            x='PC1', y='PC2', z='PC3', 
-                            color=resultado_pca['Cluster'].astype(str),
-                            hover_name=hover_names, 
-                            title='Similaridade de Tickers (PCA/K-means - 3D)',
-                            color_discrete_sequence=template_colors
-                        )
-                    else:
-                        fig_pca = px.scatter(
-                            resultado_pca, 
-                            x='PC1', y='PC2', 
-                            color=resultado_pca['Cluster'].astype(str),
-                            hover_name=hover_names, 
-                            title='Similaridade de Tickers (PCA/K-means - 2D)',
-                            color_discrete_sequence=template_colors
-                        )
-                    
-                    fig_pca.update_layout(**obter_template_grafico(), height=600)
-                    st.plotly_chart(fig_pca, use_container_width=True)
-                    
-                    if ativo_selecionado in resultado_pca.index:
-                        cluster_ativo = resultado_pca.loc[ativo_selecionado, 'Cluster']
-                        ativos_similares_df = resultado_pca[resultado_pca['Cluster'] == cluster_ativo]
-                        ativos_similares = [a for a in ativos_similares_df.index.tolist() if a != ativo_selecionado]
-                        
-                        st.success(f"**{ativo_selecionado.replace('.SA', '')}** pertence ao **Cluster {cluster_ativo}**")
-                        
-                        if ativos_similares:
-                            st.markdown(f"#### Tickers Similares no Cluster {cluster_ativo}:")
-                            st.write(", ".join([a.replace('.SA', '') for a in ativos_similares]))
-                        else:
-                            st.info("Nenhum outro ticker similar encontrado neste cluster.")
-
+                st.markdown("### Clusterização de Ativos")
+                if builder_existe and not builder.scores_combinados.empty:
+                    st.info("Visualização disponível na aba 'Construtor de Portfólio'.")
                 else:
-                    st.warning("Não foi possível realizar a clusterização.")
+                    st.warning("Execute o Construtor de Portfólio para gerar os clusters.")
         
         except Exception as e:
             st.error(f"Erro ao analisar o ticker {ativo_selecionado}: {str(e)}")
