@@ -4,14 +4,15 @@
 SISTEMA DE PORTFÓLIOS ADAPTATIVOS - OTIMIZAÇÃO QUANTITATIVA (VERSÃO NATIVA)
 =============================================================================
 
-Versão Adaptada: 8.9.0 (Pynvest Integration)
-- Fonte de Dados Técnicos: yfinance (OHLCV em tempo real).
-- Fonte de Dados Fundamentalistas: pynvest (Scraping avançado do Fundamentus).
-- ETL: Limpeza automática de dados (conversão de strings pt-BR para float).
-- ML/Scoring: Inclusão de ROIC, EV/EBITDA e Margens no algoritmo de seleção.
+Versão Adaptada: 8.10.0 (Integração Biblioteca Mercados)
+- Macroeconomia: Taxa Livre de Risco (CDI/Selic) dinâmica via `mercados.bcb`.
+- Inflação: Coleta de IPCA via `mercados.ibge` para cálculo de Retorno Real.
+- Dados Técnicos: yfinance (OHLCV em tempo real).
+- Dados Fundamentalistas: pynvest (Scraping avançado do Fundamentus).
+- Integração: Uso híbrido para maximizar robustez e profundidade de dados.
 
 Dependências Extras Necessárias:
-pip install yfinance pynvest plotly scipy scikit-learn pandas numpy
+pip install yfinance pynvest plotly scipy scikit-learn pandas numpy mercados
 =============================================================================
 """
 
@@ -21,7 +22,8 @@ import numpy as np
 import pandas as pd
 import sys
 import time
-from datetime import datetime, timedelta
+import datetime
+from datetime import timedelta
 import traceback
 import json
 
@@ -36,10 +38,22 @@ from plotly.subplots import make_subplots
 
 # --- 4. DATA SOURCES ---
 import yfinance as yf
+
+# Pynvest para Fundamentos
 try:
     from pynvest.scrappers.fundamentus import Fundamentus
 except ImportError:
     warnings.warn("Biblioteca 'pynvest' não encontrada. Instale com 'pip install pynvest'.")
+
+# Mercados para Macroeconomia e Dados Oficiais (BCB, IBGE, B3)
+try:
+    from mercados.bcb import BancoCentral
+    from mercados.ibge import IBGE
+    from mercados.b3 import B3
+    MERCADOS_AVAILABLE = True
+except ImportError:
+    MERCADOS_AVAILABLE = False
+    warnings.warn("Biblioteca 'mercados' não encontrada. Instale com 'pip install mercados'. Usando valores fallback.")
 
 # --- 5. MACHINE LEARNING (SCIKIT-LEARN) ---
 from sklearn.preprocessing import StandardScaler
@@ -57,15 +71,17 @@ warnings.filterwarnings('ignore')
 PERIODO_DADOS = '5y'
 MIN_DIAS_HISTORICO = 200 
 NUM_ATIVOS_PORTFOLIO = 5
-TAXA_LIVRE_RISCO = 0.1075
 SCORE_PERCENTILE_THRESHOLD = 0.75 
+
+# Taxa Livre de Risco Padrão (Fallback caso a API do BCB falhe)
+TAXA_LIVRE_RISCO_FALLBACK = 0.1075 
 
 # =============================================================================
 # 2. PONDERAÇÕES E REGRAS DE OTIMIZAÇÃO
 # =============================================================================
 
 WEIGHT_PERFORMANCE = 0.35
-WEIGHT_FUNDAMENTAL = 0.40 # Aumentado devido à melhor qualidade dos dados
+WEIGHT_FUNDAMENTAL = 0.40
 WEIGHT_TECHNICAL = 0.25
 WEIGHT_ML = 0.00 
 
@@ -93,11 +109,88 @@ ATIVOS_IBOVESPA = [
     'VBBR3.SA', 'VIVA3.SA', 'WEGE3.SA', 'YDUQ3.SA'
 ]
 
-# Mantemos a lista para referência, mas usaremos os dados do pynvest para categorização real se possível
-TODOS_ATIVOS = sorted(list(set(ATIVOS_IBOVESPA)))
+# =============================================================================
+# 4. CLASSE: COLETOR MACROECONÔMICO (MERCADOS)
+# =============================================================================
+
+class ColetorMacroEconomico:
+    """
+    Responsável por coletar dados oficiais do governo (BCB, IBGE) usando a biblioteca 'mercados'.
+    Fornece o contexto macroeconômico (Juros, Inflação) para a otimização do portfólio.
+    """
+    def __init__(self):
+        self.taxa_selic_atual = TAXA_LIVRE_RISCO_FALLBACK
+        self.ipca_acumulado_12m = 0.045 # Fallback ~4.5%
+        self.data_referencia = datetime.date.today()
+        
+        if MERCADOS_AVAILABLE:
+            try:
+                self.bc = BancoCentral()
+                self.ibge = IBGE()
+            except Exception as e:
+                print(f"Erro ao inicializar clientes Mercados: {e}")
+                self.bc = None
+                self.ibge = None
+        else:
+            self.bc = None
+            self.ibge = None
+
+    def atualizar_dados_macro(self):
+        """Coleta Selic/CDI e IPCA atualizados."""
+        if not self.bc or not self.ibge:
+            return False
+
+        try:
+            # 1. Coletar CDI/Selic (Série 432 ou 11 do SGS - Usando atalho da lib se houver, ou busca direta)
+            # A lib mercados.bcb tem serie_temporal. Vamos tentar pegar a Selic Meta ou CDI.
+            # CDI Diário anualizado costuma ser a referência.
+            
+            # Vamos pegar o CDI acumulado dos últimos 12 meses ou a meta atual?
+            # Para otimização de Sharpe, usa-se a taxa livre de risco ATUAL (anualizada).
+            # Vamos tentar pegar a série 432 (Taxa de juros - Meta Selic definida pelo Copom % a.a.)
+            
+            # Nota: A biblioteca mercados usa bc.serie_temporal(codigo, inicio, fim)
+            # 432: Meta Selic
+            hoje = self.data_referencia
+            inicio = hoje - timedelta(days=30)
+            
+            serie_selic = self.bc.serie_temporal(432, inicio=inicio, fim=hoje)
+            
+            if serie_selic:
+                # Pega o último valor disponível
+                ultimo_dado = list(serie_selic)[-1]
+                self.taxa_selic_atual = float(ultimo_dado.valor) / 100.0
+            
+            # 2. Coletar IPCA (IBGE)
+            # O método historico("IPCA") retorna a série.
+            historico_ipca = list(self.ibge.historico("IPCA"))
+            if historico_ipca:
+                # Calcular acumulado 12 meses
+                # A lista contém objetos Taxa(data, valor). Valor é o número índice.
+                # Variação 12m = (Indice Atual / Indice 12m atrás) - 1
+                
+                if len(historico_ipca) > 12:
+                    indice_atual = historico_ipca[-1].valor
+                    indice_12m_atras = historico_ipca[-13].valor
+                    self.ipca_acumulado_12m = float((indice_atual / indice_12m_atras) - 1)
+                
+            return True
+            
+        except Exception as e:
+            st.warning(f"Erro ao atualizar dados macro com 'mercados': {e}. Usando fallback.")
+            return False
+
+    def get_taxa_livre_risco(self):
+        return self.taxa_selic_atual
+
+    def get_inflacao_real(self):
+        return self.ipca_acumulado_12m
+
+# Instância global
+coletor_macro = ColetorMacroEconomico()
 
 # =============================================================================
-# 4. CONFIGURAÇÕES DO PERFIL DE INVESTIDOR (MANTIDO)
+# 5. CLASSE: ANALISADOR DE PERFIL (MANTIDO)
 # =============================================================================
 
 SCORE_MAP_ORIGINAL = {'CT: Concordo Totalmente': 5, 'C: Concordo': 4, 'N: Neutro': 3, 'D: Discordo': 2, 'DT: Discordo Totalmente': 1}
@@ -112,10 +205,6 @@ SCORE_MAP_REACTION_ORIGINAL = {
     'B: Manteria e reavaliaria a tese': 3, 
     'C: Compraria mais para aproveitar preços baixos': 5
 }
-
-# =============================================================================
-# 5. CLASSE: ANALISADOR DE PERFIL (MANTIDO)
-# =============================================================================
 
 class AnalisadorPerfilInvestidor:
     def __init__(self):
@@ -203,11 +292,11 @@ class CalculadoraTecnica:
         return norm if maior_melhor else 1 - norm
 
 # =============================================================================
-# 7. COLETA DE DADOS (YFINANCE + PYNVEST)
+# 7. COLETA DE DADOS (YFINANCE + PYNVEST + MERCADOS)
 # =============================================================================
 
 class ColetorDadosNativo:
-    """Coleta dados via Yahoo Finance e Pynvest (Fundamentus Wrapper)."""
+    """Coleta dados via Yahoo Finance, Pynvest e usa Mercados para validação."""
     
     def __init__(self, periodo=PERIODO_DADOS):
         self.periodo = periodo
@@ -216,6 +305,9 @@ class ColetorDadosNativo:
         self.metricas_performance = pd.DataFrame()
         self.ativos_sucesso = []
         self.pynvest_scrapper = Fundamentus()
+        
+        # Dados Macro
+        self.taxa_livre_risco = coletor_macro.get_taxa_livre_risco()
 
     def _limpar_valor_pynvest(self, valor):
         """Converte strings formatadas (ex: '10,5%') para float."""
@@ -263,24 +355,15 @@ class ColetorDadosNativo:
                 df_ativo = self.pynvest_scrapper.coleta_indicadores_de_ativo(ticker_sem_sa)
                 
                 if df_ativo is not None and not df_ativo.empty:
-                    # Pega a primeira linha (já que é por ativo)
                     row = df_ativo.iloc[0].to_dict()
-                    
-                    # Limpa e mapeia os dados
                     dados_limpos = {'Ticker': ticker}
                     
-                    # Processa colunas numéricas mapeadas
                     for col_pynvest, col_interna in mapa_cols.items():
                         val = row.get(col_pynvest)
                         
                         if col_interna in ['sector', 'industry']:
                             dados_limpos[col_interna] = str(val) if val else 'Desconhecido'
                         else:
-                            # Se for percentual ou financeiro, converte
-                            # Ajuste para percentuais: Pynvest retorna 10.0 para 10%. 
-                            # Dividimos por 100 para manter compatibilidade decimal (0.10) se necessário
-                            # ou mantemos a escala. O código assume escala "natural" para scores.
-                            # Vamos normalizar percentuais conhecidos para decimal.
                             val_float = self._limpar_valor_pynvest(val)
                             
                             if col_interna in ['roe', 'roic', 'div_yield', 'net_margin', 'operating_margin', 'revenue_growth_5y']:
@@ -288,14 +371,12 @@ class ColetorDadosNativo:
                             else:
                                 dados_limpos[col_interna] = val_float if pd.notnull(val_float) else 0.0
                     
-                    # Adiciona dados extras que o usuário pediu (todos os listados que forem úteis)
                     dados_limpos['price_sales'] = self._limpar_valor_pynvest(row.get('vlr_ind_psr'))
                     dados_limpos['asset_turnover'] = self._limpar_valor_pynvest(row.get('vlr_ind_giro_ativos'))
                     
                     dados_consolidados.append(dados_limpos)
                     
             except Exception as e:
-                # print(f"Erro ao coletar {ticker} via Pynvest: {e}")
                 continue
         
         if not dados_consolidados:
@@ -322,9 +403,9 @@ class ColetorDadosNativo:
         ann_return = df['returns'].mean() * 252
         ann_vol = df['returns'].std() * np.sqrt(252)
         
-        # Sharpe (evita divisão por zero)
+        # Sharpe (usando a taxa dinâmica do ColetorMacro)
         if ann_vol > 0.0001:
-            sharpe = (ann_return - TAXA_LIVRE_RISCO) / ann_vol
+            sharpe = (ann_return - self.taxa_livre_risco) / ann_vol
         else:
             sharpe = 0
 
@@ -334,12 +415,10 @@ class ColetorDadosNativo:
         dd = (cum_ret - peak) / peak
         max_dd = dd.min()
 
-        # Preenche fundamentos no DF temporal (última linha)
         if not df_fund_row.empty:
             for col, val in df_fund_row.items():
                 df.loc[df.index[-1], col] = val
 
-        # Metadados de Performance
         metrics = {
             'sharpe': sharpe,
             'retorno_anual': ann_return,
@@ -348,7 +427,6 @@ class ColetorDadosNativo:
             'garch_volatility': ann_vol 
         }
         
-        # ML Placeholder 
         df['ML_Proba'] = 0.5
         df['ML_Confidence'] = 0.0
 
@@ -357,8 +435,12 @@ class ColetorDadosNativo:
     def coletar_tudo(self, simbolos, progress_bar=None):
         """Fluxo principal de coleta."""
         
+        # 0. Atualiza Macroeconomia (via Mercados)
+        if progress_bar: progress_bar.progress(5, "Atualizando dados macroeconômicos (BCB/IBGE)...")
+        coletor_macro.atualizar_dados_macro()
+        self.taxa_livre_risco = coletor_macro.get_taxa_livre_risco()
+
         # 1. Fundamentos (Scraping individual via Pynvest)
-        # Isso pode demorar um pouco, então o progresso é importante
         df_fund_all = self.coletar_fundamentos_pynvest(simbolos, progress_bar.progress if progress_bar else None)
         
         # 2. Preços (Yfinance Batch é rápido)
@@ -376,25 +458,19 @@ class ColetorDadosNativo:
         
         for simbolo in simbolos:
             try:
-                # Extrai DF do ativo
                 if len(simbolos) == 1:
-                    # Yfinance retorna DF simples se for 1 ativo
                     df_ativo = data_yf
                 else:
-                    # Yfinance retorna MultiIndex se forem vários
                     if simbolo in data_yf:
                         df_ativo = data_yf[simbolo]
                     else:
                         continue
                 
-                # Limpeza básica
                 df_ativo = df_ativo.dropna(subset=['Close'])
                 if df_ativo.empty: continue
                 
-                # Busca fundamentos
                 fund_row = df_fund_all.loc[simbolo] if simbolo in df_fund_all.index else pd.Series()
                 
-                # Processa
                 resultado = self.processar_ativo(simbolo, df_ativo, fund_row)
                 if not resultado: continue
                 
@@ -403,7 +479,6 @@ class ColetorDadosNativo:
                 self.dados_por_ativo[simbolo] = df_final
                 self.ativos_sucesso.append(simbolo)
                 
-                # Consolida dados estáticos
                 fund_dict = fund_row.to_dict()
                 fund_dict['Ticker'] = simbolo
                 fund_dict.update(metrics) 
@@ -415,7 +490,6 @@ class ColetorDadosNativo:
                 })
                 
             except Exception as e:
-                # print(f"Erro processando {simbolo}: {e}")
                 continue
 
         if not lista_fundamentalistas: return False
@@ -426,19 +500,16 @@ class ColetorDadosNativo:
         return True
         
     def coletar_ativo_unico(self, ativo):
-        """Coleta dados para um único ativo sob demanda."""
-        # Pynvest Single
         df_fund_single = self.coletar_fundamentos_pynvest([ativo])
         fund_row = df_fund_single.iloc[0] if not df_fund_single.empty else pd.Series()
         
-        # Yfinance Single
         df_yf = yf.download(ativo, period=self.periodo, auto_adjust=True, progress=False)
         
         if df_yf.empty: return None, None
         
         res = self.processar_ativo(ativo, df_yf, fund_row)
         if res:
-            return res[0], res[1] # DF com técnicos + Dict Fundamentos atualizado
+            return res[0], res[1] 
         return None, None
 
 # =============================================================================
@@ -446,11 +517,12 @@ class ColetorDadosNativo:
 # =============================================================================
 
 class OtimizadorPortfolioAvancado:
-    def __init__(self, returns_df):
+    def __init__(self, returns_df, taxa_livre_risco):
         self.returns = returns_df
         self.mean_returns = returns_df.mean() * 252
         self.cov_matrix = returns_df.cov() * 252
         self.num_ativos = len(returns_df.columns)
+        self.taxa_livre_risco = taxa_livre_risco
 
     def otimizar(self, estrategia='MaxSharpe'):
         if self.num_ativos == 0: return {}
@@ -467,7 +539,7 @@ class OtimizadorPortfolioAvancado:
         if estrategia == 'MinVolatility':
             fun = lambda w: portfolio_stats(w)[1]
         else: # MaxSharpe
-            fun = lambda w: -((portfolio_stats(w)[0] - TAXA_LIVRE_RISCO) / portfolio_stats(w)[1])
+            fun = lambda w: -((portfolio_stats(w)[0] - self.taxa_livre_risco) / portfolio_stats(w)[1])
 
         res = minimize(fun, initial_guess, method='SLSQP', bounds=bounds, constraints=constraints)
         
@@ -495,7 +567,6 @@ class ConstrutorPortfolioAutoML:
         self.justificativas_selecao = {}
 
     def executar_pipeline(self, simbolos, perfil_inputs, progress_bar=None):
-        # 1. Coleta (Passamos o progress_bar para atualizar durante o loop do Pynvest)
         sucesso = self.coletor.coletar_tudo(simbolos, progress_bar)
         if not sucesso: return False
         
@@ -503,19 +574,15 @@ class ConstrutorPortfolioAutoML:
         self.dados_fundamentalistas = self.coletor.dados_fundamentalistas
         self.metricas_performance = self.coletor.metricas_performance
         
-        # 2. Pontuação
         if progress_bar: progress_bar.progress(90, "Calculando Scores Avançados (ROIC, EV/EBITDA)...")
         self.pontuar_ativos(perfil_inputs.get('time_horizon', 'MÉDIO PRAZO'))
         
-        # 3. Seleção
         if progress_bar: progress_bar.progress(95, "Selecionando Melhores Ativos...")
         self.selecionar_ativos()
         
-        # 4. Otimização
-        if progress_bar: progress_bar.progress(98, "Otimizando Pesos (Markowitz)...")
+        if progress_bar: progress_bar.progress(98, "Otimizando Pesos (Markowitz com Macro)...")
         self.otimizar_alocacao(perfil_inputs.get('risk_level', 'MODERADO'))
         
-        # 5. Finalização
         self.calcular_metricas_finais()
         self.gerar_justificativas()
         if progress_bar: progress_bar.progress(100, "Concluído!")
@@ -523,7 +590,6 @@ class ConstrutorPortfolioAutoML:
         return True
 
     def pontuar_ativos(self, horizonte):
-        # Pesos baseados no horizonte
         w_perf, w_fund, w_tech = WEIGHT_PERFORMANCE, WEIGHT_FUNDAMENTAL, WEIGHT_TECHNICAL
         if horizonte == 'CURTO PRAZO': w_perf, w_fund, w_tech = 0.4, 0.2, 0.4
         elif horizonte == 'LONGO PRAZO': w_perf, w_fund, w_tech = 0.2, 0.7, 0.1
@@ -532,23 +598,16 @@ class ConstrutorPortfolioAutoML:
 
         df = self.dados_fundamentalistas.copy()
         
-        # --- Score Performance ---
         s_perf = CalculadoraTecnica.normalizar(df['sharpe'], True) * w_perf
         
-        # --- Score Fundamentalista (ENRIQUECIDO COM PYNVEST) ---
-        # 1. Valuation: P/L e EV/EBITDA (menor é melhor)
         s_pe = CalculadoraTecnica.normalizar(df['pe_ratio'].replace(0, np.nan), False) 
         s_evebitda = CalculadoraTecnica.normalizar(df.get('ev_ebitda', pd.Series(0)).replace(0, np.nan), False)
         
-        # 2. Rentabilidade: ROE e ROIC (maior é melhor)
         s_roe = CalculadoraTecnica.normalizar(df['roe'], True)
         s_roic = CalculadoraTecnica.normalizar(df.get('roic', pd.Series(0)), True)
         
-        # Média Ponderada dos Fundamentos
-        # Damos mais peso para ROIC e EV/EBITDA pois são metricas mais robustas que P/L e ROE
         s_fund = (s_pe * 0.2 + s_evebitda * 0.3 + s_roe * 0.2 + s_roic * 0.3) * w_fund
         
-        # --- Score Técnico ---
         tech_vals = {t: {} for t in df.index}
         for t, d in self.dados_por_ativo.items():
             tech_vals[t]['rsi'] = d['rsi_14'].iloc[-1] if 'rsi_14' in d else 50
@@ -559,20 +618,16 @@ class ConstrutorPortfolioAutoML:
         s_macd = CalculadoraTecnica.normalizar(df_tech['macd_diff'], True)
         s_tech = (s_rsi * 0.5 + s_macd * 0.5) * w_tech
         
-        # Score Total
         df['total_score'] = s_perf + s_fund + s_tech
         
         self.scores_combinados = df.join(df_tech)
         self.scores_combinados = self.scores_combinados.sort_values('total_score', ascending=False)
 
     def selecionar_ativos(self):
-        top_n = self.scores_combinados.head(NUM_ATIVOS_PORTFOLIO * 3) # Pool maior de candidatos
+        top_n = self.scores_combinados.head(NUM_ATIVOS_PORTFOLIO * 3)
         
-        # Clusterização com mais features do Pynvest
         try:
-            # Features para agrupar empresas similares
             features_cols = ['sharpe', 'pe_ratio', 'roe', 'ev_ebitda', 'net_margin', 'debt_to_equity']
-            # Garante que as colunas existem
             cols_to_use = [c for c in features_cols if c in top_n.columns]
             
             features = top_n[cols_to_use].fillna(0)
@@ -583,13 +638,11 @@ class ConstrutorPortfolioAutoML:
             top_n['cluster'] = kmeans.labels_
             
             selecionados = []
-            # Pega o melhor de cada cluster
             for c in range(NUM_ATIVOS_PORTFOLIO):
                 cluster_assets = top_n[top_n['cluster'] == c]
                 if not cluster_assets.empty:
                     selecionados.append(cluster_assets['total_score'].idxmax())
             
-            # Preenche se faltar
             while len(selecionados) < NUM_ATIVOS_PORTFOLIO:
                 for cand in top_n.index:
                     if cand not in selecionados:
@@ -599,12 +652,12 @@ class ConstrutorPortfolioAutoML:
             self.ativos_selecionados = selecionados[:NUM_ATIVOS_PORTFOLIO]
             
         except Exception as e:
-            # print(f"Erro cluster: {e}")
             self.ativos_selecionados = self.scores_combinados.head(NUM_ATIVOS_PORTFOLIO).index.tolist()
 
     def otimizar_alocacao(self, risco):
         returns = pd.DataFrame({t: self.dados_por_ativo[t]['returns'] for t in self.ativos_selecionados}).dropna()
-        opt = OtimizadorPortfolioAvancado(returns)
+        # Passa a taxa livre de risco dinâmica do coletor macro
+        opt = OtimizadorPortfolioAvancado(returns, self.coletor.taxa_livre_risco)
         
         method = 'MinVolatility' if risco in ['CONSERVADOR', 'INTERMEDIÁRIO'] else 'MaxSharpe'
         pesos = opt.otimizar(method)
@@ -630,10 +683,15 @@ class ConstrutorPortfolioAutoML:
         ann_ret = port_ret.mean() * 252
         ann_vol = port_ret.std() * np.sqrt(252)
         
+        # Calcula Retorno Real (Descontado o IPCA)
+        ipca = coletor_macro.get_inflacao_real()
+        real_return = ((1 + ann_ret) / (1 + ipca)) - 1
+        
         self.metricas_portfolio = {
             'annual_return': ann_ret,
+            'real_return': real_return,
             'annual_volatility': ann_vol,
-            'sharpe_ratio': (ann_ret - TAXA_LIVRE_RISCO) / ann_vol if ann_vol > 0 else 0,
+            'sharpe_ratio': (ann_ret - self.coletor.taxa_livre_risco) / ann_vol if ann_vol > 0 else 0,
             'max_drawdown': dd.min(),
             'total_investment': self.valor_investimento
         }
@@ -642,7 +700,6 @@ class ConstrutorPortfolioAutoML:
         for t in self.ativos_selecionados:
             row = self.scores_combinados.loc[t]
             
-            # Formata valores (lidando com NaNs)
             def safe_fmt(val, is_pct=False):
                 if pd.isna(val): return "N/A"
                 return f"{val*100:.1f}%" if is_pct else f"{val:.1f}"
@@ -659,7 +716,7 @@ class ConstrutorPortfolioAutoML:
 # =============================================================================
 
 def configurar_pagina():
-    st.set_page_config(page_title="Portfolio Quant Pynvest", layout="wide", page_icon="📈")
+    st.set_page_config(page_title="Portfolio Quant Mercados", layout="wide", page_icon="📈")
     st.markdown("""
     <style>
         .main-header {font-size: 2rem; color: #111; text-align: center; border-bottom: 2px solid #ddd; padding: 10px;}
@@ -682,16 +739,13 @@ def aba_analise_individual():
             st.error("Ativo não encontrado ou sem dados suficientes.")
             return
             
-        # Layout de Métricas
         st.subheader("Indicadores de Valuation e Rentabilidade")
         col1, col2, col3, col4 = st.columns(4)
         
-        # Helper para formatação segura
         def fmt(val, pct=False):
             if val is None or pd.isna(val): return "N/A"
             return f"{val*100:.1f}%" if pct else f"{val:.2f}"
         
-        # Fund contém os dados processados com os nomes internos (ev_ebitda, roic, etc.)
         col1.metric("P/L", fmt(fund.get('pe_ratio')))
         col2.metric("EV/EBITDA", fmt(fund.get('ev_ebitda')))
         col3.metric("ROIC", fmt(fund.get('roic'), True))
@@ -720,12 +774,23 @@ def main():
         st.session_state.ativos_para_analise = ATIVOS_IBOVESPA
 
     configurar_pagina()
-    st.markdown('<h1 class="main-header">Sistema de Portfólios (Engine: Pynvest)</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">Sistema de Portfólios (Engine: Pynvest + Mercados)</h1>', unsafe_allow_html=True)
+    
+    # Sidebar com Status Macro
+    st.sidebar.header("📊 Macroeconomia (Mercados)")
+    if MERCADOS_AVAILABLE:
+        coletor_macro.atualizar_dados_macro()
+        st.sidebar.success("Conectado: BCB / IBGE")
+        st.sidebar.metric("Taxa Selic/CDI (a.a.)", f"{coletor_macro.get_taxa_livre_risco()*100:.2f}%")
+        st.sidebar.metric("IPCA 12m (IBGE)", f"{coletor_macro.get_inflacao_real()*100:.2f}%")
+    else:
+        st.sidebar.error("Biblioteca 'mercados' ausente.")
+        st.sidebar.metric("Taxa Fallback", f"{TAXA_LIVRE_RISCO_FALLBACK*100:.2f}%")
     
     tab1, tab2, tab3 = st.tabs(["Configuração & Perfil", "Construção de Portfólio", "Análise Individual"])
     
     with tab1:
-        st.info("Esta versão utiliza `pynvest` para extrair indicadores avançados (ROIC, EV/EBITDA, etc.) diretamente do Fundamentus.")
+        st.info("Esta versão integra a biblioteca `mercados` para dados macroeconômicos oficiais e `pynvest` para fundamentos.")
         with st.form("perfil_form"):
             st.subheader("Calibração")
             risco = st.select_slider("Tolerância ao Risco", options=["CONSERVADOR", "MODERADO", "ARROJADO"], value="MODERADO")
@@ -738,9 +803,9 @@ def main():
     with tab2:
         if 'profile' in st.session_state:
             st.write(f"Universo de Análise: {len(st.session_state.ativos_para_analise)} ativos.")
-            if st.button("🚀 Gerar Portfólio (Live Data)"):
+            if st.button("🚀 Gerar Portfólio"):
                 builder = ConstrutorPortfolioAutoML(st.session_state.profile['investment'])
-                progress = st.progress(0, "Iniciando Coleta Pynvest (pode levar 1-2 min)...")
+                progress = st.progress(0, "Iniciando Coleta Macro & Micro...")
                 
                 sucesso = builder.executar_pipeline(st.session_state.ativos_para_analise, st.session_state.profile, progress)
                 
@@ -752,10 +817,11 @@ def main():
             
             if st.session_state.builder:
                 b = st.session_state.builder
-                c1, c2, c3 = st.columns(3)
+                c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Retorno Esp. (a.a.)", f"{b.metricas_portfolio['annual_return']*100:.1f}%")
-                c2.metric("Volatilidade (a.a.)", f"{b.metricas_portfolio['annual_volatility']*100:.1f}%")
-                c3.metric("Sharpe", f"{b.metricas_portfolio['sharpe_ratio']:.2f}")
+                c2.metric("Retorno REAL (a.a.)", f"{b.metricas_portfolio['real_return']*100:.1f}%", help="Descontado IPCA")
+                c3.metric("Volatilidade (a.a.)", f"{b.metricas_portfolio['annual_volatility']*100:.1f}%")
+                c4.metric("Sharpe", f"{b.metricas_portfolio['sharpe_ratio']:.2f}")
                 
                 st.subheader("Alocação Sugerida")
                 df_alloc = pd.DataFrame([
@@ -767,7 +833,7 @@ def main():
                 fig = px.pie(df_alloc, values='Valor (R$)', names='Ativo', title="Distribuição do Portfólio")
                 st.plotly_chart(fig, use_container_width=True)
                 
-                st.subheader("Justificativas (Baseadas em Pynvest Data)")
+                st.subheader("Justificativas (Fundamentalistas)")
                 for t, just in b.justificativas_selecao.items():
                     st.text(f"{t}: {just}")
                 
