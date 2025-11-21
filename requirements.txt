@@ -6,7 +6,7 @@ mercados
 pynvest
 lxml
 git+https://github.com/rongardF/tvdatafeed.git
-
+hdbscan
 # Google Cloud Storage
 google-cloud-storage>=2.10.0
 gcsfs
