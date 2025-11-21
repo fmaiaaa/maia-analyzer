@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V8.7): Estritamente alinhado ao original (Textos Exaustivos).
 
-Versão: 9.14.0 (Enhanced Intro & Independent Fundamental Clustering)
+Versão: 9.15.0 (General Clustering Fix + Imputer + Didactic Intro)
 =============================================================================
 """
 
@@ -68,6 +68,7 @@ from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer # Adicionado para corrigir erro de NaN
 
 # --- 7. SPECIALIZED TIME SERIES & ECONOMETRICS ---
 from arch import arch_model
@@ -126,6 +127,12 @@ ATIVOS_POR_SETOR_IBOV = {
     'Telecomunicações': ['TIMS3.SA', 'VIVT3.SA'],
     'Utilidade Pública': ['AESB3.SA', 'AURE3.SA', 'BRAV3.SA', 'CMIG4.SA', 'CPLE6.SA', 'CPFE3.SA', 'EGIE3.SA', 'ELET3.SA', 'ELET6.SA', 'ENGI11.SA', 'EQTL3.SA', 'ISAE4.SA', 'RAIL3.SA', 'SBSP3.SA', 'TAEE11.SA']
 }
+
+# Dicionário Fallback Invertido (Ticker -> Setor)
+FALLBACK_SETORES = {}
+for setor, tickers in ATIVOS_POR_SETOR_IBOV.items():
+    for t in tickers:
+        FALLBACK_SETORES[t] = setor
 
 TODOS_ATIVOS = sorted(list(set(ATIVOS_IBOVESPA)))
 
@@ -416,23 +423,33 @@ class ColetorDadosLive(object):
         
         lista_fund = []
         total = len(simbolos)
-        progress_bar = st.progress(0, text="Iniciando coleta setorial...")
+        # Mensagem customizada para não confundir com o builder
+        status_text = st.empty()
+        progress_bar = st.progress(0)
 
         for i, simbolo in enumerate(simbolos):
-            progress_bar.progress(int((i / total) * 100), text=f"Coletando fundamentos: {simbolo}...")
+            status_text.text(f"Coletando fundamentos comparativos: {simbolo} ({i+1}/{total})...")
+            progress_bar.progress(int((i / total) * 100))
             try:
                 ticker_pynvest = simbolo.replace('.SA', '').lower()
                 df_fund_raw = self.pynvest_scrapper.coleta_indicadores_de_ativo(ticker_pynvest)
                 if df_fund_raw is not None and not df_fund_raw.empty:
                     fund_data = self._mapear_colunas_pynvest(df_fund_raw)
                     fund_data['Ticker'] = simbolo
+                    
+                    # Fallback de setor se pynvest falhar
+                    if 'sector' not in fund_data or fund_data['sector'] == 'Unknown':
+                        fund_data['sector'] = FALLBACK_SETORES.get(simbolo, 'Outros')
+                        
                     lista_fund.append(fund_data)
             except Exception:
                 pass
             # Pequeno delay para não bloquear o IP no fundamentus
-            time.sleep(0.2) 
+            time.sleep(0.1) 
         
+        status_text.empty()
         progress_bar.empty()
+        
         if lista_fund:
             return pd.DataFrame(lista_fund).set_index('Ticker')
         return pd.DataFrame()
@@ -444,23 +461,18 @@ class ColetorDadosLive(object):
         metricas_simples_list = []
 
         if not self.tv_ativo:
-            # Se tvDatafeed falhar na inicialização, tenta YFinance direto como fallback global
             st.warning("tvDatafeed indisponível. Tentando modo de fallback total via YFinance...")
         
-        # --- CONTROLE DE FAIL-FAST ---
         consecutive_failures = 0
-        FAILURE_THRESHOLD = 3 # Se 3 ativos seguidos falharem na coleta de preço
-        global_static_mode = False # Ativa modo 100% fundamentalista para o restante
+        FAILURE_THRESHOLD = 3 
+        global_static_mode = False 
         
-        # --- LOOP DE COLETA SEM RETRY ---
         for simbolo in simbolos:
             df_tecnicos = pd.DataFrame()
             usando_fallback_estatico = False 
             tem_dados = False
             
-            # Se já entrou em modo global estático, pula tentativa de download de preços
             if not global_static_mode:
-                # --- TENTATIVA 1: TVDATAFEED ---
                 if self.tv_ativo:
                     simbolo_tv = simbolo.replace('.SA', '')
                     try:
@@ -473,13 +485,11 @@ class ColetorDadosLive(object):
                     except Exception:
                         pass
                 
-                # Validação TV
                 if df_tecnicos is not None and not df_tecnicos.empty:
                     cols_lower = [c.lower() for c in df_tecnicos.columns]
                     if 'close' in cols_lower:
                         tem_dados = True
                 
-                # --- TENTATIVA 2: YFINANCE (BACKUP) ---
                 if not tem_dados:
                     try:
                         session = requests.Session()
@@ -494,24 +504,19 @@ class ColetorDadosLive(object):
                     if df_tecnicos is not None and not df_tecnicos.empty and 'Close' in df_tecnicos.columns:
                         tem_dados = True
 
-                # --- VERIFICAÇÃO DE FAIL-FAST ---
                 if not tem_dados:
                     consecutive_failures += 1
                     if consecutive_failures >= FAILURE_THRESHOLD:
                         global_static_mode = True
-                        st.warning(f"⚠️ Falha na coleta de preços para {consecutive_failures} ativos consecutivos. Ativando MODO FUNDAMENTALISTA GLOBAL (sem histórico de preços) para o restante da lista para acelerar a execução.")
+                        st.warning(f"⚠️ Falha na coleta de preços para {consecutive_failures} ativos consecutivos. Ativando MODO FUNDAMENTALISTA GLOBAL (sem histórico de preços) para o restante da lista.")
                 else:
-                    consecutive_failures = 0 # Reseta contador se teve sucesso
+                    consecutive_failures = 0 
             
-            # --- TENTATIVA 3: MODO ESTÁTICO (FALLBACK FINAL OU MODO GLOBAL) ---
             if global_static_mode or not tem_dados:
                 usando_fallback_estatico = True
-                # Cria dataframe vazio estruturado para evitar erros downstream
                 df_tecnicos = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'rsi_14', 'macd', 'vol_20d'])
-                # Adiciona uma linha de NaNs com data de hoje para permitir acesso a .iloc[-1]
                 df_tecnicos.loc[pd.Timestamp.today()] = [np.nan] * len(df_tecnicos.columns)
             else:
-                # Normalização de Colunas (se houver dados reais)
                 rename_map = {
                     'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
                 }
@@ -526,14 +531,12 @@ class ColetorDadosLive(object):
                 if 'Close' in df_tecnicos.columns:
                     df_tecnicos = df_tecnicos.dropna(subset=['Close'])
                     if not df_tecnicos.empty:
-                        # Enriquecimento Técnico (RSI, MACD...)
                         df_tecnicos = CalculadoraTecnica.enriquecer_dados_tecnicos(df_tecnicos)
                     else:
                        usando_fallback_estatico = True 
                 else:
                     usando_fallback_estatico = True
 
-            # Coleta de Fundamentos (Pynvest)
             fund_data = {}
             if self.pynvest_ativo:
                 try:
@@ -546,11 +549,12 @@ class ColetorDadosLive(object):
                 except Exception:
                     fund_data = {'sector': 'Unknown', 'industry': 'Unknown'}
             
-            # Se estiver no modo estático e não tiver fundamentos, aí sim desistimos
-            if usando_fallback_estatico and (not fund_data or fund_data.get('sector') == 'Unknown'):
-                continue # Ativo fantasma (sem preço e sem fundamento)
+            if 'sector' not in fund_data or fund_data['sector'] == 'Unknown':
+                 fund_data['sector'] = FALLBACK_SETORES.get(simbolo, 'Outros')
 
-            # Métricas de Risco/Retorno (Calculadas apenas se tiver preço)
+            if usando_fallback_estatico and (not fund_data or fund_data.get('pe_ratio') is None):
+                continue 
+
             if not usando_fallback_estatico and 'returns' in df_tecnicos.columns:
                 retornos = df_tecnicos['returns'].dropna()
                 if len(retornos) > 30:
@@ -562,9 +566,8 @@ class ColetorDadosLive(object):
                     dd = (cum_prod - peak) / peak
                     max_dd = dd.min()
                 else:
-                    vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0 # Defaults conservadores
+                    vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0 
             else:
-                # Valores neutros para modo estático
                 vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0 
 
             fund_data.update({
@@ -584,9 +587,8 @@ class ColetorDadosLive(object):
             })
             
             if not global_static_mode:
-                time.sleep(0.1) # Pequeno delay apenas se estiver coletando ativamente
+                time.sleep(0.1) 
 
-        # CRIAÇÃO DOS DATAFRAMES (ANTES DO CHECK DE MÍNIMO)
         self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas)
         if not self.dados_fundamentalistas.empty:
              self.dados_fundamentalistas = self.dados_fundamentalistas.set_index('Ticker')
@@ -600,7 +602,6 @@ class ColetorDadosLive(object):
         for simbolo in self.ativos_sucesso:
             if simbolo in self.dados_por_ativo:
                 df_local = self.dados_por_ativo[simbolo]
-                # Verifica se o dataframe tem linhas antes de tentar acessar iloc
                 if not df_local.empty:
                     last_idx = df_local.index[-1]
                     if simbolo in self.dados_fundamentalistas.index:
@@ -608,7 +609,6 @@ class ColetorDadosLive(object):
                             if k not in df_local.columns:
                                 df_local.loc[last_idx, k] = v
 
-        # CHECK DE MÍNIMO SÓ SE SOLICITADO (EVITA ERRO NA ANÁLISE INDIVIDUAL)
         if check_min_ativos and len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO: 
              return False
 
@@ -616,7 +616,6 @@ class ColetorDadosLive(object):
 
     def coletar_ativo_unico_gcs(self, ativo_selecionado: str):
         """Adaptado para usar a coleta Live, mas retornando formato compatível para análise individual."""
-        # Chama com check_min_ativos=False para permitir 1 único ativo
         self.coletar_e_processar_dados([ativo_selecionado], check_min_ativos=False)
         
         if ativo_selecionado in self.dados_por_ativo:
@@ -625,7 +624,6 @@ class ColetorDadosLive(object):
              if ativo_selecionado in self.dados_fundamentalistas.index:
                  fund_row = self.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
              
-             # Mock de metadados de ML para compatibilidade com visualização
              df_ml_meta = pd.DataFrame(index=pd.MultiIndex.from_tuples([(ativo_selecionado, 'curto_prazo')], names=['ticker', 'target_name']))
              df_ml_meta['target_days'] = 5
              
@@ -725,7 +723,6 @@ class ConstrutorPortfolioAutoML:
         df_fund = self.dados_fundamentalistas.copy()
         if 'sector' not in df_fund.columns or 'pe_ratio' not in df_fund.columns: return
         
-        # Converte forçadamente para numérico antes do groupby
         cols_numeric = ['pe_ratio', 'pb_ratio']
         for col in cols_numeric:
              if col in df_fund.columns:
@@ -748,7 +745,7 @@ class ConstrutorPortfolioAutoML:
         ativos_com_dados = [s for s in self.ativos_sucesso if s in self.dados_por_ativo]
         clustering_df = self.dados_fundamentalistas[['pe_ratio', 'pb_ratio', 'div_yield', 'roe']].join(
             self.metricas_performance[['sharpe', 'volatilidade_anual']], how='inner',
-            lsuffix='_fund', rsuffix='_perf' # Adicionado sufixo para evitar erro de overlap aqui também
+            lsuffix='_fund', rsuffix='_perf' 
         ).fillna(0)
         
         if len(clustering_df) >= 5:
@@ -765,17 +762,15 @@ class ConstrutorPortfolioAutoML:
         features_ml = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'sma_200',
             'pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster']
         
-        total_ativos = len(ativos_com_dados)
         for i, ativo in enumerate(ativos_com_dados):
             try:
-                if progress_callback: progress_callback.progress(50 + int((i/total_ativos)*20), text=f"Treinando RF Pipeline: {ativo}...")
+                if progress_callback: progress_callback.progress(50 + int((i/len(ativos_com_dados))*20), text=f"Treinando RF Pipeline: {ativo}...")
                 df = self.dados_por_ativo[ativo].copy()
                 if ativo in self.dados_fundamentalistas.index:
                     fund_data = self.dados_fundamentalistas.loc[ativo].to_dict()
                     for col in [f for f in features_ml if f not in df.columns]:
                         if col in fund_data: df[col] = fund_data[col]
                 
-                # Verificação de Modo Estático (Sem histórico suficiente para ML)
                 if df.empty or len(df) < 60 or 'Close' not in df.columns or df['Close'].isnull().all():
                      self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.5, 'model_name': 'Modo Estático (Sem Preço)'}
                      continue
@@ -792,12 +787,11 @@ class ConstrutorPortfolioAutoML:
                 y = df_model['Future_Direction'].iloc[:-dias_lookback_ml]
                 if 'Cluster' in X.columns: X['Cluster'] = X['Cluster'].astype(str)
                 
-                numeric_cols = X.select_dtypes(include=np.number).columns.tolist()
                 categorical_cols = ['Cluster'] if 'Cluster' in X.columns else []
+                numeric_cols = [c for c in X.columns if c not in categorical_cols]
                 
                 preprocessor = ColumnTransformer(transformers=[
-                        ('num', StandardScaler(), [f for f in numeric_cols if 'rel_sector' not in f]),
-                        ('rel', 'passthrough', [f for f in numeric_cols if 'rel_sector' in f]),
+                        ('num', StandardScaler(), numeric_cols),
                         ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_cols)
                     ], remainder='passthrough')
                 
@@ -846,7 +840,6 @@ class ConstrutorPortfolioAutoML:
         w_fund_final = W_REMAINING * share_fund
         self.pesos_atuais = {'Performance': W_PERF_GLOBAL, 'Fundamentos': w_fund_final, 'Técnicos': w_tech_final, 'ML': W_ML_GLOBAL_BASE}
         
-        # JOIN SEGURO (RESOLVE O ERRO DE OVERLAP)
         cols_to_drop = [col for col in self.dados_fundamentalistas.columns if col in self.metricas_performance.columns]
         df_fund_clean = self.dados_fundamentalistas.drop(columns=cols_to_drop, errors='ignore')
         combined = self.metricas_performance.join(df_fund_clean, how='inner').copy()
@@ -859,7 +852,6 @@ class ConstrutorPortfolioAutoML:
                     combined.loc[symbol, 'macd_current'] = df['macd'].iloc[-1]
                     combined.loc[symbol, 'vol_current'] = df['vol_20d'].iloc[-1]
                 else:
-                    # Fallback para valores neutros se estiver em modo estático
                     combined.loc[symbol, 'rsi_current'] = 50
                     combined.loc[symbol, 'macd_current'] = 0
                     combined.loc[symbol, 'vol_current'] = 0
@@ -885,9 +877,7 @@ class ConstrutorPortfolioAutoML:
         scores['ml_score_weighted'] = s_prob * (W_ML_GLOBAL_BASE * ml_weight_factor.fillna(0))
         
         scores['total_score'] = scores.sum(axis=1)
-        
         self.scores_combinados = scores.join(combined).sort_values('total_score', ascending=False)
-        
         self.realizar_clusterizacao_final()
         final_selection = []
         if not self.scores_combinados.empty and 'Final_Cluster' in self.scores_combinados.columns:
@@ -899,7 +889,6 @@ class ConstrutorPortfolioAutoML:
         if len(final_selection) < NUM_ATIVOS_PORTFOLIO:
             others = [x for x in self.scores_combinados.index if x not in final_selection]
             final_selection.extend(others[:NUM_ATIVOS_PORTFOLIO - len(final_selection)])
-            
         self.ativos_selecionados = final_selection[:NUM_ATIVOS_PORTFOLIO]
         return self.ativos_selecionados
     
@@ -907,7 +896,6 @@ class ConstrutorPortfolioAutoML:
         if not self.ativos_selecionados or len(self.ativos_selecionados) < 1:
             self.metodo_alocacao_atual = "ERRO: Ativos Insuficientes"; return {}
         
-        # Verifica se há ativos suficientes com retorno para otimização de Markowitz
         available_assets_returns = {}
         ativos_sem_dados = []
         
@@ -919,12 +907,10 @@ class ConstrutorPortfolioAutoML:
         
         final_returns_df = pd.DataFrame(available_assets_returns).dropna()
         
-        # Se houver ativos sem dados de preço (Modo Estático) ou poucos dados, usa heurística
         if final_returns_df.shape[0] < 50 or len(ativos_sem_dados) > 0:
             if len(ativos_sem_dados) > 0:
                 st.warning(f"⚠️ Alguns ativos ({', '.join(ativos_sem_dados)}) não possuem histórico de preços. A otimização de variância (Markowitz) será substituída por alocação baseada em Score/Pesos Iguais.")
             
-            # Alocação Proporcional ao Score (Fallback inteligente)
             scores = self.scores_combinados.loc[self.ativos_selecionados, 'total_score']
             total_score = scores.sum()
             if total_score > 0:
@@ -958,8 +944,6 @@ class ConstrutorPortfolioAutoML:
     def calcular_metricas_portfolio(self):
         if not self.alocacao_portfolio: return {}
         weights_dict = {s: data['weight'] for s, data in self.alocacao_portfolio.items()}
-        
-        # Filtra apenas ativos com retorno para o cálculo do portfólio histórico
         available_returns = {s: self.dados_por_ativo[s]['returns'] for s in weights_dict.keys() if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s] and not self.dados_por_ativo[s]['returns'].dropna().empty}
         
         if not available_returns:
@@ -971,13 +955,11 @@ class ConstrutorPortfolioAutoML:
         returns_df = pd.DataFrame(available_returns).dropna()
         if returns_df.empty: return {}
         
-        # Rebalanceia pesos apenas dos ativos com dados para métricas históricas
         valid_assets = returns_df.columns
         valid_weights = np.array([weights_dict[s] for s in valid_assets])
         if valid_weights.sum() > 0:
             valid_weights = valid_weights / valid_weights.sum()
             portfolio_returns = (returns_df * valid_weights).sum(axis=1)
-            
             metrics = {
                 'annual_return': portfolio_returns.mean() * 252,
                 'annual_volatility': portfolio_returns.std() * np.sqrt(252),
@@ -995,17 +977,13 @@ class ConstrutorPortfolioAutoML:
         self.justificativas_selecao = {}
         for simbolo in self.ativos_selecionados:
             justification = []
-            
             is_static = False
             if simbolo in self.dados_fundamentalistas.index:
                  is_static = self.dados_fundamentalistas.loc[simbolo].get('static_mode', False)
-
-            if is_static:
-                justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
+            if is_static: justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
             else:
                 perf = self.metricas_performance.loc[simbolo] if simbolo in self.metricas_performance.index else pd.Series({})
                 justification.append(f"Perf: Sharpe {perf.get('sharpe', np.nan):.2f}, Ret {perf.get('retorno_anual', np.nan)*100:.1f}%")
-                
             ml_prob = self.predicoes_ml.get(simbolo, {}).get('predicted_proba_up', 0.5)
             ml_auc = self.predicoes_ml.get(simbolo, {}).get('auc_roc_score', 0.5)
             justification.append(f"ML: Prob {ml_prob*100:.1f}% (Conf {ml_auc:.2f})")
@@ -1040,57 +1018,58 @@ class ConstrutorPortfolioAutoML:
 
 class AnalisadorIndividualAtivos:
     @staticmethod
-    def realizar_clusterizacao_fundamentalista_pura(coletor: ColetorDadosLive, ativo_alvo: str) -> tuple[pd.DataFrame | None, int | None]:
+    def realizar_clusterizacao_fundamentalista_geral(coletor: ColetorDadosLive, ativo_alvo: str) -> tuple[pd.DataFrame | None, int | None]:
         """
         Realiza clusterização (PCA + KMeans) usando APENAS dados fundamentalistas
-        de todos os ativos do mesmo SETOR do ativo alvo.
+        de TODOS os ativos do IBOVESPA (General Similarity), não apenas do setor.
         """
         
-        # 1. Identifica o setor do ativo alvo
-        setor_alvo = None
-        for setor, ativos in ATIVOS_POR_SETOR_IBOV.items():
-            if ativo_alvo in ativos:
-                setor_alvo = setor
-                break
+        # Usa um subset menor de ativos (os da lista do Ibovespa) para não demorar muito
+        # Mas compara com todos eles, independente de setor
+        ativos_comparacao = ATIVOS_IBOVESPA 
         
-        if not setor_alvo:
-            return None, None # Ativo não mapeado em setor
+        # Coleta dados de TODOS os ativos (apenas fundamentos)
+        df_fund_geral = coletor.coletar_fundamentos_em_lote(ativos_comparacao)
         
-        # 2. Coleta dados de TODOS os ativos desse setor (apenas fundamentos)
-        ativos_do_setor = ATIVOS_POR_SETOR_IBOV[setor_alvo]
-        df_fund_setor = coletor.coletar_fundamentos_em_lote(ativos_do_setor)
-        
-        if df_fund_setor.empty:
+        if df_fund_geral.empty:
             return None, None
             
         # 3. Prepara os dados para ML (Limpeza e Normalização)
-        # Colunas numéricas de interesse (exclui strings e metadados)
         cols_interesse = [
             'pe_ratio', 'pb_ratio', 'roe', 'roic', 'net_margin', 
             'div_yield', 'debt_to_equity', 'current_ratio', 
             'revenue_growth', 'ev_ebitda', 'operating_margin'
         ]
         
-        df_model = df_fund_setor[cols_interesse].copy()
+        # Garante que as colunas existem
+        cols_existentes = [c for c in cols_interesse if c in df_fund_geral.columns]
+        df_model = df_fund_geral[cols_existentes].copy()
         
-        # Converte tudo para numérico, forçando erros a NaN
+        # Converte tudo para numérico
         for col in df_model.columns:
             df_model[col] = pd.to_numeric(df_model[col], errors='coerce')
             
-        df_model = df_model.fillna(df_model.mean()) # Preenche falhas com a média do setor
+        # Limpeza de colunas vazias
+        df_model = df_model.dropna(axis=1, how='all')
         
-        if len(df_model) < 3: # Precisa de no mínimo 3 ativos para clusterizar
+        if df_model.empty or len(df_model) < 5:
              return None, None
 
-        # 4. Pipeline PCA + KMeans
+        # IMPUTATION ROBUSTA (Preenche NaNs com a Mediana Global)
+        imputer = SimpleImputer(strategy='median')
+        try:
+            dados_imputed = imputer.fit_transform(df_model)
+        except ValueError:
+            return None, None # Falha se ainda houver erros críticos
+
+        # Pipeline PCA + KMeans
         scaler = StandardScaler()
-        dados_normalizados = scaler.fit_transform(df_model)
+        dados_normalizados = scaler.fit_transform(dados_imputed)
         
-        pca = PCA(n_components=min(2, len(df_model.columns)))
+        pca = PCA(n_components=min(2, dados_normalizados.shape[1]))
         componentes_pca = pca.fit_transform(dados_normalizados)
         
-        # Define K ótimo (heurística simples: raiz quadrada de N/2, max 4)
-        n_clusters = min(4, max(2, int(np.sqrt(len(df_model) / 2))))
+        n_clusters = min(5, max(3, int(np.sqrt(len(df_model) / 2))))
         
         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init='auto')
         clusters = kmeans.fit_predict(componentes_pca)
@@ -1132,93 +1111,77 @@ def configurar_pagina():
     """, unsafe_allow_html=True)
 
 def aba_introducao():
-    """Aba 1: Introdução Metodológica Extensiva (v8.7 Original + Ajuste V9.4 Logic)"""
+    """Aba 1: Introdução Metodológica Didática e Exaustiva (Estilo Manual Completo)"""
     
-    st.markdown("## 📚 Metodologia Quantitativa e Manual do Sistema")
+    st.markdown("## 📚 Manual Completo e Metodologia do Sistema")
     
     st.markdown("""
     <div class="info-box">
-    <h3>🎯 O Que é o Sistema de Portfólios Adaptativos?</h3>
-    <p>Este é um <b>Robo-Advisor Híbrido</b> que combina matemática financeira clássica (Markowitz) com Inteligência Artificial moderna (Machine Learning) para construir carteiras de investimento otimizadas especificamente para o mercado brasileiro (B3).</p>
-    <p>O sistema opera em tempo real, coletando dados "frescos" a cada execução, garantindo que a análise reflita o momento atual do mercado, seja ele de alta (Bull Market) ou baixa (Bear Market).</p>
+    <h3>🎯 O Que é este Sistema?</h3>
+    <p>Este é um <b>Robo-Advisor Quantitativo Híbrido</b> projetado para o mercado brasileiro (B3). Ele não "acha" nada; ele calcula.</p>
+    <p><b>Objetivo Principal:</b> Construir uma carteira de investimentos otimizada (geralmente 5 ativos) que busque o maior retorno possível para o menor risco possível, adaptando-se ao seu perfil de investidor.</p>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("---")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown('### 1. O "Motor" de Decisão (Lógica Dupla)')
-        st.write("O sistema possui dois modos de operação que são ativados automaticamente dependendo da disponibilidade de dados:")
-        
-        st.markdown("#### A) Modo Tradicional (Híbrido)")
-        st.write("Ativado quando o sistema consegue baixar tanto os preços históricos quanto os balanços das empresas. É o cenário ideal.")
-        
-        st.markdown("""
-        <table style="width:100%; border-collapse: collapse; font-size: 0.9em;">
-          <tr style="background-color: #f2f2f2;">
-            <th style="padding: 8px; border: 1px solid #ddd;">Pilar de Análise</th>
-            <th style="padding: 8px; border: 1px solid #ddd;">Peso no Score Final</th>
-            <th style="padding: 8px; border: 1px solid #ddd;">O que é analisado?</th>
-          </tr>
-          <tr>
-            <td style="padding: 8px; border: 1px solid #ddd;"><b>Performance</b></td>
-            <td style="padding: 8px; border: 1px solid #ddd;">20% (Fixo)</td>
-            <td style="padding: 8px; border: 1px solid #ddd;">Índice Sharpe e Retorno Histórico Recente.</td>
-          </tr>
-          <tr>
-            <td style="padding: 8px; border: 1px solid #ddd;"><b>Machine Learning</b></td>
-            <td style="padding: 8px; border: 1px solid #ddd;">20% (Fixo)</td>
-            <td style="padding: 8px; border: 1px solid #ddd;">Probabilidade estatística de alta calculada por um modelo <i>Random Forest</i>.</td>
-          </tr>
-          <tr>
-            <td style="padding: 8px; border: 1px solid #ddd;"><b>Fundamentos</b></td>
-            <td style="padding: 8px; border: 1px solid #ddd;">Adaptativo (30-70%)</td>
-            <td style="padding: 8px; border: 1px solid #ddd;">Saúde financeira: P/L, ROE, Margens, Dívida.</td>
-          </tr>
-          <tr>
-            <td style="padding: 8px; border: 1px solid #ddd;"><b>Técnicos</b></td>
-            <td style="padding: 8px; border: 1px solid #ddd;">Adaptativo (30-70%)</td>
-            <td style="padding: 8px; border: 1px solid #ddd;">Momentum de curto prazo: RSI, MACD, Volatilidade.</td>
-          </tr>
-        </table>
-        <br>
-        """, unsafe_allow_html=True)
-        
-        st.info("💡 **Nota:** Se você selecionar 'Curto Prazo', o peso Técnico sobe para 70%. Se selecionar 'Longo Prazo', o peso Fundamentalista sobe para 70%.")
+    st.subheader("1. O 'Cérebro' do Sistema (Como ele decide?)")
+    st.write("O sistema utiliza uma abordagem de **Decisão Multicritério**. Isso significa que ele não olha apenas uma coisa (como P/L ou Gráfico), mas sim uma combinação de 4 pilares fundamentais. Dependendo da disponibilidade de dados na internet, ele alterna automaticamente entre dois modos de operação:")
 
-    with col2:
-        st.markdown("#### B) Modo Fallback (Segurança Fundamentalista)")
-        st.write("Ativado automaticamente se as APIs de preço (Yahoo/TradingView) falharem ou estiverem bloqueadas. O sistema não trava; ele muda a estratégia.")
-        
+    with st.expander("🧠 MODO A: Tradicional (Análise Completa Híbrida) - O Ideal"):
         st.markdown("""
-        <div style="background-color: #fff3cd; padding: 15px; border-radius: 5px; border: 1px solid #ffeeba;">
-        ⚠️ <b>Atenção:</b> Neste modo, o sistema ignora gráficos e volatilidade.
-        <br><br>
-        <b>Nova Composição do Score:</b>
-        <ul>
-            <li><b>Fundamentos (Qualidade & Valor):</b> 100% do Peso</li>
-            <li><b>Técnico & ML:</b> 0% (Dados indisponíveis)</li>
-        </ul>
-        <p>A alocação final deixa de ser por "Otimização de Variância" (Markowitz) e passa a ser proporcional à qualidade fundamentalista da empresa (Score Ponderado).</p>
-        </div>
-        """, unsafe_allow_html=True)
+        Este é o modo padrão quando o sistema consegue acessar **todos** os dados (Preços Históricos + Balanços das Empresas).
+        
+        Ele pondera a decisão baseada em 4 fatores, cada um com um peso específico na nota final (Score):
+
+        | Pilar | Peso | O que ele analisa? | Por que importa? |
+        | :--- | :--- | :--- | :--- |
+        | **1. Performance** | **20% (Fixo)** | **Índice Sharpe** e **Retorno Anual**. | Mostra se o ativo "pagou bem" pelo risco que ofereceu no passado recente. |
+        | **2. Machine Learning** | **20% (Fixo)** | **Probabilidade Estatística**. | Um modelo de Inteligência Artificial (*Random Forest*) treinado na hora tenta prever se o preço vai subir nos próximos dias. |
+        | **3. Fundamentos** | **30% a 70%*** | **Saúde Financeira** (P/L, ROE, Margens). | Analisa se a empresa é "barata" e "lucrativa". *O peso aumenta se você for investidor de Longo Prazo.* |
+        | **4. Técnicos** | **30% a 70%*** | **Momentum** (RSI, MACD, Volatilidade). | Analisa se é um bom "momento" de compra (timing). *O peso aumenta se você for investidor de Curto Prazo.* |
+        
+        *Os pesos de Fundamentos e Técnicos variam dinamicamente conforme o seu perfil de horizonte temporal.*
+        """)
+
+    with st.expander("🛡️ MODO B: Fallback (Segurança Fundamentalista) - Quando a Internet Falha"):
+        st.markdown("""
+        A coleta de dados financeiros gratuitos em tempo real é instável. O Yahoo Finance ou TradingView podem bloquear conexões ou falhar.
+        
+        **O que acontece se falhar?** O sistema NÃO trava. Ele ativa o **Modo de Segurança (Fallback)**.
+        
+        Neste modo:
+        1.  **Ignora-se Preço:** Como não temos cotações, ignoramos gráficos, volatilidade e Machine Learning (que depende de preço).
+        2.  **Foco Total em Qualidade:** A nota (Score) do ativo passa a ser **100% baseada nos Fundamentos** (Balanço Patrimonial, DRE, etc.), que são obtidos de uma fonte diferente e mais estável.
+        3.  **Alocação Ajustada:** Em vez de usar cálculos complexos de risco (Markowitz) que exigem preço, o sistema distribui o dinheiro proporcionalmente à "nota de qualidade" da empresa.
+        
+        *É como pilotar um avião por instrumentos quando a visibilidade externa é zero. Você confia nos dados internos (fundamentos) para chegar ao destino.*
+        """)
 
     st.markdown("---")
-    
-    st.markdown('### 2. O Processo de Seleção (Funil de Investimento)')
-    st.write("O sistema segue um rigoroso processo de filtragem para transformar ~90 ativos do Ibovespa em uma carteira de 5 vencedores.")
-    
-    st.markdown("""
-    1.  **Coleta de Dados:** Varredura em tempo real de preços e balanços.
-    2.  **Cálculo de Fatores:** Transformação dos dados brutos em indicadores (ex: transformar preço em RSI).
-    3.  **Ranqueamento (Scoring):** Cada ativo recebe uma nota de 0 a 100 baseada nos pilares acima.
-    4.  **Clusterização (Diversificação Inteligente):**
-        * O sistema agrupa os ativos "parecidos" matematicamente (Clusters).
-        * *Regra de Ouro:* O sistema é forçado a escolher o melhor ativo de cada grupo diferente. Isso evita que você compre 5 bancos ou 5 elétricas, garantindo diversificação estatística.
-    5.  **Otimização de Pesos:** Define quanto dinheiro colocar em cada um (10% a 30%) para minimizar o risco global.
-    """)
+    st.subheader("2. O Processo Passo-a-Passo (O Funil)")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown("**1️⃣ Coleta (Data Mining)**")
+        st.caption("O sistema varre a internet em busca de dados de ~90 ações do Ibovespa.")
+    with col2:
+        st.markdown("**2️⃣ Filtragem & Scoring**")
+        st.caption("Cada empresa recebe uma nota de 0 a 100. As ruins são descartadas.")
+    with col3:
+        st.markdown("**3️⃣ Otimização Final**")
+        st.caption("Os sobreviventes são combinados matematicamente para formar a carteira.")
+
+    with st.expander("🔍 Detalhe: A Clusterização (O Segredo da Diversificação)"):
+        st.write("""
+        Muitos investidores erram ao comprar 5 ações "boas" que são todas iguais (ex: 5 bancos). Se os juros mudam, todos caem juntos.
+        
+        Este sistema usa um algoritmo de IA não-supervisionada (**K-Means Clustering**) para agrupar as ações em "famílias" matemáticas.
+        
+        * **Passo 1:** O sistema olha para todas as ações e as separa em grupos (Clusters) baseados em comportamento similar.
+        * **Passo 2:** Ao montar a carteira, ele é **obrigado** a escolher apenas o melhor ativo de cada grupo diferente.
+        
+        **Resultado:** Você nunca terá uma carteira concentrada em um único risco. Você terá automaticamente uma carteira diversificada estatisticamente.
+        """)
 
 def aba_selecao_ativos():
     """Aba 2: Seleção de Ativos (Design Original Restaurado)"""
@@ -1705,7 +1668,7 @@ def aba_construtor_portfolio():
                     """, unsafe_allow_html=True)
 
 def aba_analise_individual():
-    """Aba 4: Análise Individual de Ativos (Autônoma e Setorial)"""
+    """Aba 4: Análise Individual de Ativos (Autônoma e Geral)"""
     
     st.markdown("## 🔍 Análise de Fatores por Ticker")
     
@@ -1757,7 +1720,7 @@ def aba_analise_individual():
                 st.warning(f"⚠️ **MODO ESTÁTICO:** Preços indisponíveis. Exibindo apenas Análise Fundamentalista.")
 
             tab1, tab2, tab3, tab4, tab5 = st.tabs([
-                "📊 Visão Geral", "💼 Fundamentos", "🔧 Análise Técnica", "🤖 Machine Learning", "🔬 Clusterização Setorial"
+                "📊 Visão Geral", "💼 Fundamentos", "🔧 Análise Técnica", "🤖 Machine Learning", "🔬 Clusterização Geral"
             ])
             
             # Abas 1-4: Lógica Padrão de Exibição (igual à versão anterior)
@@ -1774,7 +1737,13 @@ def aba_analise_individual():
                     col5.metric("Volatilidade", f"{vol_anual:.2f}%")
                 else:
                     col1.metric("Preço", "N/A", "N/A"); col2.metric("Volume Médio", "N/A"); col5.metric("Volatilidade", "N/A")
-                col3.metric("Setor", features_fund.get('sector', 'N/A'))
+                
+                # Fallback para Setor se pynvest falhar
+                setor = features_fund.get('sector')
+                if setor == 'Unknown' or setor is None:
+                     setor = FALLBACK_SETORES.get(ativo_selecionado, 'N/A')
+
+                col3.metric("Setor", setor)
                 col4.metric("Indústria", features_fund.get('industry', 'N/A'))
                 
                 if not static_mode and not df_completo.empty and 'Open' in df_completo.columns:
@@ -1816,45 +1785,42 @@ def aba_analise_individual():
                 else: st.warning("Machine Learning requer dados históricos.")
 
             with tab5: 
-                st.markdown("### 🔬 Clusterização Setorial (Comparável)")
+                st.markdown("### 🔬 Clusterização Geral (Ibovespa)")
                 
-                # LÓGICA NOVA DE CLUSTERIZAÇÃO INDEPENDENTE
-                # 1. Identifica setor
-                setor = features_fund.get('sector')
-                if setor and setor != 'Unknown':
-                    st.info(f"Analisando similaridade dentro do setor: **{setor}**")
+                st.info(f"Analisando similaridade do **{ativo_selecionado.replace('.SA', '')}** com **TODOS** os ativos do Ibovespa (Baseado apenas em Fundamentos).")
+                
+                # 2. Coleta e Clusteriza (Apenas Fundamentos - Lista Global)
+                resultado_cluster, n_clusters = AnalisadorIndividualAtivos.realizar_clusterizacao_fundamentalista_geral(coletor, ativo_selecionado)
+                
+                if resultado_cluster is not None:
+                    st.success(f"Identificados {n_clusters} grupos (clusters) de qualidade fundamentalista.")
                     
-                    # 2. Coleta e Clusteriza (Apenas Fundamentos)
-                    resultado_cluster, n_clusters = AnalisadorIndividualAtivos.realizar_clusterizacao_fundamentalista_pura(coletor, ativo_selecionado)
+                    # Visualização
+                    fig_pca = px.scatter(
+                        resultado_cluster, x='PC1', y='PC2', 
+                        color=resultado_cluster['Cluster'].astype(str),
+                        hover_name=resultado_cluster.index.str.replace('.SA', ''), 
+                        title=f'Mapa de Similaridade Fundamentalista (Global)',
+                        color_discrete_sequence=obter_template_grafico()['colorway']
+                    )
+                    fig_pca.update_layout(**obter_template_grafico(), height=500)
+                    st.plotly_chart(fig_pca, use_container_width=True)
                     
-                    if resultado_cluster is not None:
-                        st.success(f"Identificados {n_clusters} grupos (clusters) distintos baseados em fundamentos (P/L, ROE, Margens, etc).")
-                        
-                        # Visualização
-                        fig_pca = px.scatter(
-                            resultado_cluster, x='PC1', y='PC2', 
-                            color=resultado_cluster['Cluster'].astype(str),
-                            hover_name=resultado_cluster.index.str.replace('.SA', ''), 
-                            title=f'Mapa de Similaridade Fundamentalista - Setor {setor}',
-                            color_discrete_sequence=obter_template_grafico()['colorway']
-                        )
-                        fig_pca.update_layout(**obter_template_grafico(), height=500)
-                        st.plotly_chart(fig_pca, use_container_width=True)
-                        
-                        # Identifica pares
+                    # Identifica pares
+                    if ativo_selecionado in resultado_cluster.index:
                         cluster_ativo = resultado_cluster.loc[ativo_selecionado, 'Cluster']
                         pares = resultado_cluster[resultado_cluster['Cluster'] == cluster_ativo].index.tolist()
                         pares = [p.replace('.SA', '') for p in pares if p != ativo_selecionado]
                         
-                        st.markdown(f"**{ativo_selecionado.replace('.SA', '')}** está no **Cluster {cluster_ativo}**. Ativos fundamentalmente similares:")
+                        st.markdown(f"**{ativo_selecionado.replace('.SA', '')}** está no **Cluster {cluster_ativo}**. Outras empresas com perfil financeiro similar (Independente do Setor):")
                         if pares:
                             st.write(", ".join(pares))
                         else:
-                            st.write("Este ativo possui características únicas neste setor (Outlier).")
+                            st.write("Este ativo possui características únicas (Outlier).")
                     else:
-                        st.warning("Dados insuficientes no setor para gerar clusters confiáveis.")
+                        st.warning("Ativo não encontrado no mapa de clusters (provavelmente sem dados suficientes).")
                 else:
-                    st.warning("Setor desconhecido. Não é possível realizar a comparação setorial.")
+                    st.warning("Dados insuficientes para gerar clusters confiáveis.")
         
         except Exception as e:
             st.error(f"Erro ao analisar o ticker {ativo_selecionado}: {str(e)}")
@@ -1870,115 +1836,115 @@ def aba_referencias():
     
     st.markdown("### GRDECO222: Machine Learning (Prof. Rafael Martins de Souza)")
     
-    st.markdown("#### Bibliografia Obrigatória")
-    st.markdown(
-        """
-        <div class="reference-block">
-            <p><strong>1. Jupter Notebooks apresentados em sala de aula.</strong></p>
-            <p class="explanation">
-            Explicação: O material principal do curso é prático, baseado nos códigos e exemplos desenvolvidos
-            pelo professor durante as aulas.
-            </p>
-        </div>
-        <div class="reference-block">
-            <p><strong>2. Géron, A. Mãos à Obra: Aprendizado de Máquina com Scikit-Learn, Keras e TensorFlow.</strong></p>
-            <p class="explanation">
-            Explicação: Considerado um dos principais livros-texto práticos sobre Machine Learning.
-            Cobre desde os fundamentos (Regressão, SVMs, Árvores de Decisão) até tópicos avançados
-            de Deep Learning, com foco na implementação usando bibliotecas Python populares.
-            </p>
-        </div>
-        """, unsafe_allow_html=True
-    )
+    with st.expander("Bibliografia Obrigatória"):
+        st.markdown(
+            """
+            <div class="reference-block">
+                <p><strong>1. Jupter Notebooks apresentados em sala de aula.</strong></p>
+                <p class="explanation">
+                Explicação: O material principal do curso é prático, baseado nos códigos e exemplos desenvolvidos
+                pelo professor durante as aulas.
+                </p>
+            </div>
+            <div class="reference-block">
+                <p><strong>2. Géron, A. Mãos à Obra: Aprendizado de Máquina com Scikit-Learn, Keras e TensorFlow.</strong></p>
+                <p class="explanation">
+                Explicação: Considerado um dos principais livros-texto práticos sobre Machine Learning.
+                Cobre desde os fundamentos (Regressão, SVMs, Árvores de Decisão) até tópicos avançados
+                de Deep Learning, com foco na implementação usando bibliotecas Python populares.
+                </p>
+            </div>
+            """, unsafe_allow_html=True
+        )
     
-    st.markdown("#### Bibliografia Complementar")
-    st.markdown(
-        """
-        <div class="reference-block">
-            <p><strong>1. Coleman, C., Spencer Lyon, S., Jesse Perla, J. QuantEcon Data Science, Introduction to Economic Modeling and Data Science. (https://datascience.quantecon.org/)</strong></p>
-            <p class="explanation">
-            Explicação: Um recurso online focado na aplicação de Ciência de Dados especificamente
-            para modelagem econômica, alinhado com os objetivos da disciplina.
-            </p>
-        </div>
-        <div class="reference-block">
-            <p><strong>2. Sargent, T. J., Stachurski, J., Quantitative Economics with Python. (https://python.quantecon.org/)</strong></p>
-            <p class="explanation">
-            Explicação: Outro projeto da QuantEcon, focado em métodos quantitativos e economia computacional
-            usando Python. É uma referência padrão para economistas que programam.
-            </p>
-        </div>
-        """, unsafe_allow_html=True
-    )
+    with st.expander("Bibliografia Complementar"):
+        st.markdown(
+            """
+            <div class="reference-block">
+                <p><strong>1. Coleman, C., Spencer Lyon, S., Jesse Perla, J. QuantEcon Data Science, Introduction to Economic Modeling and Data Science. (https://datascience.quantecon.org/)</strong></p>
+                <p class="explanation">
+                Explicação: Um recurso online focado na aplicação de Ciência de Dados especificamente
+                para modelagem econômica, alinhado com os objetivos da disciplina.
+                </p>
+            </div>
+            <div class="reference-block">
+                <p><strong>2. Sargent, T. J., Stachurski, J., Quantitative Economics with Python. (https://python.quantecon.org/)</strong></p>
+                <p class="explanation">
+                Explicação: Outro projeto da QuantEcon, focado em métodos quantitativos e economia computacional
+                usando Python. É uma referência padrão para economistas que programam.
+                </p>
+            </div>
+            """, unsafe_allow_html=True
+        )
 
     st.markdown("---")
     
     st.markdown("### GRDECO203: Laboratório de Ciência de Dados Aplicados à Finanças (Prof. Diogo Tavares Robaina)")
 
-    st.markdown("#### Bibliografia Básica")
-    st.markdown(
-        """
-        <div class="reference-block">
-            <p><strong>1. HILPISCH, Y. J. Python for finance: analyze big financial dat. O'Reilly Media, 2015.</strong></p>
-            <p class="explanation">
-            Explicação: Uma referência clássica para finanças quantitativas em Python. Cobre manipulação
-            de dados financeiros (séries temporais), análise de risco, e implementação de estratégias
-            de trading e precificação de derivativos.
-            </p>
-        </div>
-        <div class="reference-block">
-            <p><strong>2. ARRATIA, A. Computational finance an introductory course with R. Atlantis, 2014.</strong></p>
-            <p class="explanation">
-            Explicação: Focado em finanças computacionais usando a linguagem R, abordando conceitos
-            introdutórios e modelagem.
-            </p>
-        </div>
-        <div class="reference-block">
-            <p><strong>3. RASCHKA, S. Python machine learning: unlock deeper insights... Packt Publishing, 2015.</strong></p>
-            <p class="explanation">
-            Explicação: Um guia popular focado na aplicação prática de algoritmos de Machine Learning
-            com Scikit-Learn em Python, similar ao livro de Géron.
-            </p>
-        </div>
-        <div class="reference-block">
-            <p><strong>4. MAINDONALD, J., and Braun, J. Data analysis and graphics using R: an example-based approach. Cambridge University Press, 2006.</strong></p>
-            <p class="explanation">
-            Explicação: Livro focado em análise de dados e visualização gráfica utilizando a linguagem R.
-            </p>
-        </div>
-        <div class="reference-block">
-            <p><strong>5. REYES, J. M. M. Introduction to Data Science for Social and Policy Research. Cambridge University Press, 2017.</strong></p>
-            <p class="explanation">
-            Explicação: Aborda a aplicação de Ciência de Dados no contexto de ciências sociais e pesquisa
-            de políticas públicas, relevante para a análise econômica.
-            </p>
-        </div>
-        """, unsafe_allow_html=True
-    )
+    with st.expander("Bibliografia Básica"):
+        st.markdown(
+            """
+            <div class="reference-block">
+                <p><strong>1. HILPISCH, Y. J. Python for finance: analyze big financial dat. O'Reilly Media, 2015.</strong></p>
+                <p class="explanation">
+                Explicação: Uma referência clássica para finanças quantitativas em Python. Cobre manipulação
+                de dados financeiros (séries temporais), análise de risco, e implementação de estratégias
+                de trading e precificação de derivativos.
+                </p>
+            </div>
+            <div class="reference-block">
+                <p><strong>2. ARRATIA, A. Computational finance an introductory course with R. Atlantis, 2014.</strong></p>
+                <p class="explanation">
+                Explicação: Focado em finanças computacionais usando a linguagem R, abordando conceitos
+                introdutórios e modelagem.
+                </p>
+            </div>
+            <div class="reference-block">
+                <p><strong>3. RASCHKA, S. Python machine learning: unlock deeper insights... Packt Publishing, 2015.</strong></p>
+                <p class="explanation">
+                Explicação: Um guia popular focado na aplicação prática de algoritmos de Machine Learning
+                com Scikit-Learn em Python, similar ao livro de Géron.
+                </p>
+            </div>
+            <div class="reference-block">
+                <p><strong>4. MAINDONALD, J., and Braun, J. Data analysis and graphics using R: an example-based approach. Cambridge University Press, 2006.</strong></p>
+                <p class="explanation">
+                Explicação: Livro focado em análise de dados e visualização gráfica utilizando a linguagem R.
+                </p>
+            </div>
+            <div class="reference-block">
+                <p><strong>5. REYES, J. M. M. Introduction to Data Science for Social and Policy Research. Cambridge University Press, 2017.</strong></p>
+                <p class="explanation">
+                Explicação: Aborda a aplicação de Ciência de Dados no contexto de ciências sociais e pesquisa
+                de políticas públicas, relevante para a análise econômica.
+                </p>
+            </div>
+            """, unsafe_allow_html=True
+        )
     
-    st.markdown("#### Bibliografia Complementar")
-    st.markdown(
-        """
-        <div class="reference-block">
-            <p><strong>1. TEAM, R. Core. "R language definition." R foundation for statistical computing (2000).</strong></p>
-            <p class="explanation">Explicação: A documentação oficial da linguagem R.</p>
-        </div>
-        <div class="reference-block">
-            <p><strong>2. MISHRA, R.; RAM, B. Portfolio Selection Using R. Yugoslav Journal of Operations Research, 2020.</strong></p>
-            <p class="explanation">Explicação: Um artigo de pesquisa focado especificamente na aplicação da
-            linguagem R para otimização e seleção de portfólios, muito relevante para a disciplina.
-            </p>
-        </div>
-        <div class="reference-block">
-            <p><strong>3. WICKHAM, H., et al. (dplyr, Tidy data, Advanced R, ggplot2, R for data science).</strong></p>
-            <p class="explanation">
-            Explicação: Múltiplas referências de Hadley Wickham, o criador do "Tidyverse" em R.
-            São os pacotes e livros fundamentais para a manipulação de dados moderna (dplyr),
-            organização (Tidy data) e visualização (ggplot2) na linguagem R.
-            </p>
-        </div>
-        """, unsafe_allow_html=True
-    )
+    with st.expander("Bibliografia Complementar"):
+        st.markdown(
+            """
+            <div class="reference-block">
+                <p><strong>1. TEAM, R. Core. "R language definition." R foundation for statistical computing (2000).</strong></p>
+                <p class="explanation">Explicação: A documentação oficial da linguagem R.</p>
+            </div>
+            <div class="reference-block">
+                <p><strong>2. MISHRA, R.; RAM, B. Portfolio Selection Using R. Yugoslav Journal of Operations Research, 2020.</strong></p>
+                <p class="explanation">Explicação: Um artigo de pesquisa focado especificamente na aplicação da
+                linguagem R para otimização e seleção de portfólios, muito relevante para a disciplina.
+                </p>
+            </div>
+            <div class="reference-block">
+                <p><strong>3. WICKHAM, H., et al. (dplyr, Tidy data, Advanced R, ggplot2, R for data science).</strong></p>
+                <p class="explanation">
+                Explicação: Múltiplas referências de Hadley Wickham, o criador do "Tidyverse" em R.
+                São os pacotes e livros fundamentais para a manipulação de dados moderna (dplyr),
+                organização (Tidy data) e visualização (ggplot2) na linguagem R.
+                </p>
+            </div>
+            """, unsafe_allow_html=True
+        )
 
 def main():
     if 'builder' not in st.session_state:
