@@ -8,9 +8,9 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Preços: Estratégia Linear com Fail-Fast (TvDatafeed -> YFinance -> Estático Global).
 - Fundamentos: Coleta Exaustiva Pynvest (50+ indicadores).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Design (V9.24): Final Layout Polish + Full Indicators + Robust ML Fallback.
+- Design (V9.25): Final Fixes (NameError, Formatting, Layout Center).
 
-Versão: 9.24.0 (Layout Fix + ML Proxy + Full Data + Error Proofing)
+Versão: 9.25.0 (Stable Release)
 =============================================================================
 """
 
@@ -206,6 +206,19 @@ OPTIONS_LIQUIDEZ_DETALHADA = [
     'C: Mais de 2 anos - Este é um investimento de longo prazo; não tenho planos de resgatar nos próximos anos.'
 ]
 
+# --- FUNÇÃO UTILITÁRIA GLOBAL (CORREÇÃO NAMERROR) ---
+def safe_format(value):
+    """Formata valor float para string com 2 casas, tratando strings e NaNs."""
+    if pd.isna(value):
+        return "N/A"
+    try:
+        # Tenta converter para float antes de formatar
+        float_val = float(value)
+        return f"{float_val:.2f}"
+    except (ValueError, TypeError):
+        # Se não der para converter (ex: '-'), retorna como está
+        return str(value)
+
 # =============================================================================
 # 6. CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR
 # =============================================================================
@@ -275,6 +288,7 @@ def obter_template_grafico() -> dict:
         'plot_bgcolor': 'rgba(0,0,0,0)', # Transparente
         'paper_bgcolor': 'rgba(0,0,0,0)', # Transparente
         'font': {'family': 'Inter, sans-serif', 'size': 12, 'color': '#343a40'},
+        # Title configurado aqui, mas atenção ao uso duplicado na chamada
         'title': {'font': {'family': 'Inter, sans-serif', 'size': 16, 'color': '#212529', 'weight': 'bold'}, 'x': 0.5, 'xanchor': 'center'},
         'xaxis': {'showgrid': True, 'gridcolor': '#ecf0f1', 'showline': True, 'linecolor': '#bdc3c7', 'linewidth': 1},
         'yaxis': {'showgrid': True, 'gridcolor': '#ecf0f1', 'showline': True, 'linecolor': '#bdc3c7', 'linewidth': 1},
@@ -1064,6 +1078,7 @@ class ConstrutorPortfolioAutoML:
         if valid_weights.sum() > 0:
             valid_weights = valid_weights / valid_weights.sum()
             portfolio_returns = (returns_df * valid_weights).sum(axis=1)
+            
             metrics = {
                 'annual_return': portfolio_returns.mean() * 252,
                 'annual_volatility': portfolio_returns.std() * np.sqrt(252),
@@ -2007,7 +2022,7 @@ def aba_analise_individual():
                     fig_rsi.add_hline(y=70, line_dash="dash", line_color="red"); fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
                     
                     template = obter_template_grafico()
-                    template['title']['text'] = "RSI (14)" 
+                    template['title']['text'] = "RSI (14)" # Sobrescreve titulo no dict
                     fig_rsi.update_layout(**template)
                     fig_rsi.update_layout(height=300)
                     
