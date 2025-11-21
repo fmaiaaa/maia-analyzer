@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """
 =============================================================================
-SISTEMA DE PORTFÓLIOS ADAPTATIVOS - INTEGRADO (YFINANCE + FUNDAMENTUS)
+SISTEMA DE PORTFÓLIOS ADAPTATIVOS - YFINANCE ONLY
 =============================================================================
 
 Integração do design "Elite" com a lógica de "Analyzer".
-- Fonte de Dados: yfinance (Preços) + Fundamentus (WebScraping).
-- ML: Ensemble (Random Forest + XGBoost) para 3 horizontes (4, 8, 12 meses).
+- Fonte de Dados: yfinance (Preços + Indicadores Fundamentalistas).
+- ML: Ensemble (Random Forest + XGBoost) para 3 horizontes.
 - Otimização: Markowitz (Sharpe/Volatilidade).
 - Clustering: PCA + KMeans.
 
-Versão: 9.0.0 (Integration Build)
+Versão: 9.1.0 (Pure yfinance Build)
 =============================================================================
 """
 
@@ -21,8 +21,6 @@ import pandas as pd
 import subprocess
 import sys
 import time
-import requests
-import io
 from datetime import datetime, timedelta
 import traceback
 
@@ -71,7 +69,6 @@ MIN_WEIGHT = 0.10
 MAX_WEIGHT = 0.30
 
 # Horizontes de Machine Learning (Dias úteis aproximados)
-# 4 meses (~84 dias), 8 meses (~168 dias), 12 meses (~252 dias)
 ML_HORIZONS = {
     'CURTO PRAZO': 84,
     'MÉDIO PRAZO': 168,
@@ -109,63 +106,7 @@ ATIVOS_POR_SETOR = {
 }
 
 # =============================================================================
-# 2. UTILITÁRIOS E SCRAPING (FUNDAMENTUS)
-# =============================================================================
-
-@st.cache_data(ttl=3600)
-def obter_dados_fundamentus():
-    """
-    Realiza WebScraping do site Fundamentus para obter indicadores de todos os ativos.
-    Retorna um DataFrame limpo e indexado pelo Ticker (.SA).
-    """
-    url = 'https://www.fundamentus.com.br/resultado.php'
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    
-    try:
-        r = requests.get(url, headers=headers)
-        df = pd.read_html(io.StringIO(r.text), decimal=',', thousands='.')[0]
-        
-        # Limpeza e Renomeação
-        # Papel, Cotação, P/L, P/VP, PSR, Div.Yield, P/Ativo, P/Cap.Giro, P/EBIT, P/Ativ Circ.Liq, EV/EBIT, EV/EBITDA, Mrg Ebit, Mrg. Líq., Liq. Corr., ROIC, ROE, Liq.2meses, Patrim. Líq, Dív.Brut/ Patrim., Cresc. Rec.5a
-        
-        # Converte percentuais strings para float
-        cols_perc = ['Div.Yield', 'Mrg Ebit', 'Mrg. Líq.', 'ROIC', 'ROE', 'Cresc. Rec.5a']
-        for col in cols_perc:
-            if col in df.columns:
-                df[col] = df[col].astype(str).str.replace('.', '').str.replace(',', '.').str.replace('%', '')
-                df[col] = pd.to_numeric(df[col], errors='coerce') / 100.0
-
-        # Renomeia para padrão do sistema
-        rename_map = {
-            'Papel': 'Ticker',
-            'P/L': 'PE_Ratio',
-            'P/VP': 'PB_Ratio',
-            'Div.Yield': 'Div_Yield',
-            'ROE': 'ROE',
-            'Mrg. Líq.': 'Net_Margin',
-            'Dív.Brut/ Patrim.': 'Debt_to_Equity'
-        }
-        df = df.rename(columns=rename_map)
-        
-        # Ajusta Ticker para formato Yahoo (.SA)
-        df['Ticker'] = df['Ticker'] + '.SA'
-        df = df.set_index('Ticker')
-        
-        # Filtra apenas colunas úteis e remove duplicatas/nulos
-        cols_uteis = ['PE_Ratio', 'PB_Ratio', 'Div_Yield', 'ROE', 'Net_Margin', 'Debt_to_Equity']
-        # Garante que colunas existem
-        cols_finais = [c for c in cols_uteis if c in df.columns]
-        
-        return df[cols_finais]
-        
-    except Exception as e:
-        st.error(f"Erro ao acessar Fundamentus: {e}")
-        return pd.DataFrame()
-
-# =============================================================================
-# 3. MAPEAMENTOS DE PONTUAÇÃO (Do Elite v7)
+# 2. MAPEAMENTOS DE PONTUAÇÃO (Do Elite v7)
 # =============================================================================
 
 # Mapeamento para perguntas de Concordância
@@ -244,7 +185,7 @@ class AnalisadorPerfilInvestidor:
         return nivel, horizonte, ml_target_days, score
 
 # =============================================================================
-# 4. ESTILO E VISUALIZAÇÃO (Cópia do Elite)
+# 3. ESTILO E VISUALIZAÇÃO (Cópia do Elite)
 # =============================================================================
 
 def obter_template_grafico():
@@ -259,7 +200,7 @@ def obter_template_grafico():
     }
 
 # =============================================================================
-# 5. LÓGICA DO PORTFÓLIO (ANALYZER + ML ENSEMBLE)
+# 4. LÓGICA DO PORTFÓLIO (ANALYZER + ML ENSEMBLE)
 # =============================================================================
 
 def calculate_technical_indicators(df):
@@ -308,41 +249,35 @@ class PortfolioBuilder:
         self.metodo_alocacao = ""
         
     def fetch_data(self, assets, progress_bar=None):
-        """Coleta Híbrida: yfinance + Fundamentus"""
-        # 1. Fundamentus
-        if progress_bar: progress_bar.progress(10, text="Coletando dados fundamentalistas (Fundamentus)...")
-        df_fund = obter_dados_fundamentus()
+        """Coleta Totalmente via yfinance (Preços + Info)."""
         
-        # 2. yfinance
-        self.success_assets = []
-        if progress_bar: progress_bar.progress(20, text="Baixando histórico de preços (yfinance)...")
-        
-        # Importa yfinance aqui para garantir uso
         import yfinance as yf
         
-        # Filtra apenas ativos que estão no Fundamentus e na lista solicitada
-        assets_to_fetch = [a for a in assets if a in df_fund.index or a in ATIVOS_IBOVESPA]
+        self.success_assets = []
+        if progress_bar: progress_bar.progress(10, text="Baixando histórico de preços (yfinance)...")
         
-        # Baixa em lote para velocidade
-        if not assets_to_fetch:
-            return False
+        # Baixa preços em lote para velocidade
+        if not assets: return False
 
-        tickers_str = " ".join(assets_to_fetch)
+        tickers_str = " ".join(assets)
         data = yf.download(tickers_str, period=PERIODO_DADOS, group_by='ticker', progress=False, threads=True)
         
-        total = len(assets_to_fetch)
+        fundamental_list = []
+        
+        total = len(assets)
         processed = 0
         
-        for ticker in assets_to_fetch:
+        if progress_bar: progress_bar.progress(30, text="Coletando fundamentos e indicadores (yfinance)...")
+
+        for ticker in assets:
             try:
-                if len(assets_to_fetch) == 1:
+                # 1. Processar Preço
+                if len(assets) == 1:
                     df = data.copy()
                 else:
                     df = data[ticker].copy()
                 
                 if df.empty: continue
-                
-                # Limpeza básica
                 df = df.dropna(how='all')
                 if len(df) < MIN_DIAS_HISTORICO: continue
                 
@@ -351,21 +286,52 @@ class PortfolioBuilder:
                 if df.empty: continue
                 
                 self.data_by_asset[ticker] = df
-                self.success_assets.append(ticker)
+                
+                # 2. Processar Fundamentos (via yfinance .info)
+                try:
+                    info = yf.Ticker(ticker).info
+                    
+                    # Extração segura de métricas
+                    fund_metric = {
+                        'Ticker': ticker,
+                        'PE_Ratio': info.get('trailingPE'),
+                        'PB_Ratio': info.get('priceToBook'),
+                        'Div_Yield': info.get('dividendYield'),
+                        'ROE': info.get('returnOnEquity'),
+                        'Net_Margin': info.get('profitMargins'),
+                        # yfinance retorna debtToEquity como % (ex: 80.5), convertemos para ratio se necessário, 
+                        # mas aqui mantemos como % dividida por 100 para consistência decimal
+                        'Debt_to_Equity': info.get('debtToEquity', 0) / 100.0 if info.get('debtToEquity') else None
+                    }
+                    fundamental_list.append(fund_metric)
+                    self.success_assets.append(ticker)
+                    
+                except Exception:
+                    # Se falhar info, ainda salvamos o ativo se tiver preço, mas com fundamentos zerados
+                    self.success_assets.append(ticker)
+                    continue
                 
             except Exception:
                 continue
             
             processed += 1
             if progress_bar:
-                progress = 20 + int((processed / total) * 40) # Vai até 60%
+                progress = 30 + int((processed / total) * 30) # Vai até 60%
                 progress_bar.progress(progress, text=f"Processando {ticker}...")
 
-        # Filtra DF Fundamentalista para os que temos preço
-        self.fundamental_data = df_fund.loc[df_fund.index.intersection(self.success_assets)].copy()
+        # Cria DataFrame de Fundamentos
+        if fundamental_list:
+            self.fundamental_data = pd.DataFrame(fundamental_list).set_index('Ticker')
+        else:
+            # Cria DF vazio com as colunas certas se falhar tudo
+            self.fundamental_data = pd.DataFrame(columns=['PE_Ratio', 'PB_Ratio', 'Div_Yield', 'ROE', 'Net_Margin', 'Debt_to_Equity'])
+
+        # Garante que todos os ativos de sucesso estão no DF fundamental (mesmo que com NaNs)
+        self.fundamental_data = self.fundamental_data.reindex(self.success_assets)
         
-        # Preenche missings na fundamentalista com média
-        self.fundamental_data = self.fundamental_data.fillna(self.fundamental_data.mean())
+        # Preenche NaNs com a média (Inputação Simples)
+        self.fundamental_data = self.fundamental_data.fillna(self.fundamental_data.mean(numeric_only=True))
+        self.fundamental_data = self.fundamental_data.fillna(0) # Se coluna toda for NaN
         
         return len(self.success_assets) >= NUM_ATIVOS_PORTFOLIO
 
@@ -638,8 +604,8 @@ def aba_introducao():
     st.markdown("## 📚 Metodologia Quantitativa e Arquitetura do Sistema")
     st.markdown("""
     <div class="info-box">
-    <h3>🎯 Visão Geral do Sistema Híbrido</h3>
-    <p>Este sistema integra dados de preços em tempo real via <b>yfinance</b> com indicadores fundamentalistas extraídos via WebScraping do <b>Fundamentus</b>. 
+    <h3>🎯 Visão Geral do Sistema Integrado</h3>
+    <p>Este sistema utiliza exclusivamente a biblioteca <b>yfinance</b> para obter preços históricos e dados fundamentalistas (P/L, ROE, etc). 
     Utiliza um Ensemble de Machine Learning (<b>Random Forest + XGBoost</b>) para prever probabilidades de alta em 3 horizontes temporais.</p>
     </div>
     """, unsafe_allow_html=True)
@@ -647,8 +613,8 @@ def aba_introducao():
     col1, col2 = st.columns(2)
     with col1:
         st.markdown('### 1. Motor de Análise')
-        with st.expander("Etapa 1.1: Coleta de Dados (Híbrida)"):
-            st.markdown("- **Preços:** Histórico de 5 anos via API yfinance.\n- **Fundamentos:** P/L, ROE, Margens e Dívida raspados diretamente do Fundamentus.\n- **Técnica:** Cálculo manual de RSI, MACD, Volatilidade e Momentum.")
+        with st.expander("Etapa 1.1: Coleta de Dados (yfinance Only)"):
+            st.markdown("- **Preços:** Histórico de 5 anos via API yfinance.\n- **Fundamentos:** Indicadores extraídos diretamente do `ticker.info` do yfinance.\n- **Técnica:** Cálculo manual de RSI, MACD, Volatilidade e Momentum.")
         with st.expander("Etapa 1.2: Machine Learning Ensemble"):
             st.markdown("- **Modelos:** Random Forest Classifier + XGBoost Classifier.\n- **Target:** Retorno Positivo no horizonte definido (4, 8 ou 12 meses).\n- **Output:** Média das probabilidades dos dois modelos.")
             
@@ -781,29 +747,33 @@ def aba_analise_individual():
     if 'ativos_analise' in st.session_state:
         sel = st.selectbox("Ativo:", st.session_state.ativos_analise)
         if st.button("Analisar", type="primary"):
-            with st.spinner("Coletando dados..."):
-                # Builder temporário para fetch único
-                tmp_b = PortfolioBuilder(0)
-                # Tenta pegar dados de Fundamentus e Yahoo só pra esse
-                # Nota: Fundamentus pega tudo de uma vez, é rápido
-                df_fund_all = obter_dados_fundamentus()
-                
+            with st.spinner("Coletando dados (yfinance)..."):
                 import yfinance as yf
+                
+                # 1. Preço e Técnica
                 hist = yf.Ticker(sel).history(period='2y')
                 
-                if hist.empty or sel not in df_fund_all.index:
-                    st.error("Dados indisponíveis.")
+                if hist.empty:
+                    st.error("Dados históricos indisponíveis.")
                     return
                     
-                # Indicadores
                 hist = calculate_technical_indicators(hist)
-                fund = df_fund_all.loc[sel]
+                
+                # 2. Fundamentos (via yfinance)
+                info = yf.Ticker(sel).info
+                fund_data = {
+                    'PE_Ratio': info.get('trailingPE'),
+                    'PB_Ratio': info.get('priceToBook'),
+                    'Div_Yield': info.get('dividendYield'),
+                    'ROE': info.get('returnOnEquity'),
+                    'Net_Margin': info.get('profitMargins')
+                }
                 
                 # Mostra Dados
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Preço", f"R$ {hist['Close'].iloc[-1]:.2f}")
-                c2.metric("P/L", f"{fund['PE_Ratio']:.2f}")
-                c3.metric("ROE", f"{fund['ROE']:.1%}")
+                c2.metric("P/L", f"{fund_data['PE_Ratio']:.2f}" if fund_data['PE_Ratio'] else "N/A")
+                c3.metric("ROE", f"{fund_data['ROE']:.1%}" if fund_data['ROE'] else "N/A")
                 c4.metric("RSI", f"{hist['RSI'].iloc[-1]:.1f}")
                 
                 # Gráfico
@@ -813,8 +783,8 @@ def aba_analise_individual():
                 fig.update_layout(title=f"Gráfico Técnico - {sel}", **obter_template_grafico())
                 st.plotly_chart(fig, use_container_width=True)
                 
-                st.markdown("### Fundamentos (Fundamentus)")
-                st.dataframe(fund.to_frame().T, use_container_width=True)
+                st.markdown("### Fundamentos (yfinance)")
+                st.dataframe(pd.DataFrame([fund_data]), use_container_width=True)
 
 def aba_referencias():
     st.markdown("## 📚 Referências e Bibliografia")
@@ -823,7 +793,7 @@ def aba_referencias():
     st.markdown("""
     <div class="reference-block"><p><strong>1. Géron, A. Mãos à Obra: Aprendizado de Máquina com Scikit-Learn, Keras e TensorFlow.</strong></p></div>
     <div class="reference-block"><p><strong>2. HILPISCH, Y. J. Python for finance: analyze big financial dat. O'Reilly Media.</strong></p></div>
-    <div class="reference-block"><p><strong>3. Documentação Oficial: XGBoost, Scikit-Learn e Fundamentus.</strong></p></div>
+    <div class="reference-block"><p><strong>3. Documentação Oficial: XGBoost, Scikit-Learn e yfinance.</strong></p></div>
     """, unsafe_allow_html=True)
 
 # =============================================================================
@@ -832,7 +802,7 @@ def aba_referencias():
 
 def main():
     configurar_pagina()
-    st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos (v9.0 Integrated)</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos (v9.1 Pure yfinance)</h1>', unsafe_allow_html=True)
     
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📚 Metodologia", "🎯 Seleção de Ativos", "🏗️ Construtor de Portfólio", "🔍 Análise Individual", "📖 Referências"
