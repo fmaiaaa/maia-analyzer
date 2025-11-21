@@ -387,15 +387,18 @@ class ColetorDadosLive(object):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         })
 
+        dados_yf = pd.DataFrame()
+
         try:
             # Tenta passar a sessão para o yfinance
+            # threads=False é CRÍTICO aqui para evitar rate limiting ou problemas de lock em versões recentes quando há falha
             try:
                 dados_yf = yf.download(
                     simbolos, 
                     period=self.periodo, 
                     group_by='ticker', 
                     progress=False, 
-                    threads=True, 
+                    threads=False, 
                     session=session
                 )
             except TypeError:
@@ -405,20 +408,38 @@ class ColetorDadosLive(object):
                     period=self.periodo, 
                     group_by='ticker', 
                     progress=False, 
-                    threads=True
+                    threads=False
                 )
         except Exception as e:
-            st.error(f"Erro no download YFinance: {e}")
-            return False
+            st.warning(f"Aviso no download em lote (será tentado individualmente): {e}")
 
         for simbolo in simbolos:
+            df_tecnicos = pd.DataFrame()
+
+            # 1. Tenta pegar os dados do download em lote
             try:
-                if len(simbolos) > 1:
-                    df_tecnicos = dados_yf[simbolo].copy()
-                else:
-                    df_tecnicos = dados_yf.copy()
+                if not dados_yf.empty:
+                    if len(simbolos) > 1:
+                        if simbolo in dados_yf.columns.get_level_values(0): # Verifica se o ticker existe nas colunas
+                             df_tecnicos = dados_yf[simbolo].copy()
+                    else:
+                        df_tecnicos = dados_yf.copy()
             except KeyError:
-                continue
+                pass
+
+            # 2. FALLBACK: Se o lote falhou ou veio vazio para este ativo específico, tenta baixar individualmente
+            if df_tecnicos.empty or 'Close' not in df_tecnicos.columns or df_tecnicos['Close'].dropna().empty:
+                try:
+                    # Tenta baixar individualmente usando yf.Ticker (endpoint diferente, muitas vezes funciona quando o bulk falha)
+                    ticker_obj = yf.Ticker(simbolo, session=session)
+                    df_tecnicos = ticker_obj.history(period=self.periodo)
+                except Exception:
+                     # Última tentativa sem sessão explícita
+                    try:
+                        ticker_obj = yf.Ticker(simbolo)
+                        df_tecnicos = ticker_obj.history(period=self.periodo)
+                    except Exception:
+                        pass
 
             if df_tecnicos.empty or 'Close' not in df_tecnicos.columns:
                 continue
