@@ -5,12 +5,12 @@ SISTEMA DE PORTFÓLIOS ADAPTATIVOS - OTIMIZAÇÃO QUANTITATIVA
 =============================================================================
 
 Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
-- Preços: Estratégia Linear sem Retries (TvDatafeed -> YFinance -> Fallback Estático).
+- Preços: Estratégia Linear com Fail-Fast (TvDatafeed -> YFinance -> Estático Global).
 - Fundamentos via Pynvest (Fundamentus).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V8.7): Estritamente alinhado ao original (Textos Exaustivos).
 
-Versão: 9.10.0 (Direct Fallback Mode)
+Versão: 9.11.0 (Fail-Fast Mechanism: 3 strikes -> Global Static Mode)
 =============================================================================
 """
 
@@ -402,8 +402,23 @@ class ColetorDadosLive(object):
         for col_orig, col_dest in mapping.items():
             if col_orig in row:
                 val = row[col_orig]
-                try: dados_formatados[col_dest] = float(val)
-                except (ValueError, TypeError): dados_formatados[col_dest] = val
+                
+                # Tratamento rigoroso para converter string com vírgula em float (formato PT-BR)
+                if isinstance(val, str):
+                    # Remove pontos de milhar e troca vírgula decimal por ponto
+                    val = val.replace('.', '').replace(',', '.')
+                    # Remove símbolo de porcentagem se houver
+                    if val.endswith('%'):
+                        val = val.replace('%', '')
+                        try: 
+                            val = float(val) / 100.0
+                        except (ValueError, TypeError): 
+                            pass
+
+                try: 
+                    dados_formatados[col_dest] = float(val)
+                except (ValueError, TypeError): 
+                    dados_formatados[col_dest] = val
         return dados_formatados
 
     def coletar_e_processar_dados(self, simbolos: list) -> bool:
@@ -413,55 +428,66 @@ class ColetorDadosLive(object):
         metricas_simples_list = []
 
         if not self.tv_ativo:
-            # Se tvDatafeed falhar na inicialização, tenta YFinance direto como fallback global
-            st.warning("tvDatafeed indisponível. Tentando modo de fallback total via YFinance...")
+            st.warning("tvDatafeed indisponível. Modo de fallback (YFinance/Estático) pode ser mais lento.")
         
-        # --- LOOP DE COLETA SEM RETRY ---
+        # --- CONTROLE DE FAIL-FAST ---
+        consecutive_failures = 0
+        FAILURE_THRESHOLD = 3 # Se 3 ativos seguidos falharem na coleta de preço
+        global_static_mode = False # Ativa modo 100% fundamentalista para o restante
+        
+        # --- LOOP DE COLETA ---
         for simbolo in simbolos:
             df_tecnicos = pd.DataFrame()
-            usando_fallback_estatico = False # Flag para identificar modo estático
+            usando_fallback_estatico = False 
             tem_dados = False
             
-            # --- TENTATIVA 1: TVDATAFEED ---
-            if self.tv_ativo:
-                simbolo_tv = simbolo.replace('.SA', '')
-                try:
-                    df_tecnicos = self.tv.get_hist(
-                        symbol=simbolo_tv, 
-                        exchange='BMFBOVESPA', 
-                        interval=Interval.in_daily, 
-                        n_bars=1260
-                    )
-                except Exception:
-                    pass
-            
-            # Validação TV
-            if df_tecnicos is not None and not df_tecnicos.empty:
-                 # Normaliza colunas para checar 'close'
-                 cols_lower = [c.lower() for c in df_tecnicos.columns]
-                 if 'close' in cols_lower:
-                     tem_dados = True
-            
-            # --- TENTATIVA 2: YFINANCE (BACKUP) ---
-            # Se a tentativa 1 falhou ou retornou vazio, tenta YFinance UMA VEZ
-            if not tem_dados:
-                try:
-                    session = requests.Session()
-                    session.headers.update({
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                    })
-                    ticker_obj = yf.Ticker(simbolo, session=session)
-                    df_tecnicos = ticker_obj.history(period=self.periodo)
-                except Exception:
-                    pass
+            # Se já entrou em modo global estático, pula tentativa de download de preços
+            if not global_static_mode:
+                # --- TENTATIVA 1: TVDATAFEED ---
+                if self.tv_ativo:
+                    simbolo_tv = simbolo.replace('.SA', '')
+                    try:
+                        df_tecnicos = self.tv.get_hist(
+                            symbol=simbolo_tv, 
+                            exchange='BMFBOVESPA', 
+                            interval=Interval.in_daily, 
+                            n_bars=1260
+                        )
+                    except Exception:
+                        pass
                 
-                # Validação YF
-                if df_tecnicos is not None and not df_tecnicos.empty and 'Close' in df_tecnicos.columns:
-                    tem_dados = True
+                # Validação TV
+                if df_tecnicos is not None and not df_tecnicos.empty:
+                    cols_lower = [c.lower() for c in df_tecnicos.columns]
+                    if 'close' in cols_lower:
+                        tem_dados = True
+                
+                # --- TENTATIVA 2: YFINANCE (BACKUP) ---
+                if not tem_dados:
+                    try:
+                        session = requests.Session()
+                        session.headers.update({
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                        })
+                        ticker_obj = yf.Ticker(simbolo, session=session)
+                        df_tecnicos = ticker_obj.history(period=self.periodo)
+                    except Exception:
+                        pass
+                    
+                    if df_tecnicos is not None and not df_tecnicos.empty and 'Close' in df_tecnicos.columns:
+                        tem_dados = True
 
-            # --- TENTATIVA 3: MODO ESTÁTICO (FALLBACK FINAL) ---
-            # Se TV e YFinance falharam, ativa modo estático para não perder o ativo
-            if not tem_dados:
+                # --- VERIFICAÇÃO DE FAIL-FAST ---
+                if not tem_dados:
+                    consecutive_failures += 1
+                    if consecutive_failures >= FAILURE_THRESHOLD:
+                        global_static_mode = True
+                        st.warning(f"⚠️ Falha na coleta de preços para {consecutive_failures} ativos consecutivos. Ativando MODO FUNDAMENTALISTA GLOBAL (sem histórico de preços) para o restante da lista para acelerar a execução.")
+                else:
+                    consecutive_failures = 0 # Reseta contador se teve sucesso
+            
+            # --- TENTATIVA 3: MODO ESTÁTICO (FALLBACK FINAL OU MODO GLOBAL) ---
+            if global_static_mode or not tem_dados:
                 usando_fallback_estatico = True
                 # Cria dataframe vazio estruturado para evitar erros downstream
                 df_tecnicos = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'rsi_14', 'macd', 'vol_20d'])
@@ -540,7 +566,8 @@ class ColetorDadosLive(object):
                 'volatilidade_anual': vol_anual, 'max_drawdown': max_dd,
             })
             
-            time.sleep(0.1) # Pequeno delay para não sobrecarregar a API
+            if not global_static_mode:
+                time.sleep(0.1) # Pequeno delay apenas se estiver coletando ativamente
 
         if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO: return False
             
@@ -666,6 +693,13 @@ class ConstrutorPortfolioAutoML:
     def calculate_cross_sectional_features(self):
         df_fund = self.dados_fundamentalistas.copy()
         if 'sector' not in df_fund.columns or 'pe_ratio' not in df_fund.columns: return
+        
+        # Converte forçadamente para numérico antes do groupby
+        cols_numeric = ['pe_ratio', 'pb_ratio']
+        for col in cols_numeric:
+             if col in df_fund.columns:
+                 df_fund[col] = pd.to_numeric(df_fund[col], errors='coerce')
+
         sector_means = df_fund.groupby('sector')[['pe_ratio', 'pb_ratio']].transform('mean')
         df_fund['pe_rel_sector'] = df_fund['pe_ratio'] / sector_means['pe_ratio']
         df_fund['pb_rel_sector'] = df_fund['pb_ratio'] / sector_means['pb_ratio']
