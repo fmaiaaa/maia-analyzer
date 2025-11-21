@@ -1168,7 +1168,7 @@ def aba_selecao_ativos():
     
     st.markdown("""
     <div class="info-box">
-    <p>O universo de análise está restrito ao **Índice Ibovespa**. O sistema utiliza todos os ativos selecionados para realizar o ranqueamento multi-fatorial e otimizar a carteira.</p>
+    <p>O universo de análise está restrito ao <b>Índice Ibovespa</b>. O sistema utiliza todos os ativos selecionados para realizar o ranqueamento multi-fatorial e otimizar a carteira.</p>
     </div>
     """, unsafe_allow_html=True)
     
