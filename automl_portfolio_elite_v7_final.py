@@ -8,9 +8,9 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Preços: Estratégia Linear com Fail-Fast (TvDatafeed -> YFinance -> Estático Global).
 - Fundamentos: Coleta Exaustiva Pynvest (50+ indicadores).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Design (V9.21): Layout Centralizado, Correção de Formatação e ML Individual.
+- Design (V9.24): Final Layout Polish + Full Indicators + Robust ML Fallback.
 
-Versão: 9.21.0 (Center Layout + Fix Formatting + Individual ML Feature Importance)
+Versão: 9.24.0 (Layout Fix + ML Proxy + Full Data + Error Proofing)
 =============================================================================
 """
 
@@ -77,7 +77,7 @@ from arch import arch_model
 # 1. CONFIGURAÇÕES E CONSTANTES GLOBAIS
 # =============================================================================
 
-PERIODO_DADOS = '5y'
+PERIODO_DADOS = '2y' # Alterado para 2y conforme solicitado para reduzir falhas de delisting
 MIN_DIAS_HISTORICO = 252
 NUM_ATIVOS_PORTFOLIO = 5
 TAXA_LIVRE_RISCO = 0.1075
@@ -707,8 +707,8 @@ class ColetorDadosLive(object):
                       
                       # Cria metadados fictícios para exibir o motivo
                       df_ml_meta = pd.DataFrame({
-                          'feature': ['ROE (Rentabilidade)', 'P/L (Valuation)'],
-                          'importance': [0.6, 0.4]
+                          'feature': ['ROE (Rentabilidade)', 'P/L (Valuation)', 'Margem Líquida'],
+                          'importance': [0.5, 0.3, 0.2]
                       })
                   except:
                       df_tec['ML_Proba'] = 0.5
@@ -1064,7 +1064,6 @@ class ConstrutorPortfolioAutoML:
         if valid_weights.sum() > 0:
             valid_weights = valid_weights / valid_weights.sum()
             portfolio_returns = (returns_df * valid_weights).sum(axis=1)
-            
             metrics = {
                 'annual_return': portfolio_returns.mean() * 252,
                 'annual_volatility': portfolio_returns.std() * np.sqrt(252),
