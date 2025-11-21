@@ -8,9 +8,9 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Preços: Estratégia Linear com Fail-Fast (TvDatafeed -> YFinance -> Estático Global).
 - Fundamentos via Pynvest (Fundamentus).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Design (V9.19): Layout Ajustado, Centralização Total e Correção de Formatação.
+- Design (V9.20): Layout Centralizado, Correção de Gráficos e 5 Boxes de Métricas.
 
-Versão: 9.19.0 (Center Layout + Fix Formatting Error + Reordered Selection)
+Versão: 9.20.0 (Final Layout Polish + Bug Fixes)
 =============================================================================
 """
 
@@ -628,6 +628,7 @@ class ColetorDadosLive(object):
              if ativo_selecionado in self.dados_fundamentalistas.index:
                  fund_row = self.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
              
+             # Mock de metadados de ML para compatibilidade com visualização
              df_ml_meta = pd.DataFrame(index=pd.MultiIndex.from_tuples([(ativo_selecionado, 'curto_prazo')], names=['ticker', 'target_name']))
              df_ml_meta['target_days'] = 5
              
@@ -1537,19 +1538,20 @@ def aba_construtor_portfolio():
         
         st.markdown('## ✅ Relatório de Alocação Otimizada')
         
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Perfil Identificado", profile.get('risk_level', 'N/A'), f"Score: {profile.get('risk_score', 'N/A')}")
-        col2.metric("Horizonte Estratégico", profile.get('time_horizon', 'N/A'))
-        col3.metric("Sharpe Ratio (Portfólio)", f"{builder.metricas_portfolio.get('sharpe_ratio', 0):.3f}")
-        col4.metric("Estratégia de Alocação", builder.metodo_alocacao_atual.split('(')[0].strip())
+        # --- 5 BOXES ALINHADOS EM UMA LINHA ---
+        col1, col2, col3, col4, col5 = st.columns(5)
         
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            if st.button("🔄 Recalibrar Perfil e Otimizar", key='recomecar_analysis_button_v8'):
-                st.session_state.builder_complete = False
-                st.session_state.builder = None
-                st.session_state.profile = {}
-                st.rerun()
+        col1.metric("Perfil Identificado", profile.get('risk_level', 'N/A'))
+        col2.metric("Score Risco", profile.get('risk_score', 'N/A'))
+        col3.metric("Horizonte Estratégico", profile.get('time_horizon', 'N/A'))
+        col4.metric("Sharpe (Portfólio)", f"{builder.metricas_portfolio.get('sharpe_ratio', 0):.3f}")
+        
+        strategy_name = builder.metodo_alocacao_atual.split('(')[0].strip()
+        # Abrevia se for muito longo para caber no box
+        if len(strategy_name) > 15:
+            strategy_name = strategy_name.replace("MINIMIZAÇÃO DE ", "MIN ").replace("MAXIMIZAÇÃO DE ", "MAX ")
+            
+        col5.metric("Estratégia", strategy_name)
         
         st.markdown("---")
         
@@ -1569,9 +1571,16 @@ def aba_construtor_portfolio():
                 
                 if not alloc_data.empty:
                     fig_alloc = px.pie(alloc_data, values='Peso (%)', names='Ativo', hole=0.4)
-                    fig_layout = obter_template_grafico()
-                    fig_layout['title']['text'] = "Distribuição Otimizada por Ativo"
-                    fig_alloc.update_layout(**fig_layout)
+                    template = obter_template_grafico()
+                    # Removemos title do dict template se quisermos passar manualmente no update_layout para evitar conflito
+                    # Mas aqui usamos update_layout com o template, então definimos o título no próprio layout se necessário
+                    # Ou passamos como argumento se o template não tiver 'title' definido da maneira conflitante.
+                    # No meu template, 'title' é um dict. Plotly aceita.
+                    
+                    # Para garantir, configuramos o texto do título diretamente no layout do objeto
+                    fig_alloc.update_layout(**template)
+                    fig_alloc.update_layout(title_text="Distribuição Otimizada por Ativo")
+                    
                     st.plotly_chart(fig_alloc, use_container_width=True)
                 else:
                     st.warning("Nenhuma alocação significativa para exibir. Otimização não retornou pesos.")
@@ -1622,11 +1631,9 @@ def aba_construtor_portfolio():
                         x=cum_returns.index, y=cum_returns.values, name=asset.replace('.SA', ''), mode='lines'
                     ))
             
-            fig_layout = obter_template_grafico()
-            fig_layout['title']['text'] = "Retorno Acumulado dos Tickers Selecionados"
-            fig_layout['yaxis']['title'] = "Retorno Acumulado (Base 1)"
-            fig_layout['xaxis']['title'] = "Data"
-            fig_cum.update_layout(**fig_layout, height=500)
+            template = obter_template_grafico()
+            fig_cum.update_layout(**template)
+            fig_cum.update_layout(title_text="Retorno Acumulado dos Tickers Selecionados", yaxis_title="Retorno Acumulado (Base 1)", xaxis_title="Data", height=500)
             
             st.plotly_chart(fig_cum, use_container_width=True)
         
@@ -1663,11 +1670,9 @@ def aba_construtor_portfolio():
                     textposition='outside'
                 ))
                 
-                fig_layout = obter_template_grafico()
-                fig_layout['title']['text'] = "Probabilidade de Movimento Direcional Positivo (ML Ensemble)"
-                fig_layout['yaxis']['title'] = "Probabilidade (%)"
-                fig_layout['xaxis']['title'] = "Ticker"
-                fig_ml.update_layout(**fig_layout, height=400)
+                template = obter_template_grafico()
+                fig_ml.update_layout(**template)
+                fig_ml.update_layout(title_text="Probabilidade de Movimento Direcional Positivo (ML Ensemble)", yaxis_title="Probabilidade (%)", xaxis_title="Ticker", height=400)
                 
                 st.plotly_chart(fig_ml, use_container_width=True)
                 
@@ -1720,11 +1725,9 @@ def aba_construtor_portfolio():
                 fig_garch.add_trace(go.Bar(name='Volatilidade Histórica', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Histórica (%)'], marker=dict(color=template_colors[2]), opacity=0.7)) 
                 fig_garch.add_trace(go.Bar(name='Volatilidade Condicional', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Condicional (%)'], marker=dict(color=template_colors[0]))) 
                 
-                fig_layout = obter_template_grafico()
-                fig_layout['title']['text'] = "Volatilidade Anualizada: Histórica vs. Condicional (GARCH)"
-                fig_layout['yaxis']['title'] = "Volatilidade Anual (%)"
-                fig_layout['barmode'] = 'group'
-                fig_garch.update_layout(**fig_layout, height=400)
+                template = obter_template_grafico()
+                fig_garch.update_layout(**template)
+                fig_garch.update_layout(title_text="Volatilidade Anualizada: Histórica vs. Condicional (GARCH)", yaxis_title="Volatilidade Anual (%)", barmode='group', height=400)
                 
                 st.plotly_chart(fig_garch, use_container_width=True)
                 st.dataframe(df_garch, use_container_width=True, hide_index=True)
@@ -1794,6 +1797,16 @@ def aba_construtor_portfolio():
                     <p><strong>Fatores-Chave:</strong> {justification}</p>
                     </div>
                     """, unsafe_allow_html=True)
+        
+        # Botão Recalibrar Centralizado no Final
+        st.markdown("---")
+        col_space1, col_btn, col_space2 = st.columns([1, 1, 1])
+        with col_btn:
+            if st.button("🔄 Recalibrar Perfil e Otimizar Novamente", type="primary", use_container_width=True):
+                st.session_state.builder_complete = False
+                st.session_state.builder = None
+                st.session_state.profile = {}
+                st.rerun()
 
 def aba_analise_individual():
     """Aba 4: Análise Individual de Ativos (Autônoma e Geral)"""
@@ -1810,9 +1823,9 @@ def aba_analise_individual():
         st.error("Nenhum ativo disponível.")
         return
 
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
+    # Layout Centralizado da Seleção
+    col_sel, = st.columns(1)
+    with col_sel:
         ativo_selecionado = st.selectbox(
             "Selecione um ticker para análise detalhada:",
             options=ativos_disponiveis,
@@ -1820,8 +1833,12 @@ def aba_analise_individual():
             key='individual_asset_select_v8' 
         )
     
-    with col2:
-        if st.button("🔄 Executar Análise", key='analyze_asset_button_v8', type="primary"):
+    st.write("") # Spacer
+    
+    # Botão Centralizado Abaixo
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c2:
+        if st.button("🔄 Executar Análise", key='analyze_asset_button_v8', type="primary", use_container_width=True):
             st.session_state.analisar_ativo_triggered = True 
     
     if 'analisar_ativo_triggered' not in st.session_state or not st.session_state.analisar_ativo_triggered:
@@ -1878,7 +1895,11 @@ def aba_analise_individual():
                     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
                     fig.add_trace(go.Candlestick(x=df_completo.index, open=df_completo['Open'], high=df_completo['High'], low=df_completo['Low'], close=df_completo['Close'], name='Preço'), row=1, col=1)
                     fig.add_trace(go.Bar(x=df_completo.index, y=df_completo['Volume'], name='Volume'), row=2, col=1)
-                    fig.update_layout(**obter_template_grafico(), height=600, title_text=f"Gráfico Diário - {ativo_selecionado}")
+                    
+                    template = obter_template_grafico()
+                    fig.update_layout(**template)
+                    fig.update_layout(title_text=f"Gráfico Diário - {ativo_selecionado}", height=600)
+                    
                     st.plotly_chart(fig, use_container_width=True)
                 else: st.info("Gráfico indisponível (Modo Estático Ativo).")
 
@@ -1910,7 +1931,12 @@ def aba_analise_individual():
                     # Gráfico RSI
                     fig_rsi = go.Figure(go.Scatter(x=df_completo.index, y=df_completo['rsi_14'], name='RSI', line=dict(color='#8E44AD')))
                     fig_rsi.add_hline(y=70, line_dash="dash", line_color="red"); fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
-                    fig_rsi.update_layout(**obter_template_grafico(), title="RSI (14)", height=300)
+                    
+                    template = obter_template_grafico()
+                    template['title']['text'] = "RSI (14)" # Sobrescreve titulo no dict
+                    fig_rsi.update_layout(**template)
+                    fig_rsi.update_layout(height=300)
+                    
                     st.plotly_chart(fig_rsi, use_container_width=True)
                     
                     # Gráfico MACD
@@ -1918,7 +1944,12 @@ def aba_analise_individual():
                     fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd'], name='MACD', line=dict(color='#2980B9')))
                     fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd_signal'], name='Signal', line=dict(color='#E74C3C')))
                     fig_macd.add_trace(go.Bar(x=df_completo.index, y=df_completo['macd_diff'], name='Histograma', marker_color='#BDC3C7'))
-                    fig_macd.update_layout(**obter_template_grafico(), title="MACD (12,26,9)", height=300)
+                    
+                    template = obter_template_grafico()
+                    template['title']['text'] = "MACD (12,26,9)"
+                    fig_macd.update_layout(**template)
+                    fig_macd.update_layout(height=300)
+                    
                     st.plotly_chart(fig_macd, use_container_width=True)
                     
                     # Gráfico BB
@@ -1931,7 +1962,12 @@ def aba_analise_individual():
                     fig_bb.add_trace(go.Scatter(x=df_completo.index, y=upper_band, name='Upper Band', line=dict(color='#95A5A6'), showlegend=False))
                     fig_bb.add_trace(go.Scatter(x=df_completo.index, y=lower_band, name='Lower Band', line=dict(color='#95A5A6'), fill='tonexty', fillcolor='rgba(149, 165, 166, 0.1)', showlegend=False))
                     fig_bb.add_trace(go.Scatter(x=df_completo.index, y=df_completo['Close'], name='Close', line=dict(color='#2C3E50')))
-                    fig_bb.update_layout(**obter_template_grafico(), title="Bandas de Bollinger (20, 2)", height=400)
+                    
+                    template = obter_template_grafico()
+                    template['title']['text'] = "Bandas de Bollinger (20, 2)"
+                    fig_bb.update_layout(**template)
+                    fig_bb.update_layout(height=400)
+                    
                     st.plotly_chart(fig_bb, use_container_width=True)
                     
                 else: st.warning("Análise Técnica não disponível sem histórico de preços.")
@@ -1967,12 +2003,17 @@ def aba_analise_individual():
                             opacity=0.8,
                             labels={'Cluster': 'Grupo'}
                         )
+                        
+                        template = obter_template_grafico()
+                        # Ajusta template para 3D scene
                         fig_pca.update_layout(
+                            title=template['title'],
+                            paper_bgcolor=template['paper_bgcolor'],
+                            plot_bgcolor=template['plot_bgcolor'],
+                            font=template['font'],
                             scene=dict(xaxis_title='PCA 1', yaxis_title='PCA 2', zaxis_title='PCA 3'),
                             margin=dict(l=0, r=0, b=0, t=40),
-                            height=600,
-                            paper_bgcolor='rgba(0,0,0,0)',
-                            plot_bgcolor='rgba(0,0,0,0)'
+                            height=600
                         )
                     else:
                         # Fallback para 2D se PCA 3D falhar (poucos dados)
@@ -1983,7 +2024,9 @@ def aba_analise_individual():
                             title=f'Mapa de Similaridade 2D (Global)',
                             color_discrete_sequence=obter_template_grafico()['colorway']
                         )
-                        fig_pca.update_layout(**obter_template_grafico(), height=500)
+                        template = obter_template_grafico()
+                        fig_pca.update_layout(**template)
+                        fig_pca.update_layout(height=500)
                     
                     st.plotly_chart(fig_pca, use_container_width=True)
                     
