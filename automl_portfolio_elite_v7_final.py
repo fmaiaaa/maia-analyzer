@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.18): Interface Premium Neutra, Clusterização Auto-K e Gráficos Técnicos Completos.
 
-Versão: 9.18.0 (Premium UX + Auto Silhouette + Full Tech Analysis)
+Versão: 9.18.0 (Premium UX + Auto Silhouette + Full Tech Analysis + Robust Error Handling)
 =============================================================================
 """
 
@@ -264,7 +264,7 @@ class AnalisadorPerfilInvestidor:
         return nivel_risco, horizonte_tempo, ml_lookback, pontuacao
 
 # =============================================================================
-# 7. FUNÇÕES DE ESTILO E VISUALIZAÇÃO (Design Premium Neutro)
+# 7. FUNÇÕES DE ESTILO E VISUALIZAÇÃO (Design Premium Neutro e Centralizado)
 # =============================================================================
 
 def obter_template_grafico() -> dict:
@@ -619,6 +619,7 @@ class ColetorDadosLive(object):
 
     def coletar_ativo_unico_gcs(self, ativo_selecionado: str):
         """Adaptado para usar a coleta Live, mas retornando formato compatível para análise individual."""
+        # Chama com check_min_ativos=False para permitir 1 único ativo
         self.coletar_e_processar_dados([ativo_selecionado], check_min_ativos=False)
         
         if ativo_selecionado in self.dados_por_ativo:
@@ -882,7 +883,9 @@ class ConstrutorPortfolioAutoML:
         scores['ml_score_weighted'] = s_prob * (W_ML_GLOBAL_BASE * ml_weight_factor.fillna(0))
         
         scores['total_score'] = scores.sum(axis=1)
+        
         self.scores_combinados = scores.join(combined).sort_values('total_score', ascending=False)
+        
         self.realizar_clusterizacao_final()
         final_selection = []
         if not self.scores_combinados.empty and 'Final_Cluster' in self.scores_combinados.columns:
@@ -894,6 +897,7 @@ class ConstrutorPortfolioAutoML:
         if len(final_selection) < NUM_ATIVOS_PORTFOLIO:
             others = [x for x in self.scores_combinados.index if x not in final_selection]
             final_selection.extend(others[:NUM_ATIVOS_PORTFOLIO - len(final_selection)])
+            
         self.ativos_selecionados = final_selection[:NUM_ATIVOS_PORTFOLIO]
         return self.ativos_selecionados
     
@@ -918,6 +922,7 @@ class ConstrutorPortfolioAutoML:
             if len(ativos_sem_dados) > 0:
                 st.warning(f"⚠️ Alguns ativos ({', '.join(ativos_sem_dados)}) não possuem histórico de preços. A otimização de variância (Markowitz) será substituída por alocação baseada em Score/Pesos Iguais.")
             
+            # Alocação Proporcional ao Score (Fallback inteligente)
             scores = self.scores_combinados.loc[self.ativos_selecionados, 'total_score']
             total_score = scores.sum()
             if total_score > 0:
@@ -951,6 +956,8 @@ class ConstrutorPortfolioAutoML:
     def calcular_metricas_portfolio(self):
         if not self.alocacao_portfolio: return {}
         weights_dict = {s: data['weight'] for s, data in self.alocacao_portfolio.items()}
+        
+        # Filtra apenas ativos com retorno para o cálculo do portfólio histórico
         available_returns = {s: self.dados_por_ativo[s]['returns'] for s in weights_dict.keys() if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s] and not self.dados_por_ativo[s]['returns'].dropna().empty}
         
         if not available_returns:
@@ -962,11 +969,13 @@ class ConstrutorPortfolioAutoML:
         returns_df = pd.DataFrame(available_returns).dropna()
         if returns_df.empty: return {}
         
+        # Rebalanceia pesos apenas dos ativos com dados para métricas históricas
         valid_assets = returns_df.columns
         valid_weights = np.array([weights_dict[s] for s in valid_assets])
         if valid_weights.sum() > 0:
             valid_weights = valid_weights / valid_weights.sum()
             portfolio_returns = (returns_df * valid_weights).sum(axis=1)
+            
             metrics = {
                 'annual_return': portfolio_returns.mean() * 252,
                 'annual_volatility': portfolio_returns.std() * np.sqrt(252),
@@ -984,13 +993,17 @@ class ConstrutorPortfolioAutoML:
         self.justificativas_selecao = {}
         for simbolo in self.ativos_selecionados:
             justification = []
+            
             is_static = False
             if simbolo in self.dados_fundamentalistas.index:
                  is_static = self.dados_fundamentalistas.loc[simbolo].get('static_mode', False)
-            if is_static: justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
+
+            if is_static:
+                justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
             else:
                 perf = self.metricas_performance.loc[simbolo] if simbolo in self.metricas_performance.index else pd.Series({})
                 justification.append(f"Perf: Sharpe {perf.get('sharpe', np.nan):.2f}, Ret {perf.get('retorno_anual', np.nan)*100:.1f}%")
+                
             ml_prob = self.predicoes_ml.get(simbolo, {}).get('predicted_proba_up', 0.5)
             ml_auc = self.predicoes_ml.get(simbolo, {}).get('auc_roc_score', 0.5)
             justification.append(f"ML: Prob {ml_prob*100:.1f}% (Conf {ml_auc:.2f})")
