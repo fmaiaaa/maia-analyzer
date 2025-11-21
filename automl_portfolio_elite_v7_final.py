@@ -8,9 +8,9 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Preços: Estratégia Linear com Fail-Fast (TvDatafeed -> YFinance -> Estático Global).
 - Fundamentos via Pynvest (Fundamentus).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Design (V9.18): Interface Premium Neutra, Clusterização Auto-K e Gráficos Técnicos Completos.
+- Design (V9.19): Layout Ajustado, Centralização Total e Correção de Formatação.
 
-Versão: 9.18.0 (Premium UX + Auto Silhouette + Full Tech Analysis + Robust Error Handling)
+Versão: 9.19.0 (Center Layout + Fix Formatting Error + Reordered Selection)
 =============================================================================
 """
 
@@ -1113,6 +1113,15 @@ class AnalisadorIndividualAtivos:
         
         return resultado, best_k
 
+def safe_format(value):
+    """Formata valor float para string com 2 casas, tratando strings e NaNs."""
+    if isinstance(value, (int, float)):
+        if pd.isna(value):
+            return "N/A"
+        return f"{value:.2f}"
+    # Se já for string, retorna como está ou tenta limpar
+    return str(value)
+
 # =============================================================================
 # 13. INTERFACE STREAMLIT - CONFIGURAÇÃO E CSS ORIGINAL (V8.7)
 # =============================================================================
@@ -1183,6 +1192,7 @@ def configurar_pagina():
         .stTabs [data-baseweb="tab-list"] { 
             border-bottom: 1px solid #eee; 
             gap: 10px;
+            justify-content: center;
         }
         .stTabs [data-baseweb="tab"] { 
             font-weight: 600; 
@@ -1340,23 +1350,21 @@ def aba_selecao_ativos():
     elif "Seleção Setorial" in modo_selecao:
         st.markdown("### 🏢 Seleção por Setor")
         setores_disponiveis = sorted(list(ATIVOS_POR_SETOR.keys()))
-        col1, col2 = st.columns([2, 1])
         
-        with col1:
-            setores_selecionados = st.multiselect(
-                "Escolha um ou mais setores:",
-                options=setores_disponiveis,
-                default=setores_disponiveis[:3] if setores_disponiveis else [],
-                key='setores_multiselect_v8'
-            )
+        setores_selecionados = st.multiselect(
+            "Escolha um ou mais setores:",
+            options=setores_disponiveis,
+            default=setores_disponiveis[:3] if setores_disponiveis else [],
+            key='setores_multiselect_v8'
+        )
         
         if setores_selecionados:
             for setor in setores_selecionados: ativos_selecionados.extend(ATIVOS_POR_SETOR[setor])
             ativos_selecionados = list(set(ativos_selecionados))
             
-            with col2:
-                st.metric("Setores", len(setores_selecionados))
-                st.metric("Total de Ativos", len(ativos_selecionados))
+            col1, col2 = st.columns(2)
+            col1.metric("Setores", len(setores_selecionados))
+            col2.metric("Total de Ativos", len(ativos_selecionados))
             
             with st.expander("📋 Visualizar Ativos por Setor"):
                 for setor in setores_selecionados:
@@ -1375,21 +1383,16 @@ def aba_selecao_ativos():
         
         todos_tickers_ibov = sorted(list(ativos_com_setor.keys()))
         
-        col1, col2 = st.columns([3, 1])
+        ativos_selecionados = st.multiselect(
+            "Pesquise e selecione os tickers:",
+            options=todos_tickers_ibov,
+            format_func=lambda x: f"{x.replace('.SA', '')} - {ativos_com_setor.get(x, 'Desconhecido')}",
+            key='ativos_individuais_multiselect_v8'
+        )
         
-        with col1:
-            st.markdown("#### 📝 Selecione Tickers (Ibovespa)")
-            ativos_selecionados = st.multiselect(
-                "Pesquise e selecione os tickers:",
-                options=todos_tickers_ibov,
-                format_func=lambda x: f"{x.replace('.SA', '')} - {ativos_com_setor.get(x, 'Desconhecido')}",
-                key='ativos_individuais_multiselect_v8'
-            )
-        
-        with col2:
+        if ativos_selecionados:
             st.metric("Tickers Selecionados", len(ativos_selecionados))
-
-        if not ativos_selecionados:
+        else:
             st.warning("⚠️ Nenhum ativo definido.")
     
     if ativos_selecionados:
@@ -1540,11 +1543,13 @@ def aba_construtor_portfolio():
         col3.metric("Sharpe Ratio (Portfólio)", f"{builder.metricas_portfolio.get('sharpe_ratio', 0):.3f}")
         col4.metric("Estratégia de Alocação", builder.metodo_alocacao_atual.split('(')[0].strip())
         
-        if st.button("🔄 Recalibrar Perfil e Otimizar", key='recomecar_analysis_button_v8'):
-            st.session_state.builder_complete = False
-            st.session_state.builder = None
-            st.session_state.profile = {}
-            st.rerun()
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("🔄 Recalibrar Perfil e Otimizar", key='recomecar_analysis_button_v8'):
+                st.session_state.builder_complete = False
+                st.session_state.builder = None
+                st.session_state.profile = {}
+                st.rerun()
         
         st.markdown("---")
         
@@ -1889,11 +1894,11 @@ def aba_analise_individual():
                 st.markdown("---")
                 
                 col1, col2, col3, col4, col5 = st.columns(5)
-                col1.metric("Dívida Bruta/PL", f"{features_fund.get('debt_to_equity', np.nan):.2f}")
-                col2.metric("Liq. Corrente", f"{features_fund.get('current_ratio', np.nan):.2f}")
-                col3.metric("EV/EBITDA", f"{features_fund.get('ev_ebitda', np.nan):.2f}")
-                col4.metric("Cresc. Receita (5a)", f"{features_fund.get('revenue_growth', 0):.2f}%") 
-                col5.metric("Beta", f"{features_fund.get('beta', np.nan):.2f}")
+                col1.metric("Dívida Bruta/PL", safe_format(features_fund.get('debt_to_equity', np.nan)))
+                col2.metric("Liq. Corrente", safe_format(features_fund.get('current_ratio', np.nan)))
+                col3.metric("EV/EBITDA", safe_format(features_fund.get('ev_ebitda', np.nan)))
+                col4.metric("Cresc. Receita (5a)", safe_format(features_fund.get('revenue_growth', 0))) 
+                col5.metric("Beta", safe_format(features_fund.get('beta', np.nan)))
 
             with tab3:
                 if not static_mode:
