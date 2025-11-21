@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V8.7): Estritamente alinhado ao original (Textos Exaustivos).
 
-Versão: 9.12.1 (Fix: Pandas Merge Overlap Error & Fail-Fast Robustness)
+Versão: 9.12.2 (Fix: Pandas Merge Overlap & Single Asset Collection)
 =============================================================================
 """
 
@@ -421,7 +421,7 @@ class ColetorDadosLive(object):
                     dados_formatados[col_dest] = val
         return dados_formatados
 
-    def coletar_e_processar_dados(self, simbolos: list) -> bool:
+    def coletar_e_processar_dados(self, simbolos: list, check_min_ativos: bool = True) -> bool:
         self.ativos_sucesso = []
         lista_fundamentalistas = []
         garch_vols = {}
@@ -570,10 +570,15 @@ class ColetorDadosLive(object):
             if not global_static_mode:
                 time.sleep(0.1) # Pequeno delay apenas se estiver coletando ativamente
 
-        if len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO: return False
-            
-        self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas).set_index('Ticker')
-        self.metricas_performance = pd.DataFrame(metricas_simples_list).set_index('Ticker')
+        # CRIAÇÃO DOS DATAFRAMES (ANTES DO CHECK DE MÍNIMO)
+        self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas)
+        if not self.dados_fundamentalistas.empty:
+             self.dados_fundamentalistas = self.dados_fundamentalistas.set_index('Ticker')
+             
+        self.metricas_performance = pd.DataFrame(metricas_simples_list)
+        if not self.metricas_performance.empty:
+             self.metricas_performance = self.metricas_performance.set_index('Ticker')
+             
         self.volatilidades_garch_raw = garch_vols 
         
         for simbolo in self.ativos_sucesso:
@@ -582,18 +587,27 @@ class ColetorDadosLive(object):
                 # Verifica se o dataframe tem linhas antes de tentar acessar iloc
                 if not df_local.empty:
                     last_idx = df_local.index[-1]
-                    for k, v in self.dados_fundamentalistas.loc[simbolo].items():
-                        if k not in df_local.columns:
-                            df_local.loc[last_idx, k] = v
+                    if simbolo in self.dados_fundamentalistas.index:
+                        for k, v in self.dados_fundamentalistas.loc[simbolo].items():
+                            if k not in df_local.columns:
+                                df_local.loc[last_idx, k] = v
+
+        # CHECK DE MÍNIMO SÓ SE SOLICITADO (EVITA ERRO NA ANÁLISE INDIVIDUAL)
+        if check_min_ativos and len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO: 
+             return False
 
         return True
 
     def coletar_ativo_unico_gcs(self, ativo_selecionado: str):
         """Adaptado para usar a coleta Live, mas retornando formato compatível para análise individual."""
-        sucesso = self.coletar_e_processar_dados([ativo_selecionado])
-        if sucesso:
+        # Chama com check_min_ativos=False para permitir 1 único ativo
+        self.coletar_e_processar_dados([ativo_selecionado], check_min_ativos=False)
+        
+        if ativo_selecionado in self.dados_por_ativo:
              df_tec = self.dados_por_ativo[ativo_selecionado]
-             fund_row = self.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
+             fund_row = {}
+             if ativo_selecionado in self.dados_fundamentalistas.index:
+                 fund_row = self.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
              
              # Mock de metadados de ML para compatibilidade com visualização
              df_ml_meta = pd.DataFrame(index=pd.MultiIndex.from_tuples([(ativo_selecionado, 'curto_prazo')], names=['ticker', 'target_name']))
@@ -717,7 +731,8 @@ class ConstrutorPortfolioAutoML:
     def treinar_modelos_ensemble(self, dias_lookback_ml: int = LOOKBACK_ML, otimizar: bool = False, progress_callback=None):
         ativos_com_dados = [s for s in self.ativos_sucesso if s in self.dados_por_ativo]
         clustering_df = self.dados_fundamentalistas[['pe_ratio', 'pb_ratio', 'div_yield', 'roe']].join(
-            self.metricas_performance[['sharpe', 'volatilidade_anual']], how='inner'
+            self.metricas_performance[['sharpe', 'volatilidade_anual']], how='inner',
+            lsuffix='_fund', rsuffix='_perf' # Adicionado sufixo para evitar erro de overlap aqui também
         ).fillna(0)
         
         if len(clustering_df) >= 5:
@@ -815,7 +830,11 @@ class ConstrutorPortfolioAutoML:
         w_fund_final = W_REMAINING * share_fund
         self.pesos_atuais = {'Performance': W_PERF_GLOBAL, 'Fundamentos': w_fund_final, 'Técnicos': w_tech_final, 'ML': W_ML_GLOBAL_BASE}
         
-        combined = self.metricas_performance.join(self.dados_fundamentalistas, how='inner').copy()
+        # JOIN SEGURO (RESOLVE O ERRO DE OVERLAP)
+        cols_to_drop = [col for col in self.dados_fundamentalistas.columns if col in self.metricas_performance.columns]
+        df_fund_clean = self.dados_fundamentalistas.drop(columns=cols_to_drop, errors='ignore')
+        combined = self.metricas_performance.join(df_fund_clean, how='inner').copy()
+        
         for symbol in combined.index:
             if symbol in self.dados_por_ativo:
                 df = self.dados_por_ativo[symbol]
@@ -851,14 +870,7 @@ class ConstrutorPortfolioAutoML:
         
         scores['total_score'] = scores.sum(axis=1)
         
-        # --- CORREÇÃO CRÍTICA: REMOVE COLUNAS DUPLICADAS ANTES DO JOIN ---
-        # Identifica colunas que existem em ambos os dataframes (ex: max_drawdown)
-        cols_to_drop = [col for col in self.dados_fundamentalistas.columns if col in self.metricas_performance.columns]
-        
-        # Remove do dataframe da direita e faz o join
-        self.scores_combinados = scores.join(
-            combined.drop(columns=cols_to_drop, errors='ignore')
-        ).sort_values('total_score', ascending=False)
+        self.scores_combinados = scores.join(combined).sort_values('total_score', ascending=False)
         
         self.realizar_clusterizacao_final()
         final_selection = []
