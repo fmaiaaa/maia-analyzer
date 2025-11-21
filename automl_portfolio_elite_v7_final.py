@@ -8,9 +8,9 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Preços: Estratégia Linear com Fail-Fast (TvDatafeed -> YFinance -> Estático Global).
 - Fundamentos via Pynvest (Fundamentus).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Design (V9.16): Interface Premium, Clusterização 3D e Textos Profissionais.
+- Design (V9.17): Interface Premium, Cores Profissionais e Layout Transparente.
 
-Versão: 9.16.0 (Premium UX + 3D Clustering)
+Versão: 9.17.0 (Professional UI + Transparent Charts)
 =============================================================================
 """
 
@@ -268,15 +268,18 @@ class AnalisadorPerfilInvestidor:
 # =============================================================================
 
 def obter_template_grafico() -> dict:
+    # Cores Neutras e Profissionais (Azul Aço, Cinza, Verde Floresta)
+    corporate_colors = ['#2C3E50', '#7F8C8D', '#27AE60', '#C0392B', '#8E44AD', '#2980B9']
+    
     return {
-        'plot_bgcolor': '#f8f9fa', 
-        'paper_bgcolor': 'white',
-        'font': {'family': 'Arial, sans-serif', 'size': 12, 'color': '#343a40'},
-        'title': {'font': {'family': 'Arial, sans-serif', 'size': 16, 'color': '#212529', 'weight': 'bold'}, 'x': 0.5, 'xanchor': 'center'},
-        'xaxis': {'showgrid': True, 'gridcolor': '#e9ecef', 'showline': True, 'linecolor': '#ced4da', 'linewidth': 1, 'tickfont': {'family': 'Arial, sans-serif', 'color': '#343a40'}, 'title': {'font': {'family': 'Arial, sans-serif', 'color': '#343a40'}}, 'zeroline': False},
-        'yaxis': {'showgrid': True, 'gridcolor': '#e9ecef', 'showline': True, 'linecolor': '#ced4da', 'linewidth': 1, 'tickfont': {'family': 'Arial, sans-serif', 'color': '#343a40'}, 'title': {'font': {'family': 'Arial, sans-serif', 'color': '#343a40'}}, 'zeroline': False},
-        'legend': {'font': {'family': 'Arial, sans-serif', 'color': '#343a40'}, 'bgcolor': 'rgba(255, 255, 255, 0.8)', 'bordercolor': '#e9ecef', 'borderwidth': 1},
-        'colorway': ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd'] # Cores mais vibrantes para gráficos
+        'plot_bgcolor': 'rgba(0,0,0,0)', # Transparente
+        'paper_bgcolor': 'rgba(0,0,0,0)', # Transparente
+        'font': {'family': 'Inter, sans-serif', 'size': 12, 'color': '#343a40'},
+        'title': {'font': {'family': 'Inter, sans-serif', 'size': 16, 'color': '#212529', 'weight': 'bold'}, 'x': 0.5, 'xanchor': 'center'},
+        'xaxis': {'showgrid': True, 'gridcolor': '#ecf0f1', 'showline': True, 'linecolor': '#bdc3c7', 'linewidth': 1},
+        'yaxis': {'showgrid': True, 'gridcolor': '#ecf0f1', 'showline': True, 'linecolor': '#bdc3c7', 'linewidth': 1},
+        'legend': {'bgcolor': 'rgba(255,255,255,0.5)', 'bordercolor': '#ecf0f1'},
+        'colorway': corporate_colors
     }
 
 # =============================================================================
@@ -1176,6 +1179,17 @@ def configurar_pagina():
         
         /* Tables */
         .dataframe { font-size: 0.9rem; }
+        
+        /* Centralização de Títulos */
+        h1, h2, h3 {
+            text-align: center !important;
+        }
+        
+        /* Centralização de Métricas */
+        [data-testid="stMetric"] {
+            text-align: center;
+            margin: auto;
+        }
         </style>
     """, unsafe_allow_html=True)
 
@@ -1185,9 +1199,9 @@ def aba_introducao():
     st.markdown("## 📚 Manual Completo e Metodologia do Sistema")
     
     st.markdown("""
-    <div class="info-box">
+    <div class="info-box" style="text-align: center;">
     <h3>🎯 O Que é este Sistema?</h3>
-    <p>Este é um <b>Robo-Advisor Quantitativo Híbrido</b> projetado para o mercado brasileiro (B3). Ele utiliza uma abordagem sistemática, eliminando viés emocional da seleção de ativos.</p>
+    <p>Este é um <b>Robo-Advisor Quantitativo Híbrido</b> projetado para o mercado brasileiro (B3). Ele utiliza uma abordagem sistemática para eliminar o viés emocional da seleção de ativos.</p>
     <p><b>Objetivo Principal:</b> Construir uma carteira de investimentos otimizada (geralmente 5 ativos) que busque a melhor relação risco-retorno, adaptando-se dinamicamente ao perfil do investidor e às condições de mercado em tempo real.</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1522,7 +1536,7 @@ def aba_construtor_portfolio():
                 ])
                 
                 if not alloc_data.empty:
-                    fig_alloc = px.pie(alloc_data, values='Peso (%)', names='Ativo', hole=0.3)
+                    fig_alloc = px.pie(alloc_data, values='Peso (%)', names='Ativo', hole=0.4)
                     fig_layout = obter_template_grafico()
                     fig_layout['title']['text'] = "Distribuição Otimizada por Ativo"
                     fig_alloc.update_layout(**fig_layout)
@@ -1891,7 +1905,9 @@ def aba_analise_individual():
                         fig_pca.update_layout(
                             scene=dict(xaxis_title='PCA 1', yaxis_title='PCA 2', zaxis_title='PCA 3'),
                             margin=dict(l=0, r=0, b=0, t=40),
-                            height=600
+                            height=600,
+                            paper_bgcolor='rgba(0,0,0,0)',
+                            plot_bgcolor='rgba(0,0,0,0)'
                         )
                     else:
                         # Fallback para 2D se PCA 3D falhar (poucos dados)
