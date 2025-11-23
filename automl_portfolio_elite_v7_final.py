@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.26 (Update: FIX UNBOUND LOCAL, MERGE CLUSTER TABS, AND RESTORE UI)
+Versão: 9.32.27 (Update: FIX ML/GARCH Zero Points, UNBOUND LOCAL, & MERGE CLUSTER TABS)
 =============================================================================
 """
 
@@ -991,7 +991,7 @@ class ConstrutorPortfolioAutoML:
                 log_debug("AVISO: Dados insuficientes após o JOIN. Clusterização inicial ignorada.")
         
         else:
-            # FALLBACK: Se as colunas fundamentais não existirem (Pynvest falhou)
+            # FALLBACK: Se as colunas fundamentalistas não existirem (Pynvest falhou)
             self.dados_fundamentalistas['Cluster'] = 0
             log_debug("AVISO: Falha na coleta de dados fundamentais (P/L, ROE, etc.). Usando Cluster = 0.")
         
@@ -1842,14 +1842,14 @@ def aba_construtor_portfolio():
                     min_value=1000, max_value=10000000, value=10000, step=1000, key='investment_amount_input_v8'
                 )
             
-            # Placeholder para a barra de progresso antes do botão de submissão
-            progress_bar_form = st.empty()
-            
             # Botão de submissão centralizado
             col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
             with col_btn2:
                 submitted = st.form_submit_button("🚀 Gerar Alocação Otimizada", type="primary", use_container_width=True)
             
+            # Placeholder para a barra de progresso após o botão de submissão
+            progress_bar_form = st.empty()
+
             if submitted:
                 log_debug("Questionário de perfil submetido.")
                 risk_answers_originais = {
@@ -1960,16 +1960,12 @@ def aba_construtor_portfolio():
         
         if has_price_data and has_usable_ml:
              tab_title_ml = "🤖 Fator Predição ML"
+             tabs_list.append(tab_title_ml)
+             tabs_list.append("🔭 Análise de Clusters") # Aba separada se o ML supervisionado funcionar
         else:
              tab_title_ml = "🔬 Clusters e Anomalias" # Esta será a nova aba 3
-             
-        tabs_list.append(tab_title_ml)
+             tabs_list.append(tab_title_ml)
         
-        # Se for o modo de Clusters e Anomalias, adicionamos a visualização do portfólio lá dentro.
-        # Se for o modo ML, adicionamos a aba de Análise de Clusters separadamente.
-        if has_price_data and has_usable_ml:
-            tabs_list.append("🔭 Análise de Clusters") 
-
         if has_price_data and has_garch_data and not is_garch_redundant:
              tabs_list.append("📉 Fator Volatilidade GARCH")
              
@@ -1990,11 +1986,11 @@ def aba_construtor_portfolio():
         if "📉 Fator Volatilidade GARCH" in tabs_list:
             tab_garch = tabs_map[tabs_list.index("📉 Fator Volatilidade GARCH")]
         
+        # Mapeia a aba de Análise de Clusters
         if "🔭 Análise de Clusters" in tabs_list:
             tab_portfolio_cluster = tabs_map[tabs_list.index("🔭 Análise de Clusters")]
-        else:
-            tab_portfolio_cluster = tab3 # Se não for uma aba separada, o conteúdo vai para a aba 3
-
+        elif "🔬 Clusters e Anomalias" in tabs_list:
+            tab_portfolio_cluster = tab3 # Se não houver ML supervisionado, o conteúdo de Clusterização vai para a tab 3
         
         with tab1:
             st.markdown('#### Distribuição do Capital')
@@ -2086,10 +2082,11 @@ def aba_construtor_portfolio():
             else:
                 st.info("Gráfico de retorno indisponível (Modo Estático Ativo - Sem histórico de preços).")
         
-        with tab3: # ML / Cluster (Se for modo Fallback, exibe clusters aqui)
+        # ABA DE PREDIÇÃO ML OU CLUSTERS (tab3)
+        with tab3: 
             
             if has_price_data and has_usable_ml:
-                 # ---- MODO ML SUPERVISIONADO ----
+                 # ---- MODO ML SUPERVISIONADO (tab3) ----
                  st.markdown('#### 🤖 Predição de Movimento Direcional (Random Forest)')
                  st.markdown("O modelo abaixo utiliza histórico de preços para prever a probabilidade de alta no curto prazo.")
                  title_text_plot = "Probabilidade de Alta (0-100%)"
@@ -2142,70 +2139,115 @@ def aba_construtor_portfolio():
 
 
             else:
-                 # ---- MODO FALLBACK (Clusters e Anomalias) ----
+                 # ---- MODO FALLBACK (Clusters e Anomalias) [Abas 3/4 unificadas] ----
                  st.markdown('#### 🔬 Análise de Qualidade Fundamentalista (Unsupervised Learning)')
                  st.info("ℹ️ **Modo Fallback Ativo:** O modelo de predição supervisionada não encontrou padrões significativos ou o histórico de preços é limitado. O sistema está utilizando a **Clusterização Fundamentalista** (qualidade) como fator ML dominante.")
                  
-                 st.markdown("##### Score Fundamentalista e Cluster por Ativo")
-                 # Garante que o df_fund_clean tem as colunas necessárias
-                 if not builder.scores_combinados.empty:
+                 st.markdown('#### 🔭 Visualização da Diversificação e Clusters')
+                 
+                 # Reutiliza o PCA e Clusterização dos Scores Finais
+                 if 'Final_Cluster' in builder.scores_combinados.columns and len(builder.scores_combinados) >= 2:
+                     df_viz = builder.scores_combinados.loc[assets].copy().reset_index().rename(columns={'index': 'Ticker'})
+                     
+                     # Prepara dados para PCA (apenas scores)
+                     features_for_pca = ['performance_score', 'fundamental_score', 'technical_score', 'ml_score_weighted']
+                     data_pca_input = df_viz[features_for_pca].fillna(50)
+                     
+                     scaler = StandardScaler()
+                     data_scaled = scaler.fit_transform(data_pca_input)
+                     pca = PCA(n_components=2)
+                     pca_result = pca.fit_transform(data_scaled)
+                     
+                     df_viz['PC1'] = pca_result[:, 0]
+                     df_viz['PC2'] = pca_result[:, 1]
+                     
+                     # Gráfico de Dispersão 2D dos Clusters
+                     fig_cluster_scatter = px.scatter(
+                         df_viz, 
+                         x='PC1', 
+                         y='PC2', 
+                         color=df_viz['Final_Cluster'].astype(str),
+                         size=df_viz['total_score'] / df_viz['total_score'].max() * 20, # Tamanho pela pontuação
+                         hover_data={'Ticker': True, 'total_score': ':.2f', 'Final_Cluster': True},
+                         text=df_viz['Ticker'].str.replace('.SA', ''),
+                         title="Distribuição do Portfólio no Espaço PCA (Scores Finais)"
+                     )
+                     
+                     template = obter_template_grafico()
+                     fig_cluster_scatter.update_layout(**template)
+                     fig_cluster_scatter.update_traces(textposition='top center')
+                     fig_cluster_scatter.update_layout(height=600)
+                     
+                     st.plotly_chart(fig_cluster_scatter, use_container_width=True)
+                     
+                     st.markdown("##### Distribuição Setorial (Confirmação de Diversificação)")
+                     df_sector = df_viz.groupby('sector')['Ticker'].count().reset_index()
+                     df_sector.columns = ['Setor', 'Contagem']
+                     fig_sector = px.bar(df_sector, x='Setor', y='Contagem', title='Contagem de Ativos por Setor')
+                     st.plotly_chart(fig_sector, use_container_width=True)
+                     
+                     st.markdown("---")
+                     st.markdown("##### Score Fundamentalista e Cluster por Ativo")
                      df_cluster_display = builder.scores_combinados[['fundamental_score', 'Final_Cluster', 'pe_ratio', 'roe']].copy()
                      df_cluster_display.rename(columns={'fundamental_score': 'Score Fund.', 'Final_Cluster': 'Cluster', 'pe_ratio': 'P/L', 'roe': 'ROE'}, inplace=True)
-                     
+                         
                      st.dataframe(df_cluster_display.style.format({
                          'Score Fund.': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}'
                      }).background_gradient(cmap='Blues', subset=['Score Fund.']), use_container_width=True)
+                     
                  else:
-                     st.warning("Dados de fundamentos insuficientes para exibir clusters.")
+                     st.warning("Dados de scores insuficientes para análise de Clusterização do Portfólio.")
             
-        # ABA DE ANÁLISE DE CLUSTERS (AGORA NOVO ÍNDICE)
-        with tab_portfolio_cluster:
-            st.markdown('#### 🔭 Visualização da Diversificação e Clusters')
-            st.info("Esta análise utiliza PCA sobre os scores para visualizar a distribuição dos ativos selecionados no 'espaço de risco/retorno' e confirmar a diversificação entre os clusters.")
-            
-            # Reutiliza o PCA e Clusterização dos Scores Finais
-            if 'Final_Cluster' in builder.scores_combinados.columns and len(builder.scores_combinados) >= 2:
-                df_viz = builder.scores_combinados.loc[assets].copy().reset_index().rename(columns={'index': 'Ticker'})
+        # ABA DE ANÁLISE DE CLUSTERS (Se ML Supervisionado funciona, esta aba é a 4)
+        if "🔭 Análise de Clusters" in tabs_list:
+            with tab_portfolio_cluster:
+                st.markdown('#### 🔭 Visualização da Diversificação e Clusters')
+                st.info("Esta análise utiliza PCA sobre os scores para visualizar a distribuição dos ativos selecionados no 'espaço de risco/retorno' e confirmar a diversificação entre os clusters.")
                 
-                # Prepara dados para PCA (apenas scores)
-                features_for_pca = ['performance_score', 'fundamental_score', 'technical_score', 'ml_score_weighted']
-                data_pca_input = df_viz[features_for_pca].fillna(50)
-                
-                scaler = StandardScaler()
-                data_scaled = scaler.fit_transform(data_pca_input)
-                pca = PCA(n_components=2)
-                pca_result = pca.fit_transform(data_scaled)
-                
-                df_viz['PC1'] = pca_result[:, 0]
-                df_viz['PC2'] = pca_result[:, 1]
-                
-                # Gráfico de Dispersão 2D dos Clusters
-                fig_cluster_scatter = px.scatter(
-                    df_viz, 
-                    x='PC1', 
-                    y='PC2', 
-                    color=df_viz['Final_Cluster'].astype(str),
-                    size=df_viz['total_score'] / df_viz['total_score'].max() * 20, # Tamanho pela pontuação
-                    hover_data={'Ticker': True, 'total_score': ':.2f', 'Final_Cluster': True},
-                    text=df_viz['Ticker'].str.replace('.SA', ''),
-                    title="Distribuição do Portfólio no Espaço PCA (Scores Finais)"
-                )
-                
-                template = obter_template_grafico()
-                fig_cluster_scatter.update_layout(**template)
-                fig_cluster_scatter.update_traces(textposition='top center')
-                fig_cluster_scatter.update_layout(height=600)
-                
-                st.plotly_chart(fig_cluster_scatter, use_container_width=True)
-                
-                st.markdown("##### Distribuição Setorial (Confirmação de Diversificação)")
-                df_sector = df_viz.groupby('sector')['Ticker'].count().reset_index()
-                df_sector.columns = ['Setor', 'Contagem']
-                fig_sector = px.bar(df_sector, x='Setor', y='Contagem', title='Contagem de Ativos por Setor')
-                st.plotly_chart(fig_sector, use_container_width=True)
-                
-            else:
-                 st.warning("Dados de scores insuficientes para análise de Clusterização do Portfólio.")
+                # Reutiliza o PCA e Clusterização dos Scores Finais
+                if 'Final_Cluster' in builder.scores_combinados.columns and len(builder.scores_combinados) >= 2:
+                    df_viz = builder.scores_combinados.loc[assets].copy().reset_index().rename(columns={'index': 'Ticker'})
+                    
+                    # Prepara dados para PCA (apenas scores)
+                    features_for_pca = ['performance_score', 'fundamental_score', 'technical_score', 'ml_score_weighted']
+                    data_pca_input = df_viz[features_for_pca].fillna(50)
+                    
+                    scaler = StandardScaler()
+                    data_scaled = scaler.fit_transform(data_pca_input)
+                    pca = PCA(n_components=2)
+                    pca_result = pca.fit_transform(data_scaled)
+                    
+                    df_viz['PC1'] = pca_result[:, 0]
+                    df_viz['PC2'] = pca_result[:, 1]
+                    
+                    # Gráfico de Dispersão 2D dos Clusters
+                    fig_cluster_scatter = px.scatter(
+                        df_viz, 
+                        x='PC1', 
+                        y='PC2', 
+                        color=df_viz['Final_Cluster'].astype(str),
+                        size=df_viz['total_score'] / df_viz['total_score'].max() * 20, # Tamanho pela pontuação
+                        hover_data={'Ticker': True, 'total_score': ':.2f', 'Final_Cluster': True},
+                        text=df_viz['Ticker'].str.replace('.SA', ''),
+                        title="Distribuição do Portfólio no Espaço PCA (Scores Finais)"
+                    )
+                    
+                    template = obter_template_grafico()
+                    fig_cluster_scatter.update_layout(**template)
+                    fig_cluster_scatter.update_traces(textposition='top center')
+                    fig_cluster_scatter.update_layout(height=600)
+                    
+                    st.plotly_chart(fig_cluster_scatter, use_container_width=True)
+                    
+                    st.markdown("##### Distribuição Setorial (Confirmação de Diversificação)")
+                    df_sector = df_viz.groupby('sector')['Ticker'].count().reset_index()
+                    df_sector.columns = ['Setor', 'Contagem']
+                    fig_sector = px.bar(df_sector, x='Setor', y='Contagem', title='Contagem de Ativos por Setor')
+                    st.plotly_chart(fig_sector, use_container_width=True)
+                    
+                else:
+                     st.warning("Dados de scores insuficientes para análise de Clusterização do Portfólio.")
+
         
         # O bloco tab_garch só existe se has_price_data and has_garch_data and not is_garch_redundant for True
         if tab_garch is not None:
