@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.14 (Update: FIX NameError by reordering classes)
+Versão: 9.32.15 (Update: FIX NameError (Scope) & Streamlit Deprecation Warnings)
 =============================================================================
 """
 
@@ -1733,7 +1733,7 @@ def aba_construtor_portfolio():
                     min_value=1000, max_value=10000000, value=10000, step=1000, key='investment_amount_input_v8'
                 )
             
-            submitted = st.form_submit_button("🚀 Gerar Alocação Otimizada", type="primary", key='submit_optimization_button_v8')
+            submitted = st.form_submit_button("🚀 Gerar Alocação Otimizada", type="primary", use_container_width=False)
             
             if submitted:
                 log_debug("Questionário de perfil submetido.")
