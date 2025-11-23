@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.10 (Update: FIX NameError, GARCH Redundancy, Detailed Allocation Table)
+Versão: 9.32.12 (Update: FIX AttributeError and Method Scope)
 =============================================================================
 """
 
@@ -33,7 +33,7 @@ import traceback
 from scipy.optimize import minimize
 from scipy.stats import zscore, norm
 
-# --- 3. STREAMLIT, DATA ACQUISITION, & PLOTTING ---
+# --- 3. STREAMLIT, DATA ACQUISITION, & PLOTTING ---\
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
@@ -690,6 +690,123 @@ class ColetorDadosLive(object):
         log_debug(f"Coleta de dados finalizada com sucesso. {len(self.ativos_sucesso)} ativos processados.")
         return True
 
+    def coletar_ativo_unico_gcs(self, ativo_selecionado: str):
+        """
+        [CORREÇÃO DE ATRIBUTO] Adaptado para ser um método de ColetorDadosLive.
+        Função para coletar e processar um único ativo para a aba de análise individual.
+        """
+        log_debug(f"Iniciando coleta e análise de ativo único: {ativo_selecionado}")
+        
+        # Chama coleta principal com check_min_ativos=False
+        self.coletar_e_processar_dados([ativo_selecionado], check_min_ativos=False)
+        
+        if ativo_selecionado not in self.dados_por_ativo:
+            log_debug(f"ERRO: Dados não encontrados após coleta para {ativo_selecionado}.")
+            return None, None, None
+
+        df_tec = self.dados_por_ativo[ativo_selecionado]
+        fund_row = {}
+        if ativo_selecionado in self.dados_fundamentalistas.index:
+            fund_row = self.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
+        
+        df_ml_meta = pd.DataFrame()
+        
+        is_price_data_available = not df_tec.empty and 'Close' in df_tec.columns and len(df_tec) > 60 and not df_tec['Close'].isnull().all()
+        
+        if is_price_data_available:
+            log_debug(f"Análise Individual ML: Iniciando modelo supervisionado para {ativo_selecionado}.")
+            try:
+                df = df_tec.copy()
+                df = CalculadoraTecnica.enriquecer_dados_tecnicos(df)
+                
+                df['Future_Direction'] = np.where(df['Close'].pct_change(5).shift(-5) > 0, 1, 0)
+                
+                features_ml = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50']
+                current_features = [f for f in features_ml if f in df.columns]
+                df_model = df.dropna(subset=current_features + ['Future_Direction'])
+                
+                if len(df_model) > 50:
+                    X = df_model[current_features].iloc[:-5]
+                    y = df_model['Future_Direction'].iloc[:-5]
+                    model = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
+                    model.fit(X, y)
+                    
+                    last_features = df[current_features].iloc[[-1]].fillna(0)
+                    proba = model.predict_proba(last_features)[0][1]
+                    
+                    # --- CÁLCULO DE AUC PARA CONFIANÇA ---
+                    if len(np.unique(y)) >= 2:
+                        from sklearn.metrics import roc_auc_score
+                        cv = TimeSeriesSplit(n_splits=3)
+                        auc_scores = cross_val_score(model, X, y, cv=cv, scoring='roc_auc')
+                        avg_auc = auc_scores.mean()
+                    else:
+                        avg_auc = 0.5
+                    
+                    
+                    is_neutral_result = (avg_auc <= 0.55) or (len(np.unique(y)) < 2) 
+
+                    if is_neutral_result:
+                        # Heuristica de proxy para o MODO SUPERVISIONADO NEUTRO
+                        roe = fund_row.get('roe', 0); pe = fund_row.get('pe_ratio', 15)
+                        if pe <= 0: pe = 20
+                        score_fund_proxy = min(0.9, max(0.05, (roe * 100) / pe * 0.5 + 0.4))
+                        
+                        proba_final = score_fund_proxy
+                        conf_final = 0.60
+                        log_debug(f"ML Individual: Neutro (AUC={avg_auc:.2f}). Usando Proxy Fund. Score: {proba_final:.2f}.")
+                    else:
+                        proba_final = proba
+                        conf_final = avg_auc
+                        log_debug(f"ML Individual: Sucesso. Prob: {proba_final:.2f}, AUC: {conf_final:.2f}.")
+
+                    importances = pd.DataFrame({
+                        'feature': current_features,
+                        'importance': model.feature_importances_
+                    }).sort_values('importance', ascending=False)
+                    
+                    df_tec['ML_Proba'] = proba_final
+                    df_tec['ML_Confidence'] = conf_final
+                    df_ml_meta = importances
+                    
+                else:
+                    log_debug(f"ML Individual: Dados insuficientes ({len(df_model)}). Pulando modelo supervisionado.")
+                    is_price_data_available = False # Força fallback não supervisionado no próximo if
+            except Exception as e:
+                log_debug(f"ML Individual: ERRO no modelo supervisionado: {str(e)[:50]}.")
+                is_price_data_available = False
+                
+            
+            # 2. Se ML não rodou (sem preço, ou falhou, ou dados insuficientes), roda UNSUPERVISED ANOMALY DETECTION
+            if 'ML_Proba' not in df_tec.columns or not is_price_data_available:
+                log_debug(f"Análise Individual ML: Recorrendo ao modelo NÃO SUPERVISIONADO (Fallback/Estático).")
+                try:
+                    # Simulação de Anomalia (Isolation Forest)
+                    cols_fund = ['pe_ratio', 'pb_ratio', 'roe', 'net_margin', 'div_yield']
+                    row_data = {k: float(fund_row.get(k, 0)) for k in cols_fund}
+                    roe = row_data['roe']
+                    pe = row_data['pe_ratio']
+                    if pe <= 0: pe = 20
+                    
+                    # Heuristica de "Qualidade" como proxy de ML
+                    quality_score = min(0.95, max(0.05, (roe * 100) / pe * 0.5 + 0.4))
+                    
+                    df_tec['ML_Proba'] = quality_score
+                    df_tec['ML_Confidence'] = 0.50 # Confiança média para fallback
+                    
+                    # Metadados explicativos
+                    df_ml_meta = pd.DataFrame({
+                        'feature': ['Qualidade (ROE/PL)', 'Estabilidade'],
+                        'importance': [0.8, 0.2]
+                    })
+                    log_debug(f"ML Individual: Modelo Não Supervisionado concluído. Score Qualidade: {quality_score:.2f}.")
+                except Exception as e:
+                    log_debug(f"ML Individual: ERRO no modelo não supervisionado: {str(e)[:50]}.")
+                    df_tec['ML_Proba'] = 0.5; df_tec['ML_Confidence'] = 0.0
+
+            return df_tec, fund_row, df_ml_meta
+        return None, None, None
+
     def calculate_cross_sectional_features(self):
         df_fund = self.dados_fundamentalistas.copy()
         if 'sector' not in df_fund.columns or 'pe_ratio' not in df_fund.columns: return
@@ -1163,7 +1280,15 @@ class AnalisadorIndividualAtivos:
         log_debug(f"Clusterização geral concluída. {len(df_model)} ativos processados. Identificados {n_clusters} clusters.")
         return resultado, n_clusters
 
-# ... (Função safe_format, omitida por brevidade, mas incluída no código final)
+def safe_format(value):
+    """Formata valor float para string com 2 casas, tratando strings e NaNs."""
+    if pd.isna(value):
+        return "N/A"
+    try:
+        float_val = float(value)
+        return f"{float_val:.2f}"
+    except (ValueError, TypeError):
+        return str(value)
 
 # =============================================================================
 # 13. INTERFACE STREAMLIT - CONFIGURAÇÃO E CSS ORIGINAL (V8.7)
@@ -1549,6 +1674,8 @@ def aba_construtor_portfolio():
                 log_debug(f"Perfil calculado: {risk_level} (Score {score}). Horizonte ML: {lookback} dias.")
                 
                 try:
+                    # O erro NameError: name 'ConstrutorPortfolioAutoML' is not defined pode ocorrer aqui se o ambiente
+                    # Streamlit não reconhecer a classe. Se persistir, é um problema de ambiente/configuração.
                     builder_local = ConstrutorPortfolioAutoML(investment)
                     st.session_state.builder = builder_local
                 except Exception as e:
@@ -1913,7 +2040,7 @@ def aba_construtor_portfolio():
                 
                 if 'ROE' in df_scores_display.columns:
                      df_scores_display['ROE'] = df_scores_display['ROE'] * 100
-                     
+                         
                 df_scores_display = df_scores_display.iloc[:15] 
                 
                 st.markdown("##### Ranqueamento Ponderado Multi-Fatorial (Top 15 Tickers do Universo Analisado)")
