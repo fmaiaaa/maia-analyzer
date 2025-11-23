@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.23 (Update: FIX FINAL UI/ML ROBUSTNESS & FULL LATERALITY)
+Versão: 9.32.24 (Update: FIX FINAL UI/ML ROBUSTNESS & ADVANCED ML LOGGING)
 =============================================================================
 """
 
@@ -231,6 +231,10 @@ def log_debug(message: str):
 
 def mostrar_debug_panel():
     """Exibe o painel de debug (Streamlit expander) no topo da aplicação."""
+    # Garante que st.session_state.debug_logs está inicializado
+    if 'debug_logs' not in st.session_state:
+        st.session_state.debug_logs = []
+
     with st.expander("🐛 Log de Debug Detalhado (Streamlit Cloud CMD)"):
         if st.session_state.debug_logs:
             # Exibe os logs mais recentes primeiro
@@ -288,31 +292,35 @@ class CalculadoraTecnica:
         df = df_ativo.sort_index().copy()
         df['returns'] = df['Close'].pct_change()
         
+        # RSI
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        df['rsi_14'] = 100 - (100 / (1 + (gain / loss)))
+        # Evita divisão por zero
+        rs = gain / loss.replace(0, np.nan)
+        df['rsi_14'] = 100 - (100 / (1 + rs))
         
+        # MACD
         ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
         ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
         df['macd'] = ema_12 - ema_26
         df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
         df['macd_diff'] = df['macd'] - df['macd_signal']
         
+        # Volatilidade e Momentum
         df['vol_20d'] = df['returns'].rolling(window=20).std() * np.sqrt(252)
-        
         df['momentum_10'] = df['Close'] / df['Close'].shift(10) - 1
-        
         df['sma_50'] = df['Close'].rolling(window=50).mean()
-        # df['sma_200'] = df['Close'].rolling(window=200).mean() # Média de 200 dias removida (FIX 3)
+        df['momentum_60'] = df['Close'].pct_change(60)
         
+        # Bollinger Bands Width
         rolling_mean = df['Close'].rolling(window=20).mean()
         rolling_std = df['Close'].rolling(window=20).std()
         upper = rolling_mean + (rolling_std * 2)
         lower = rolling_mean - (rolling_std * 2)
-        df['bb_width'] = (upper - lower) / rolling_mean
+        # Evita divisão por zero/NaN
+        df['bb_width'] = (upper - lower) / rolling_mean.replace(0, np.nan)
         
-        df['momentum_60'] = df['Close'].pct_change(60)
         return df
 
 # =============================================================================
@@ -447,19 +455,24 @@ class ColetorDadosLive(object):
         self.volatilidades_garch_raw = {}
         self.metricas_simples = {}
         
+        log_debug("Inicializando ColetorDadosLive...")
         try:
             # FIX 1: Remove login/senha para forçar nologin e evitar timeout de autenticação
             self.tv = TvDatafeed() 
             self.tv_ativo = True
+            log_debug("TvDatafeed inicializado com sucesso.")
         except Exception as e:
-            st.error(f"Erro ao inicializar tvDatafeed: {e}")
             self.tv_ativo = False
+            log_debug(f"ERRO: Falha ao inicializar TvDatafeed: {str(e)[:50]}...")
+            st.error(f"Erro ao inicializar tvDatafeed: {e}")
         
         try:
             self.pynvest_scrapper = Fundamentus()
             self.pynvest_ativo = True
+            log_debug("Pynvest (Fundamentus) inicializado com sucesso.")
         except Exception:
             self.pynvest_ativo = False
+            log_debug("AVISO: Pynvest falhou ao inicializar. Coleta de fundamentos desativada.")
             st.warning("Biblioteca pynvest não inicializada corretamente.")
 
     def _mapear_colunas_pynvest(self, df_pynvest: pd.DataFrame) -> dict:
@@ -768,7 +781,8 @@ class ColetorDadosLive(object):
         
         df_ml_meta = pd.DataFrame()
         
-        is_price_data_available = not df_tec.empty and 'Close' in df_tec.columns and len(df_tec) > 60 and not df_tec['Close'].isnull().all()
+        # A detecção de preço disponível deve ser mais robusta, pois dependemos do enrichment
+        is_price_data_available = 'Close' in df_tec.columns and not df_tec['Close'].isnull().all() and len(df_tec.dropna(subset=['Close'])) > 60
         
         # --- NOVO: Feature Pool Completo para ML e GARCH ---
         ALL_TECH_FEATURES = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'momentum_60', 'bb_width']
@@ -778,7 +792,7 @@ class ColetorDadosLive(object):
             log_debug(f"Análise Individual ML: Iniciando modelo supervisionado para {ativo_selecionado}.")
             try:
                 df = df_tec.copy()
-                df = CalculadoraTecnica.enriquecer_dados_tecnicos(df)
+                # O enrichment já foi feito no coletor, mas garantimos que as colunas existem
                 
                 df['Future_Direction'] = np.where(df['Close'].pct_change(5).shift(-5) > 0, 1, 0)
                 
@@ -794,7 +808,7 @@ class ColetorDadosLive(object):
                     X = df_model[available_features].iloc[:-5]
                     y = df_model['Future_Direction'].iloc[:-5]
                     
-                    # Identifica features que ainda são todas NaN após o dropna (impossível se dropna for bem sucedido, mas seguro)
+                    # Filtra features que ainda são todas NaN após o dropna (impossível se dropna for bem sucedido, mas seguro)
                     final_features = [col for col in X.columns if not X[col].isnull().all()]
                     X = X[final_features]
 
@@ -1527,7 +1541,15 @@ def configurar_pagina():
         }
         
         /* Garante que tabelas e gráficos ocupem a largura do container principal */
-        /* Use use_container_width=True nos elementos Streamlit para largura total */
+        /* Usamos use_container_width=True nos elementos Streamlit, e esta regra CSS garante que os containers internos se estiquem */
+        div[data-testid="stPlotlyChart"] {
+            width: 100% !important;
+        }
+        
+        div.stDataFrame {
+            width: 100% !important;
+            /* Garante que o container da tabela se estique */
+        }
         
         /* Outros estilos básicos */
         .stMetric { 
@@ -1821,7 +1843,7 @@ def aba_construtor_portfolio():
                     min_value=1000, max_value=10000000, value=10000, step=1000, key='investment_amount_input_v8'
                 )
             
-            submitted = st.form_submit_button("🚀 Gerar Alocação Otimizada", type="primary", key='submit_optimization_button_v8')
+            submitted = st.form_submit_button("🚀 Gerar Alocação Otimizada", type="primary", use_container_width=False)
             
             if submitted:
                 log_debug("Questionário de perfil submetido.")
@@ -2260,6 +2282,11 @@ def main():
         st.session_state.analisar_ativo_triggered = False
         
     configurar_pagina()
+    # Garante que o painel de debug está sempre disponível no topo
+    if 'debug_logs' not in st.session_state:
+        st.session_state.debug_logs = []
+    mostrar_debug_panel() 
+
     st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos</h1>', unsafe_allow_html=True)
     
     # Esta linha foi simplificada no código de produção para uso das abas
