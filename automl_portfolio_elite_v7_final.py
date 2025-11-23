@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.1 (Update: Login TVDatafeed Validado)
+Versão: 9.32.1 (Update: FIX PyArrow Empty String Conversion)
 =============================================================================
 """
 
@@ -300,6 +300,10 @@ def obter_template_grafico() -> dict:
 class EngenheiroFeatures:
     @staticmethod
     def _normalize_score(serie: pd.Series, maior_melhor: bool = True) -> pd.Series:
+        """Normaliza uma série de scores para uma escala de 0 a 100."""
+        # Se por acaso receber um valor não-Series, a correção no pipeline deve garantir que seja uma Series
+        
+        # O erro ocorre aqui quando 'serie' é um 'int' (o valor default 50)
         series_clean = serie.replace([np.inf, -np.inf], np.nan).dropna()
         if series_clean.empty or series_clean.std() == 0:
             return pd.Series(50, index=serie.index)
@@ -362,18 +366,11 @@ class ColetorDadosLive(object):
         self.metricas_simples = {}
         
         try:
-            # --- CREDENCIAIS TRADINGVIEW ---
-            # Confirmação: A sintaxe TvDatafeed(user, pass) habilita o login corretamente.
-            # DICA DE SEGURANÇA: Evite deixar senhas hardcoded em código compartilhado.
-            # Considere usar st.secrets ou variáveis de ambiente em produção.
-            self.usuario_tv = 'maiathekid777' 
-            self.senha_tv = 'Cabuloso.102'
-
-            self.tv = TvDatafeed(self.usuario_tv, self.senha_tv) 
+            # FIX 1: Remove login/senha para forçar nologin e evitar timeout de autenticação
+            self.tv = TvDatafeed() 
             self.tv_ativo = True
-            
         except Exception as e:
-            st.error(f"Erro ao inicializar tvDatafeed (Login Falhou): {e}")
+            st.error(f"Erro ao inicializar tvDatafeed: {e}")
             self.tv_ativo = False
         
         try:
@@ -410,7 +407,7 @@ class ColetorDadosLive(object):
             'pct_var_30d': 'pct_var_30d', 'pct_var_12m': 'pct_var_12m', 'pct_var_ano_a0': 'pct_var_ano_a0',
             'pct_var_ano_a1': 'pct_var_ano_a1', 'pct_var_ano_a2': 'pct_var_ano_a2', 'pct_var_ano_a3': 'pct_var_ano_a3',
             'pct_var_ano_a4': 'pct_var_ano_a4', 'pct_var_ano_a5': 'pct_var_ano_a5', 
-            'vlr_ind_p_sobre_ebit': 'p_ebit', 'vlr_ind_psr': 'psr', 'vlr_ind_p_sobre_ativ': 'p_ativ',
+            'vlr_ind_p_sobre_ebit': 'p_ebit', 'vlr_ind_psr': 'psr', 'vlr_ind_p_sobre_ativ': 'p_ativo',
             'vlr_ind_p_sobre_cap_giro': 'p_cap_giro', 'vlr_ind_p_sobre_ativ_circ_liq': 'p_ativ_circ_liq',
             'vlr_ind_ev_sobre_ebit': 'ev_ebit', 'vlr_ind_lpa': 'lpa', 'vlr_ind_vpa': 'vpa',
             'vlr_ind_margem_bruta': 'margem_bruta', 'vlr_ind_ebit_sobre_ativo': 'ebit_ativo',
@@ -424,14 +421,20 @@ class ColetorDadosLive(object):
             if col_orig in row:
                 val = row[col_orig]
                 if isinstance(val, str):
+                    # === INÍCIO DA CORREÇÃO DE ERRO PYARROW/EMPTY STRING ===
                     if val.strip() == '':
-                        val = np.nan
-                    val = val.replace('.', '').replace(',', '.')
-                    if val.endswith('%'):
-                        val = val.replace('%', '')
-                        try: val = float(val) / 100.0
-                        except (ValueError, TypeError): pass
+                        val = np.nan  # Converte string vazia para NaN
+                    # === FIM DA CORREÇÃO ===
+
+                    # Se o valor ainda for uma string (ou seja, não era vazia)
+                    if isinstance(val, str):
+                        val = val.replace('.', '').replace(',', '.')
+                        if val.endswith('%'):
+                            val = val.replace('%', '')
+                            try: val = float(val) / 100.0
+                            except (ValueError, TypeError): pass
                 try: 
+                    # Tenta a conversão final, que agora aceita float ou np.nan
                     dados_formatados[col_dest] = float(val)
                 except (ValueError, TypeError): 
                     dados_formatados[col_dest] = val
@@ -817,11 +820,8 @@ class ConstrutorPortfolioAutoML:
     def treinar_modelos_ensemble(self, dias_lookback_ml: int = LOOKBACK_ML, otimizar: bool = False, progress_callback=None):
         ativos_com_dados = [s for s in self.ativos_sucesso if s in self.dados_por_ativo]
         
-        # --- CORREÇÃO: VERIFICAÇÃO ROBUSTA DE COLUNAS FUNDAMENTAIS ---
-        
+        # --- CORREÇÃO: VERIFICAÇÃO ROBUSTA DE COLUNAS FUNDAMENTAIS (Evita KeyError na linha 819) ---
         required_cols = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe']
-        
-        # Filtra as colunas que realmente existem no DataFrame
         available_fund_cols = [col for col in required_cols if col in self.dados_fundamentalistas.columns]
         
         # Verifica se temos o mínimo necessário para a clusterização
@@ -851,6 +851,7 @@ class ConstrutorPortfolioAutoML:
             # FALLBACK: Se as colunas fundamentais não existirem (Pynvest falhou)
             self.dados_fundamentalistas['Cluster'] = 0
             st.warning("⚠️ Falha na coleta de dados fundamentais (P/L, ROE, etc.). Usando Cluster = 0.")
+        # --- FIM DA CORREÇÃO DE CLUSTERIZAÇÃO ---
 
         features_ml = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'sma_200',
             'pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster']
@@ -958,10 +959,20 @@ class ConstrutorPortfolioAutoML:
         scores = pd.DataFrame(index=combined.index)
         scores['performance_score'] = (EngenheiroFeatures._normalize_score(combined['sharpe'], True) * 0.6 + EngenheiroFeatures._normalize_score(combined['retorno_anual'], True) * 0.4) * W_PERF_GLOBAL
         
-        s_pl = EngenheiroFeatures._normalize_score(combined.get('pe_ratio', 50), False)
-        s_pvp = EngenheiroFeatures._normalize_score(combined.get('pb_ratio', 50), False)
-        s_roe = EngenheiroFeatures._normalize_score(combined.get('roe', 50), True)
-        s_dy = EngenheiroFeatures._normalize_score(combined.get('div_yield', 0), True)
+        # --- FIX 2: Adiciona função helper para retornar Series de valor neutro, não um int isolado ---
+        def _get_score_series(df: pd.DataFrame, col: str, default_val: float) -> pd.Series:
+            """Retorna a coluna se existir, ou uma Series de valor neutro."""
+            if col in df.columns:
+                return df[col]
+            return pd.Series(default_val, index=df.index)
+        # --- FIM FIX 2 ---
+
+        # Agora, chame o _normalize_score usando a função helper:
+        s_pl = EngenheiroFeatures._normalize_score(_get_score_series(combined, 'pe_ratio', 50), False)
+        s_pvp = EngenheiroFeatures._normalize_score(_get_score_series(combined, 'pb_ratio', 50), False)
+        s_roe = EngenheiroFeatures._normalize_score(_get_score_series(combined, 'roe', 50), True)
+        s_dy = EngenheiroFeatures._normalize_score(_get_score_series(combined, 'div_yield', 0), True)
+        
         scores['fundamental_score'] = ((s_pl + s_pvp + s_roe + s_dy) / 4) * w_fund_final
         
         s_rsi = EngenheiroFeatures._normalize_score(100 - abs(combined.get('rsi_current', 50) - 50), True)
@@ -1684,7 +1695,7 @@ def aba_construtor_portfolio():
                     fig_alloc.update_layout(**template)
                     fig_alloc.update_layout(title_text="Distribuição Otimizada por Ativo")
                     
-                    st.plotly_chart(fig_alloc, width=True)
+                    st.plotly_chart(fig_alloc, use_container_width=True)
                 else:
                     st.warning("Nenhuma alocação significativa para exibir. Otimização não retornou pesos.")
             
@@ -1718,7 +1729,7 @@ def aba_construtor_portfolio():
                         })
                 
                 df_alloc = pd.DataFrame(alloc_table)
-                st.dataframe(df_alloc, width=True, hide_index=True)
+                st.dataframe(df_alloc, use_container_width=True, hide_index=True)
         
         with tab2:
             st.markdown('#### Métricas Chave do Portfólio (Histórico Recente)')
@@ -1752,7 +1763,7 @@ def aba_construtor_portfolio():
                 template = obter_template_grafico()
                 fig_cum.update_layout(**template)
                 fig_cum.update_layout(title_text="Retorno Acumulado dos Tickers Selecionados", yaxis_title="Retorno Acumulado (Base 1)", xaxis_title="Data", height=500)
-                st.plotly_chart(fig_cum, width=True)
+                st.plotly_chart(fig_cum, use_container_width=True)
             else:
                 st.info("Gráfico de retorno indisponível (Modo Estático Ativo - Sem histórico de preços).")
         
@@ -1802,14 +1813,14 @@ def aba_construtor_portfolio():
                 
                 fig_ml.update_layout(title_text=title_text_plot, yaxis_title="Score", xaxis_title="Ticker", height=400)
                 
-                st.plotly_chart(fig_ml, width=True)
+                st.plotly_chart(fig_ml, use_container_width=True)
                 
                 st.markdown("---")
                 st.markdown('#### Detalhamento Técnico')
                 df_ml_display = df_ml.copy()
                 df_ml_display['Score/Prob.'] = df_ml_display['Score/Prob.'].round(2)
                 df_ml_display['Confiança'] = df_ml_display['Confiança'].apply(lambda x: safe_format(x))
-                st.dataframe(df_ml_display, width=True, hide_index=True)
+                st.dataframe(df_ml_display, use_container_width=True, hide_index=True)
             else:
                 st.warning("Não há dados de ML para exibir.")
         
@@ -1862,11 +1873,11 @@ def aba_construtor_portfolio():
                         fig_garch.update_layout(**template)
                         fig_garch.update_layout(title_text="Volatilidade Anualizada: Histórica vs. Condicional (GARCH)", yaxis_title="Volatilidade Anual (%)", barmode='group', height=400)
                         
-                        st.plotly_chart(fig_garch, width=True)
+                        st.plotly_chart(fig_garch, use_container_width=True)
                     else:
                         st.info("Dados de volatilidade insuficientes para gráfico.")
 
-                    st.dataframe(df_garch, width=True, hide_index=True)
+                    st.dataframe(df_garch, use_container_width=True, hide_index=True)
                 else:
                     st.warning("Não há dados de volatilidade para exibir.")
             else:
@@ -1915,7 +1926,7 @@ def aba_construtor_portfolio():
                 
                 st.dataframe(df_scores_display.style.format(
                     final_format_dict
-                ).background_gradient(cmap='Greys', subset=['Score Total'] if 'Score Total' in df_scores_display.columns else None), width=True)
+                ).background_gradient(cmap='Greys', subset=['Score Total'] if 'Score Total' in df_scores_display.columns else None), use_container_width=True)
             else:
                 st.warning("Tabela de scores indisponível (falha no processamento de dados).")
             
@@ -1938,7 +1949,7 @@ def aba_construtor_portfolio():
         st.markdown("---")
         col_space1, col_btn, col_space2 = st.columns([1, 1, 1])
         with col_btn:
-            if st.button("🔄 Recalibrar Perfil e Otimizar Novamente", type="primary", width=True):
+            if st.button("🔄 Recalibrar Perfil e Otimizar Novamente", type="primary", use_container_width=True):
                 st.session_state.builder_complete = False
                 st.session_state.builder = None
                 st.session_state.profile = {}
@@ -1974,7 +1985,7 @@ def aba_analise_individual():
     # Botão Centralizado Abaixo
     c1, c2, c3 = st.columns([1, 1, 1])
     with c2:
-        if st.button("🔄 Executar Análise", key='analyze_asset_button_v8', type="primary", width=True):
+        if st.button("🔄 Executar Análise", key='analyze_asset_button_v8', type="primary", use_container_width=True):
             st.session_state.analisar_ativo_triggered = True 
     
     if 'analisar_ativo_triggered' not in st.session_state or not st.session_state.analisar_ativo_triggered:
@@ -2037,7 +2048,7 @@ def aba_analise_individual():
                     fig.update_layout(**template)
                     fig.update_layout(height=600)
                     
-                    st.plotly_chart(fig, width=True)
+                    st.plotly_chart(fig, use_container_width=True)
                 else: st.info("Gráfico indisponível (Modo Estático Ativo).")
 
             with tab2:
@@ -2090,7 +2101,7 @@ def aba_analise_individual():
                      clean_fund = {k: v for k, v in features_fund.items() if k not in ['static_mode', 'garch_volatility', 'max_drawdown']}
                      df_fund_show = pd.DataFrame([clean_fund]).T.reset_index()
                      df_fund_show.columns = ['Indicador', 'Valor']
-                     st.dataframe(df_fund_show, width=True, hide_index=True)
+                     st.dataframe(df_fund_show, use_container_width=True, hide_index=True)
 
             with tab3:
                 if not static_mode:
@@ -2108,7 +2119,7 @@ def aba_analise_individual():
                     fig_rsi.update_layout(**template)
                     fig_rsi.update_layout(height=300)
                     
-                    st.plotly_chart(fig_rsi, width=True)
+                    st.plotly_chart(fig_rsi, use_container_width=True)
                     
                     # Gráfico MACD
                     fig_macd = make_subplots(rows=1, cols=1)
@@ -2121,7 +2132,7 @@ def aba_analise_individual():
                     fig_macd.update_layout(**template)
                     fig_macd.update_layout(height=300)
                     
-                    st.plotly_chart(fig_macd, width=True)
+                    st.plotly_chart(fig_macd, use_container_width=True)
                     
                     # Gráfico BB
                     rolling_mean = df_completo['Close'].rolling(window=20).mean()
@@ -2139,7 +2150,7 @@ def aba_analise_individual():
                     fig_bb.update_layout(**template)
                     fig_bb.update_layout(height=400)
                     
-                    st.plotly_chart(fig_bb, width=True)
+                    st.plotly_chart(fig_bb, use_container_width=True)
                     
                 else: st.warning("Análise Técnica não disponível sem histórico de preços.")
 
@@ -2168,7 +2179,7 @@ def aba_analise_individual():
                     template['title']['text'] = 'Top 5 Fatores de Decisão'
                     fig_imp.update_layout(**template)
                     fig_imp.update_layout(height=300)
-                    st.plotly_chart(fig_imp, width=True)
+                    st.plotly_chart(fig_imp, use_container_width=True)
 
             with tab5: 
                 st.markdown("### 🔬 Clusterização Geral (Ibovespa)")
@@ -2219,7 +2230,7 @@ def aba_analise_individual():
                         fig_pca.update_layout(**template)
                         fig_pca.update_layout(height=500)
                     
-                    st.plotly_chart(fig_pca, width=True)
+                    st.plotly_chart(fig_pca, use_container_width=True)
                     
                     # Identifica pares
                     if ativo_selecionado in resultado_cluster.index:
