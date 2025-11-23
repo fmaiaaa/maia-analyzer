@@ -1436,7 +1436,8 @@ def aba_introducao():
 
     st.markdown("---")
     st.subheader("2. O Processo de Seleção (Funil de Investimento)")
-        st.markdown("""
+    # Corrigindo a indentação
+    st.markdown("""
     <div class="info-box" style="text-align: center;">
     <h4>Etapas do Funil</h4>
     <p style="font-size: 0.9rem;">1️⃣ <b>Coleta de Dados:</b> Mineração em tempo real de ~90 ativos do Ibovespa (Preços e Fundamentos).</p>
