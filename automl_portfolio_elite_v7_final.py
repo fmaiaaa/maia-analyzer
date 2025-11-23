@@ -5,12 +5,12 @@ SISTEMA DE PORTFÓLIOS ADAPTATIVOS - OTIMIZAÇÃO QUANTITATIVA
 =============================================================================
 
 Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
-- Preços: Estratégia Linear com Fail-Fast (TvDatafeed -> YFinance -> Estático Global).
+- Preços: Estratégia Linear com Fail-Fast (YFinance -> TvDatafeed -> Estático Global). 
 - Fundamentos: Coleta Exaustiva Pynvest (50+ indicadores).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.6 (Update: FORCE FUNDAMENTAL PROXY on Neutral ML)
+Versão: 9.32.7 (Update: FIX GARCH Implementation & ML Robustness)
 =============================================================================
 """
 
@@ -477,9 +477,27 @@ class ColetorDadosLive(object):
             tem_dados = False
             
             if not global_static_mode:
-                if self.tv_ativo:
+                
+                # --- BLOCO PRIMÁRIO: YFINANCE (ORDEM TROCADA) ---
+                try:
+                    session = requests.Session()
+                    session.headers.update({
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    })
+                    ticker_obj = yf.Ticker(simbolo, session=session)
+                    df_tecnicos = ticker_obj.history(period=self.periodo)
+                except Exception:
+                    # Fallback silencioso para garantir que não pare o loop
+                    pass
+                
+                if df_tecnicos is not None and not df_tecnicos.empty and 'Close' in df_tecnicos.columns:
+                    tem_dados = True
+
+                # --- BLOCO FALLBACK: TVDATAFEED (ORDEM TROCADA) ---
+                if not tem_dados and self.tv_ativo:
                     simbolo_tv = simbolo.replace('.SA', '')
                     try:
+                        # Tenta obter dados, sobrescrevendo df_tecnicos se houver sucesso
                         df_tecnicos = self.tv.get_hist(
                             symbol=simbolo_tv, 
                             exchange='BMFBOVESPA', 
@@ -490,25 +508,12 @@ class ColetorDadosLive(object):
                         if "Connection timed out" in str(e):
                              pass
                 
-                if df_tecnicos is not None and not df_tecnicos.empty:
-                    cols_lower = [c.lower() for c in df_tecnicos.columns]
-                    if 'close' in cols_lower:
-                        tem_dados = True
+                    if df_tecnicos is not None and not df_tecnicos.empty:
+                        cols_lower = [c.lower() for c in df_tecnicos.columns]
+                        if 'close' in cols_lower:
+                            tem_dados = True
                 
-                if not tem_dados:
-                    try:
-                        session = requests.Session()
-                        session.headers.update({
-                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                        })
-                        ticker_obj = yf.Ticker(simbolo, session=session)
-                        df_tecnicos = ticker_obj.history(period=self.periodo)
-                    except Exception:
-                        # Fallback silencioso para garantir que não pare o loop
-                        pass
-                    
-                    if df_tecnicos is not None and not df_tecnicos.empty and 'Close' in df_tecnicos.columns:
-                        tem_dados = True
+                # --- FIM DA LÓGICA DE SWAP DE COLETA ---
 
                 if not tem_dados:
                     consecutive_failures += 1
@@ -907,7 +912,8 @@ class ConstrutorPortfolioAutoML:
                 current_features = [f for f in features_ml if f in df.columns]
                 df_model = df.dropna(subset=current_features + ['Future_Direction'])
                 
-                if len(df_model) < 60:
+                # FIX 1: Reduz a exigência de dados para o ML (de 60 para 30) para aumentar a taxa de treinamento
+                if len(df_model) < 30:
                     self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.5, 'model_name': 'Dados Insuficientes'}
                     continue
                 
@@ -936,7 +942,8 @@ class ConstrutorPortfolioAutoML:
                 proba = model.predict_proba(last_features)[0][1]
 
                 # --- INÍCIO DO FIX 5: FORÇAR PROXY SE RESULTADO FOR NEUTRO ---
-                is_neutral_result = (avg_auc <= 0.55) or (len(np.unique(y)) < 2) # Considerar AUC <= 0.55 como 'neutro'
+                # Considera AUC <= 0.55 (próximo ao aleatório) como resultado neutro
+                is_neutral_result = (avg_auc <= 0.55) or (len(np.unique(y)) < 2) 
                 
                 if is_neutral_result:
                     # Heuristica de proxy para o MODO SUPERVISIONADO NEUTRO
@@ -946,7 +953,7 @@ class ConstrutorPortfolioAutoML:
                     
                     self.predicoes_ml[ativo] = {
                         'predicted_proba_up': score_fund_proxy, 
-                        'auc_roc_score': 0.60, # Força uma confiança mínima para o score ser ponderado
+                        'auc_roc_score': 0.60, # Força uma confiança mínima (0.60 > 0.55) para o score ser ponderado
                         'model_name': 'Supervised Neutral (FORCING FUNDAMENTAL PROXY)'
                     }
                 else:
@@ -1162,7 +1169,7 @@ class ConstrutorPortfolioAutoML:
     def executar_pipeline(self, simbolos_customizados: list, perfil_inputs: dict, progress_bar=None) -> bool:
         self.perfil_dashboard = perfil_inputs
         try:
-            if progress_bar: progress_bar.progress(10, text="Coletando dados LIVE (TVDATAFEED + Pynvest)...")
+            if progress_bar: progress_bar.progress(10, text="Coletando dados LIVE (YFinance + Pynvest)...")
             if not self.coletar_e_processar_dados(simbolos_customizados): return False
             if progress_bar: progress_bar.progress(30, text="Calculando métricas setoriais e volatilidade...")
             self.calculate_cross_sectional_features(); self.calcular_volatilidades_garch()
@@ -1719,10 +1726,16 @@ def aba_construtor_portfolio():
         st.markdown("---")
         
         # Verifica se temos dados de preço para decidir o que mostrar
-        # Logica Robusta: Se tiver dados de volatilidade no dataframe, temos preços.
         has_price_data = not builder.metricas_performance.empty and 'volatilidade_anual' in builder.metricas_performance.columns and builder.metricas_performance['volatilidade_anual'].sum() != 0
         
-        tab_title_ml = "🤖 Fator Predição ML" if has_price_data else "🔬 Clusters e Anomalias"
+        # FIX 2: A aba ML só é exibida se houver resultados de ML utilizáveis (AUC > 0.55)
+        # O ML Score Weighted será 0 se a confiança for muito baixa (0.50), refletindo inutilidade.
+        has_usable_ml = builder.scores_combinados['ml_score_weighted'].sum() > 0 if not builder.scores_combinados.empty else False
+        
+        if has_price_data and has_usable_ml:
+             tab_title_ml = "🤖 Fator Predição ML"
+        else:
+             tab_title_ml = "🔬 Clusters e Anomalias"
 
         tab1, tab2, tab3, tab4, tab5 = st.tabs([
             "📊 Alocação de Capital", "📈 Performance e Retornos", tab_title_ml, "📉 Fator Volatilidade GARCH", "❓ Justificativas e Ranqueamento"
@@ -1821,13 +1834,13 @@ def aba_construtor_portfolio():
         
         with tab3:
             # LÓGICA ROBUSTA DE IF PARA EXIBIÇÃO DO MODELO
-            if has_price_data:
+            if has_price_data and has_usable_ml:
                  st.markdown('#### 🤖 Predição de Movimento Direcional (Random Forest)')
                  st.markdown("O modelo abaixo utiliza histórico de preços para prever a probabilidade de alta no curto prazo.")
                  title_text_plot = "Probabilidade de Alta (0-100%)"
             else:
                  st.markdown('#### 🔬 Análise de Qualidade Fundamentalista (Unsupervised Learning)')
-                 st.info("ℹ️ **Modo Fallback Ativo:** Devido à ausência de histórico de preços confiável, o sistema utilizou algoritmos não-supervisionados (Isolation Forest / Heurística) para identificar ativos com fundamentos de qualidade superior ('Outliers Positivos').")
+                 st.info("ℹ️ **Modo Fallback Ativo:** O modelo de predição supervisionada não encontrou padrões significativos ou o histórico de preços é limitado. O sistema está utilizando a **Clusterização Fundamentalista** (qualidade) como fator ML dominante.")
                  title_text_plot = "Score de Qualidade Fundamentalista (0-100)"
 
             ml_data = []
@@ -2141,7 +2154,10 @@ def aba_analise_individual():
                 col1.metric("Dívida Bruta/PL", safe_format(features_fund.get('debt_to_equity', np.nan)))
                 col2.metric("Liq. Corrente", safe_format(features_fund.get('current_ratio', np.nan)))
                 col3.metric("EV/EBITDA", safe_format(features_fund.get('ev_ebitda', np.nan)))
-                col4.metric("Cresc. Receita (5a)", safe_format(features_fund.get('revenue_growth', np.nan)))
+                
+                # FIX 5: Substitui 'Cresc. Receita (5a)' que estava dando N/A por ROIC (Return on Invested Capital)
+                col4.metric("ROIC", safe_format(features_fund.get('roic', np.nan))) 
+                
                 col5.metric("Beta (Yahoo)", safe_format(beta_val))
 
                 st.markdown("---")
@@ -2239,7 +2255,7 @@ def aba_analise_individual():
                 st.info(f"Analisando similaridade do **{ativo_selecionado.replace('.SA', '')}** com **TODOS** os ativos do Ibovespa (Baseado apenas em Fundamentos).")
                 
                 # 2. Coleta e Clusteriza (Apenas Fundamentos - Lista Global)
-                resultado_cluster, n_clusters = AnalisadorIndividualAtivos.realizar_clusterizacao_fundamentalista_geral(coletor, ativo_alvo)
+                resultado_cluster, n_clusters = AnalisadorIndividualAtivos.realizar_clusterizacao_fundamentalista_geral(coletor, ativo_selecionado)
                 
                 if resultado_cluster is not None:
                     st.success(f"Identificados {n_clusters} grupos (clusters) de qualidade fundamentalista.")
