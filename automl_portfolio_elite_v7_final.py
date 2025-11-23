@@ -563,6 +563,8 @@ class ColetorDadosLive(object):
 
             if not usando_fallback_estatico and 'returns' in df_tecnicos.columns:
                 retornos = df_tecnicos['returns'].dropna()
+                garch_vol = vol_anual = 0.20 # Fallback inicial
+
                 if len(retornos) > 30:
                     vol_anual = retornos.std() * np.sqrt(252)
                     ret_anual = retornos.mean() * 252
@@ -573,12 +575,29 @@ class ColetorDadosLive(object):
                     max_dd = dd.min()
                 else:
                     vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0 
+                
+                # --- INÍCIO DA IMPLEMENTAÇÃO GARCH (FIX 4) ---
+                garch_vol = vol_anual # Fallback inicial GARCH = Histórico
+                if len(retornos) > 60: 
+                    try:
+                        # Usa returns * 100 para melhor ajuste numérico
+                        am = arch_model(retornos * 100, mean='Zero', vol='Garch', p=1, q=1)
+                        # Define disp='off' para suprimir avisos de convergência
+                        res = am.fit(disp='off', last_obs=retornos.index[-1]) 
+                        # Pega a última volatilidade condicional e desfaz a escala
+                        garch_std_daily = res.conditional_volatility.iloc[-1] / 100 
+                        garch_vol = garch_std_daily * np.sqrt(252)
+                    except Exception:
+                        garch_vol = vol_anual # Mantenha o histórico se o GARCH falhar
+                # --- FIM DA IMPLEMENTAÇÃO GARCH ---
+            
             else:
-                vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0 
+                vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0
+                garch_vol = 0.20 # Fallback
 
             fund_data.update({
                 'Ticker': simbolo, 'sharpe_ratio': sharpe, 'annual_return': ret_anual,
-                'annual_volatility': vol_anual, 'max_drawdown': max_dd, 'garch_volatility': vol_anual,
+                'annual_volatility': vol_anual, 'max_drawdown': max_dd, 'garch_volatility': garch_vol,
                 'static_mode': usando_fallback_estatico
             })
             
