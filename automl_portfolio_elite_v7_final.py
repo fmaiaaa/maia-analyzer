@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.12 (Update: FIX AttributeError and Method Scope)
+Versão: 9.32.13 (Update: FIX Robust NameError in Streamlit scope, Method Correction)
 =============================================================================
 """
 
@@ -731,7 +731,7 @@ class ColetorDadosLive(object):
                     model = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
                     model.fit(X, y)
                     
-                    last_features = df[current_features].iloc[[-1]].fillna(0)
+                    last_features = df[current_features].iloc[[-1]].copy().fillna(0) # Garantir que o input de predição não tem NaN
                     proba = model.predict_proba(last_features)[0][1]
                     
                     # --- CÁLCULO DE AUC PARA CONFIANÇA ---
@@ -2467,6 +2467,7 @@ def aba_referencias():
         st.write("Múltiplas referências de Hadley Wickham, o criador do 'Tidyverse' em R. São os pacotes e livros fundamentais para a manipulação de dados moderna (dplyr), organização (Tidy data) e visualização (ggplot2) na linguagem R.")
 
 def main():
+    # Garantir a inicialização do Log e do estado principal
     if 'builder' not in st.session_state:
         st.session_state.builder = None
         st.session_state.builder_complete = False
@@ -2474,7 +2475,6 @@ def main():
         st.session_state.ativos_para_analise = []
         st.session_state.analisar_ativo_triggered = False
     
-    # --- NOVO: Inicialização do Log ---
     if 'debug_logs' not in st.session_state:
         st.session_state.debug_logs = []
         
