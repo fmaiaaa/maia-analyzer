@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.15 (Update: FIX NameError (Scope) & Streamlit Deprecation Warnings)
+Versão: 9.32.16 (Update: FIX NameError (Scope) & Add TvDatafeed Head Debug)
 =============================================================================
 """
 
@@ -210,7 +210,8 @@ OPTIONS_LIQUIDEZ_DETALHADA = [
     'C: Mais de 2 anos - Este é um investimento de longo prazo; não tenho planos de resgatar nos próximos anos.'
 ]
 
-# --- FUNÇÃO UTILITÁRIA GLOBAL ---
+# --- FUNÇÕES UTILITÁRIAS GLOBAIS (Movidas para o início para garantir o escopo) ---
+
 def safe_format(value):
     """Formata valor float para string com 2 casas, tratando strings e NaNs."""
     if pd.isna(value):
@@ -221,7 +222,6 @@ def safe_format(value):
     except (ValueError, TypeError):
         return str(value)
 
-# --- FUNÇÃO GLOBAL DE LOGGING ---
 def log_debug(message: str):
     """Adiciona uma mensagem formatada ao log de debug da sessão."""
     timestamp = datetime.now().strftime("%H:%M:%S")
@@ -229,7 +229,6 @@ def log_debug(message: str):
     print(f"DEBUG {timestamp} | {message}") 
     st.session_state.debug_logs.append(f"[{timestamp}] {message}")
 
-# --- FUNÇÃO PARA EXIBIR O PAINEL DE DEBUG ---
 def mostrar_debug_panel():
     """Exibe o painel de debug (Streamlit expander) no topo da aplicação."""
     with st.expander("🐛 Log de Debug Detalhado (Streamlit Cloud CMD)"):
@@ -243,6 +242,20 @@ def mostrar_debug_panel():
                 st.rerun()
         else:
             st.info("Nenhuma mensagem de debug registrada ainda.")
+
+def obter_template_grafico() -> dict:
+    """Retorna o template padrão de cores e estilo para gráficos Plotly."""
+    corporate_colors = ['#2E86C1', '#D35400', '#27AE60', '#8E44AD', '#C0392B', '#16A085', '#F39C12', '#34495E']
+    return {
+        'plot_bgcolor': 'rgba(0,0,0,0)',
+        'paper_bgcolor': 'rgba(0,0,0,0)',
+        'font': {'family': 'Inter, sans-serif', 'size': 12, 'color': '#343a40'},
+        'title': {'font': {'family': 'Inter, sans-serif', 'size': 16, 'color': '#212529', 'weight': 'bold'}, 'x': 0.5, 'xanchor': 'center'},
+        'xaxis': {'showgrid': True, 'gridcolor': '#ecf0f1', 'showline': True, 'linecolor': '#bdc3c7', 'linewidth': 1},
+        'yaxis': {'showgrid': True, 'gridcolor': '#ecf0f1', 'showline': True, 'linecolor': '#bdc3c7', 'linewidth': 1},
+        'legend': {'bgcolor': 'rgba(255,255,255,0.5)', 'bordercolor': '#ecf0f1'},
+        'colorway': corporate_colors
+    }
 
 # =============================================================================
 # 8. CLASSE: ENGENHEIRO DE FEATURES
@@ -597,11 +610,12 @@ class ColetorDadosLive(object):
                              pass
                 
                     if df_tecnicos is not None and not df_tecnicos.empty:
-                        cols_lower = [c.lower() for c in df_tecnicos.columns]
-                        if 'close' in cols_lower:
-                            tem_dados = True
-                            log_debug(f"Tentativa 2 (TvDatafeed): Sucesso. {len(df_tecnicos)} pontos.")
-                
+                        tem_dados = True
+                        log_debug(f"Tentativa 2 (TvDatafeed): Sucesso. {len(df_tecnicos)} pontos.")
+                        # --- LOG DETALHADO DO TVDATAFEED ---
+                        log_debug(f"TvDatafeed Head: \n{df_tecnicos.head().to_string()}")
+                        # --- FIM LOG DETALHADO ---
+
                 # --- FIM DA LÓGICA DE SWAP DE COLETA ---
 
                 if not tem_dados:
@@ -2018,7 +2032,7 @@ def aba_construtor_portfolio():
             else:
                  # FIX 6: Exibe a tabela de clusters e scores se o modo fallback estiver ativo
                  st.markdown('#### 🔬 Análise de Qualidade Fundamentalista (Unsupervised Learning)')
-                 st.info("ℹ️ **Modo Fallback Ativo:** O modelo de predição supervisionada não encontrou padrões significativos ou o histórico de preços é limitado. O sistema está utilizando a **Clusterização Fundamentalista** (qualidade) como fator ML dominante.")
+                 st.info("ℹ️ **Modo Fallback Ativo:** O modelo de predição supervisionada não encontrou padrões significantes ou o histórico de preços é limitado. O sistema está utilizando a **Clusterização Fundamentalista** (qualidade) como fator ML dominante.")
                  
                  st.markdown("##### Score Fundamentalista e Cluster por Ativo")
                  # Garante que o df_fund_clean tem as colunas necessárias
