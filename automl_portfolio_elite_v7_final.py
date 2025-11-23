@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.27 (Update: FIX ML/GARCH Zero Points, UNBOUND LOCAL, & MERGE CLUSTER TABS)
+Versão: 9.32.28 (Update: FIX ML/GARCH Robustness, UNBOUND LOCAL, and Restore UI)
 =============================================================================
 """
 
@@ -61,7 +61,7 @@ except ImportError:
 
 # --- 4. FEATURE ENGINEERING / TECHNICAL ANALYSIS (TA) ---
 from sklearn.ensemble import RandomForestClassifier, IsolationForest
-from sklearn.metrics import silhouette_score, roc_auc_score
+from sklearn.metrics import silhouette_score, roc_auc_score, precision_score, recall_score, f1_score
 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
 from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.decomposition import PCA
@@ -125,11 +125,11 @@ ATIVOS_POR_SETOR_IBOV = {
     'Consumo não Cíclico': ['BEEF3.SA', 'NATU3.SA', 'PCAR3.SA', 'VIVA3.SA'], 
     'Financeiro': ['B3SA3.SA', 'BBSE3.SA', 'BBDC3.SA', 'BBDC4.SA', 'BBAS3.SA', 'BPAC11.SA', 'CXSE3.SA', 'HYPE3.SA', 'IGTI11.SA', 'IRBR3.SA', 'ITSA4.SA', 'ITUB4.SA', 'MULT3.SA', 'PSSA3.SA', 'RDOR3.SA', 'SANB11.SA'],
     'Materiais Básicos': ['BRAP4.SA', 'BRKM5.SA', 'CSNA3.SA', 'GGBR4.SA', 'GOAU4.SA', 'KLBN11.SA', 'POMO4.SA', 'SUZB3.SA', 'USIM5.SA', 'VALE3.SA'],
-    'Petróleo, Gás e Biocombustíveis': ['ENEV3.SA', 'PETR3.SA', 'PETR4.SA', 'PRIO3.SA', 'RAIZ4.SA', 'RECV3.SA', 'UGPA3.SA', 'VBBR3.SA'],
+    'Petróleo, Gás e Biocombustíveis': ['ENEV3.SA', 'PETR3.SA', 'PETR4.SA', 'RECV3.SA', 'PRIO3.SA', 'RAIZ4.SA', 'UGPA3.SA', 'VBBR3.SA'],
     'Saúde': ['FLRY3.SA', 'HAPV3.SA', 'RADL3.SA'],
     'Tecnologia da Informação': ['TOTS3.SA'],
     'Telecomunicações': ['TIMS3.SA', 'VIVT3.SA'],
-    'Utilidade Pública': ['AESB3.SA', 'AURE3.SA', 'BRAV3.SA', 'CMIG4.SA', 'CPLE6.SA', 'CPFE3.SA', 'EGIE3.SA', 'ELET3.SA', 'ELET6.SA', 'ENGI11.SA', 'EQTL3.SA', 'ISAE4.SA', 'RAIL3.SA', 'SBSP3.SA', 'TAEE11.SA']
+    'Utilidade Pública': ['AESB3.SA', 'BRAV3.SA', 'CMIG4.SA', 'CPLE6.SA', 'CPFE3.SA', 'EGIE3.SA', 'ELET3.SA', 'ELET6.SA', 'ENGI11.SA', 'EQTL3.SA', 'ISAE4.SA', 'RAIL3.SA', 'SBSP3.SA', 'TAEE11.SA']
 }
 
 # Dicionário Fallback Invertido (Ticker -> Setor)
@@ -1125,7 +1125,7 @@ class ConstrutorPortfolioAutoML:
         data_scaled = scaler.fit_transform(data_cluster)
         pca = PCA(n_components=min(data_scaled.shape[1], 2))
         data_pca = pca.fit_transform(data_scaled)
-        kmeans = KMeans(n_clusters=min(len(data_pca), 4), random_state=42, n_init=10)
+        kmeans = KMeans(n_clusters=min(len(data_cluster), 4), random_state=42, n_init=10) # Max clusters based on available data
         clusters = kmeans.fit_predict(data_pca)
         self.scores_combinados['Final_Cluster'] = clusters
         log_debug(f"Clusterização Final concluída. Identificados {self.scores_combinados['Final_Cluster'].nunique()} perfis de risco/retorno.")
@@ -1779,8 +1779,6 @@ def aba_construtor_portfolio():
     if 'profile' not in st.session_state: st.session_state.profile = {}
     if 'builder_complete' not in st.session_state: st.session_state.builder_complete = False
     
-    # Progress bar movida para o final do formulário
-    
     if not st.session_state.builder_complete:
         st.markdown('## 📋 Calibração do Perfil de Risco')
         
@@ -1961,7 +1959,7 @@ def aba_construtor_portfolio():
         if has_price_data and has_usable_ml:
              tab_title_ml = "🤖 Fator Predição ML"
              tabs_list.append(tab_title_ml)
-             tabs_list.append("🔭 Análise de Clusters") # Aba separada se o ML supervisionado funcionar
+             tabs_list.append("🔬 Clusters e Anomalias") # Aba separada se o ML supervisionado funcionar
         else:
              tab_title_ml = "🔬 Clusters e Anomalias" # Esta será a nova aba 3
              tabs_list.append(tab_title_ml)
@@ -1975,22 +1973,19 @@ def aba_construtor_portfolio():
         tabs_map = st.tabs(tabs_list)
         tab1 = tabs_map[0] # Alocação
         tab2 = tabs_map[1] # Performance/Retornos
-        tab3 = tabs_map[2] # ML / Cluster (Antiga Tab 3)
         
-        tab_garch = None
-        
-        # Determina a posição da Justificativa
-        tab_justificativas = tabs_map[-1]
-        
-        # Reatribui as abas dinâmicas
-        if "📉 Fator Volatilidade GARCH" in tabs_list:
-            tab_garch = tabs_map[tabs_list.index("📉 Fator Volatilidade GARCH")]
-        
-        # Mapeia a aba de Análise de Clusters
-        if "🔭 Análise de Clusters" in tabs_list:
-            tab_portfolio_cluster = tabs_map[tabs_list.index("🔭 Análise de Clusters")]
-        elif "🔬 Clusters e Anomalias" in tabs_list:
-            tab_portfolio_cluster = tab3 # Se não houver ML supervisionado, o conteúdo de Clusterização vai para a tab 3
+        # --- CORRIGINDO MAPPING DE ABAS ---
+        # Mapeia a aba de ML/Clusters
+        if has_price_data and has_usable_ml:
+            tab3_ml = tabs_map[2]
+            tab4_cluster = tabs_map[3]
+            tab_garch = tabs_map[4] if "📉 Fator Volatilidade GARCH" in tabs_list else None
+            tab_justificativas = tabs_map[-1]
+        else:
+            tab3_cluster = tabs_map[2]
+            tab_garch = tabs_map[3] if "📉 Fator Volatilidade GARCH" in tabs_list else None
+            tab_justificativas = tabs_map[-1]
+
         
         with tab1:
             st.markdown('#### Distribuição do Capital')
@@ -2082,8 +2077,11 @@ def aba_construtor_portfolio():
             else:
                 st.info("Gráfico de retorno indisponível (Modo Estático Ativo - Sem histórico de preços).")
         
-        # ABA DE PREDIÇÃO ML OU CLUSTERS (tab3)
-        with tab3: 
+        
+        # =====================================================================
+        # ML / CLUSTER (ABA 3)
+        # =====================================================================
+        with tabs_map[2]: 
             
             if has_price_data and has_usable_ml:
                  # ---- MODO ML SUPERVISIONADO (tab3) ----
@@ -2139,7 +2137,7 @@ def aba_construtor_portfolio():
 
 
             else:
-                 # ---- MODO FALLBACK (Clusters e Anomalias) [Abas 3/4 unificadas] ----
+                 # ---- MODO FALLBACK (Clusters e Anomalias) [Abas 3 unificadas] ----
                  st.markdown('#### 🔬 Análise de Qualidade Fundamentalista (Unsupervised Learning)')
                  st.info("ℹ️ **Modo Fallback Ativo:** O modelo de predição supervisionada não encontrou padrões significativos ou o histórico de preços é limitado. O sistema está utilizando a **Clusterização Fundamentalista** (qualidade) como fator ML dominante.")
                  
@@ -2198,9 +2196,14 @@ def aba_construtor_portfolio():
                  else:
                      st.warning("Dados de scores insuficientes para análise de Clusterização do Portfólio.")
             
-        # ABA DE ANÁLISE DE CLUSTERS (Se ML Supervisionado funciona, esta aba é a 4)
-        if "🔭 Análise de Clusters" in tabs_list:
-            with tab_portfolio_cluster:
+        # =====================================================================
+        # ANÁLISE DE CLUSTERS (ABA 4 - APENAS SE ML SUPERVISIONADO FUNCIONAR)
+        # =====================================================================
+        
+        # Mapeia a aba de Análise de Clusters
+        if has_price_data and has_usable_ml:
+            tab4_cluster = tabs_map[3]
+            with tab4_cluster:
                 st.markdown('#### 🔭 Visualização da Diversificação e Clusters')
                 st.info("Esta análise utiliza PCA sobre os scores para visualizar a distribuição dos ativos selecionados no 'espaço de risco/retorno' e confirmar a diversificação entre os clusters.")
                 
@@ -2247,7 +2250,6 @@ def aba_construtor_portfolio():
                     
                 else:
                      st.warning("Dados de scores insuficientes para análise de Clusterização do Portfólio.")
-
         
         # O bloco tab_garch só existe se has_price_data and has_garch_data and not is_garch_redundant for True
         if tab_garch is not None:
