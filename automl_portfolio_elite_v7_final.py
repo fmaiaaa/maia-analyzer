@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.13 (Update: FIX Robust NameError in Streamlit scope, Method Correction)
+Versão: 9.32.14 (Update: FIX NameError by reordering classes)
 =============================================================================
 """
 
@@ -245,79 +245,6 @@ def mostrar_debug_panel():
             st.info("Nenhuma mensagem de debug registrada ainda.")
 
 # =============================================================================
-# 6. CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR
-# =============================================================================
-
-class AnalisadorPerfilInvestidor:
-    def __init__(self):
-        self.nivel_risco = ""
-        self.horizonte_tempo = ""
-        self.dias_lookback_ml = 5
-    
-    def determinar_nivel_risco(self, pontuacao: int) -> str:
-        if pontuacao <= 46: return "CONSERVADOR"
-        elif pontuacao <= 67: return "INTERMEDIÁRIO"
-        elif pontuacao <= 88: return "MODERADO"
-        elif pontuacao <= 109: return "MODERADO-ARROJADO"
-        else: return "AVANÇADO"
-    
-    def determinar_horizonte_ml(self, liquidez_key: str, objetivo_key: str) -> tuple[str, int]:
-        # Corresponde às novas configurações: A=84, B=168, C=252
-        time_map = { 'A': 84, 'B': 168, 'C': 252 } 
-        final_lookback = max( time_map.get(liquidez_key, 84), time_map.get(objetivo_key, 84) )
-        
-        if final_lookback >= 252:
-            self.horizonte_tempo = "LONGO PRAZO"
-        elif final_lookback >= 168:
-            self.horizonte_tempo = "MÉDIO PRAZO"
-        else:
-            self.horizonte_tempo = "CURTO PRAZO"
-            
-        self.dias_lookback_ml = final_lookback
-        return self.horizonte_tempo, self.dias_lookback_ml
-    
-    def calcular_perfil(self, respostas_risco_originais: dict) -> tuple[str, str, int, int]:
-        score_risk_accept = SCORE_MAP_ORIGINAL.get(respostas_risco_originais['risk_accept'], 3)
-        score_max_gain = SCORE_MAP_ORIGINAL.get(respostas_risco_originais['max_gain'], 3)
-        score_stable_growth = SCORE_MAP_INV_ORIGINAL.get(respostas_risco_originais['stable_growth'], 3)
-        score_avoid_loss = SCORE_MAP_INV_ORIGINAL.get(respostas_risco_originais['avoid_loss'], 3)
-        score_level = SCORE_MAP_CONHECIMENTO_ORIGINAL.get(respostas_risco_originais['level'], 3)
-        score_reaction = SCORE_MAP_REACTION_ORIGINAL.get(respostas_risco_originais['reaction'], 3)
-
-        pontuacao = (
-            score_risk_accept * 5 +
-            score_max_gain * 5 +
-            score_stable_growth * 5 +
-            score_avoid_loss * 5 +
-            score_level * 3 +
-            score_reaction * 3
-        )
-        nivel_risco = self.determinar_nivel_risco(pontuacao)
-        
-        liquidez_key = respostas_risco_originais['liquidity'][0] if isinstance(respostas_risco_originais['liquidity'], str) and respostas_risco_originais['liquidity'] else 'C'
-        objetivo_key = respostas_risco_originais['time_purpose'][0] if isinstance(respostas_risco_originais['time_purpose'], str) and respostas_risco_originais['time_purpose'] else 'C'
-        
-        horizonte_tempo, ml_lookback = self.determinar_horizonte_ml(liquidez_key, objetivo_key)
-        return nivel_risco, horizonte_tempo, ml_lookback, pontuacao
-
-# =============================================================================
-# 7. FUNÇÕES DE ESTILO E VISUALIZAÇÃO
-# =============================================================================
-
-def obter_template_grafico() -> dict:
-    corporate_colors = ['#2E86C1', '#D35400', '#27AE60', '#8E44AD', '#C0392B', '#16A085', '#F39C12', '#34495E']
-    return {
-        'plot_bgcolor': 'rgba(0,0,0,0)',
-        'paper_bgcolor': 'rgba(0,0,0,0)',
-        'font': {'family': 'Inter, sans-serif', 'size': 12, 'color': '#343a40'},
-        'title': {'font': {'family': 'Inter, sans-serif', 'size': 16, 'color': '#212529', 'weight': 'bold'}, 'x': 0.5, 'xanchor': 'center'},
-        'xaxis': {'showgrid': True, 'gridcolor': '#ecf0f1', 'showline': True, 'linecolor': '#bdc3c7', 'linewidth': 1},
-        'yaxis': {'showgrid': True, 'gridcolor': '#ecf0f1', 'showline': True, 'linecolor': '#bdc3c7', 'linewidth': 1},
-        'legend': {'bgcolor': 'rgba(255,255,255,0.5)', 'bordercolor': '#ecf0f1'},
-        'colorway': corporate_colors
-    }
-
-# =============================================================================
 # 8. CLASSE: ENGENHEIRO DE FEATURES
 # =============================================================================
 
@@ -376,7 +303,126 @@ class CalculadoraTecnica:
         return df
 
 # =============================================================================
-# 9. FUNÇÕES DE COLETA DE DADOS LIVE (TVDATAFEED + PYNVEST)
+# 6. CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR
+# =============================================================================
+
+class AnalisadorPerfilInvestidor:
+    def __init__(self):
+        self.nivel_risco = ""
+        self.horizonte_tempo = ""
+        self.dias_lookback_ml = 5
+    
+    def determinar_nivel_risco(self, pontuacao: int) -> str:
+        if pontuacao <= 46: return "CONSERVADOR"
+        elif pontuacao <= 67: return "INTERMEDIÁRIO"
+        elif pontuacao <= 88: return "MODERADO"
+        elif pontuacao <= 109: return "MODERADO-ARROJADO"
+        else: return "AVANÇADO"
+    
+    def determinar_horizonte_ml(self, liquidez_key: str, objetivo_key: str) -> tuple[str, int]:
+        # Corresponde às novas configurações: A=84, B=168, C=252
+        time_map = { 'A': 84, 'B': 168, 'C': 252 } 
+        final_lookback = max( time_map.get(liquidez_key, 84), time_map.get(objetivo_key, 84) )
+        
+        if final_lookback >= 252:
+            self.horizonte_tempo = "LONGO PRAZO"
+        elif final_lookback >= 168:
+            self.horizonte_tempo = "MÉDIO PRAZO"
+        else:
+            self.horizonte_tempo = "CURTO PRAZO"
+            
+        self.dias_lookback_ml = final_lookback
+        return self.horizonte_tempo, self.dias_lookback_ml
+    
+    def calcular_perfil(self, respostas_risco_originais: dict) -> tuple[str, str, int, int]:
+        score_risk_accept = SCORE_MAP_ORIGINAL.get(respostas_risco_originais['risk_accept'], 3)
+        score_max_gain = SCORE_MAP_ORIGINAL.get(respostas_risco_originais['max_gain'], 3)
+        score_stable_growth = SCORE_MAP_INV_ORIGINAL.get(respostas_risco_originais['stable_growth'], 3)
+        score_avoid_loss = SCORE_MAP_INV_ORIGINAL.get(respostas_risco_originais['avoid_loss'], 3)
+        score_level = SCORE_MAP_CONHECIMENTO_ORIGINAL.get(respostas_risco_originais['level'], 3)
+        score_reaction = SCORE_MAP_REACTION_ORIGINAL.get(respostas_risco_originais['reaction'], 3)
+
+        pontuacao = (
+            score_risk_accept * 5 +
+            score_max_gain * 5 +
+            score_stable_growth * 5 +
+            score_avoid_loss * 5 +
+            score_level * 3 +
+            score_reaction * 3
+        )
+        nivel_risco = self.determinar_nivel_risco(pontuacao)
+        
+        liquidez_key = respostas_risco_originais['liquidity'][0] if isinstance(respostas_risco_originais['liquidity'], str) and respostas_risco_originais['liquidity'] else 'C'
+        objetivo_key = respostas_risco_originais['time_purpose'][0] if isinstance(respostas_risco_originais['time_purpose'], str) and respostas_risco_originais['time_purpose'] else 'C'
+        
+        horizonte_tempo, ml_lookback = self.determinar_horizonte_ml(liquidez_key, objetivo_key)
+        return nivel_risco, horizonte_tempo, ml_lookback, pontuacao
+
+# =============================================================================
+# 10. CLASSE: OTIMIZADOR DE PORTFÓLIO
+# =============================================================================
+
+class OtimizadorPortfolioAvancado:
+    def __init__(self, returns_df: pd.DataFrame, garch_vols: dict = None):
+        self.returns = returns_df
+        self.mean_returns = returns_df.mean() * 252
+        if garch_vols is not None and garch_vols:
+            try:
+                self.cov_matrix = self._construir_matriz_cov_garch(returns_df, garch_vols)
+            except:
+                self.cov_matrix = returns_df.cov() * 252 # Fallback se GARCH falhar na matriz
+        else:
+            self.cov_matrix = returns_df.cov() * 252
+        self.num_ativos = len(returns_df.columns)
+
+    def _construir_matriz_cov_garch(self, returns_df: pd.DataFrame, garch_vols: dict) -> pd.DataFrame:
+        corr_matrix = returns_df.corr()
+        # Verifica se GARCH Vols estão validas, senão usa histórica
+        vol_array = []
+        for ativo in returns_df.columns:
+            vol = garch_vols.get(ativo)
+            if pd.isna(vol) or vol == 0:
+                vol = returns_df[ativo].std() * np.sqrt(252) # Fallback histórico
+            vol_array.append(vol)
+            
+        vol_array = np.array(vol_array)
+        cov_matrix = corr_matrix.values * np.outer(vol_array, vol_array)
+        return pd.DataFrame(cov_matrix, index=returns_df.columns, columns=returns_df.columns)
+    
+    def estatisticas_portfolio(self, pesos: np.ndarray) -> tuple[float, float]:
+        p_retorno = np.dot(pesos, self.mean_returns)
+        p_vol = np.sqrt(np.dot(pesos.T, np.dot(self.cov_matrix, pesos)))
+        return p_retorno, p_vol
+    
+    def sharpe_negativo(self, pesos: np.ndarray) -> float:
+        p_retorno, p_vol = self.estatisticas_portfolio(pesos)
+        if p_vol <= 1e-9: return -100.0
+        return -(p_retorno - TAXA_LIVRE_RISCO) / p_vol
+    
+    def minimizar_volatilidade(self, pesos: np.ndarray) -> float:
+        return self.estatisticas_portfolio(pesos)[1]
+    
+    def otimizar(self, estrategia: str = 'MaxSharpe') -> dict:
+        if self.num_ativos == 0: return {}
+        restricoes = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+        limites = tuple((PESO_MIN, PESO_MAX) for _ in range(self.num_ativos))
+        chute_inicial = np.array([1.0 / self.num_ativos] * self.num_ativos)
+        
+        if estrategia == 'MinVolatility': objetivo = self.minimizar_volatilidade
+        else: objetivo = self.sharpe_negativo
+        
+        try:
+            resultado = minimize(objetivo, chute_inicial, method='SLSQP', bounds=limites, constraints=restricoes, options={'maxiter': 500, 'ftol': 1e-6})
+            if resultado.success:
+                final_weights = resultado.x / np.sum(resultado.x)
+                return {ativo: peso for ativo, peso in zip(self.returns.columns, final_weights)}
+            else:
+                return {ativo: 1.0 / self.num_ativos for ativo in self.returns.columns}
+        except Exception:
+            return {ativo: 1.0 / self.num_ativos for ativo in self.returns.columns}
+
+# =============================================================================
+# 9. CLASSE: COLETOR DE DADOS LIVE
 # =============================================================================
 
 class ColetorDadosLive(object):
@@ -807,6 +853,43 @@ class ColetorDadosLive(object):
             return df_tec, fund_row, df_ml_meta
         return None, None, None
 
+# =============================================================================
+# 11. CLASSE PRINCIPAL: CONSTRUTOR DE PORTFÓLIO AUTOML
+# =============================================================================
+
+class ConstrutorPortfolioAutoML:
+    def __init__(self, valor_investimento: float, periodo: str = PERIODO_DADOS):
+        self.valor_investimento = valor_investimento
+        self.periodo = periodo
+        self.dados_por_ativo = {}
+        self.dados_fundamentalistas = pd.DataFrame()
+        self.metricas_performance = pd.DataFrame()
+        self.volatilidades_garch = {}
+        self.predicoes_ml = {}
+        self.ativos_sucesso = []
+        self.ativos_selecionados = []
+        self.alocacao_portfolio = {}
+        self.metricas_portfolio = {}
+        self.metodo_alocacao_atual = "Não Aplicado"
+        self.justificativas_selecao = {}
+        self.perfil_dashboard = {} 
+        self.pesos_atuais = {}
+        self.scores_combinados = pd.DataFrame()
+        
+    def coletar_e_processar_dados(self, simbolos: list) -> bool:
+        # Instancia o coletor e usa seus métodos de coleta e processamento
+        coletor = ColetorDadosLive(periodo=self.periodo)
+        simbolos_filtrados = [s for s in simbolos if s in TODOS_ATIVOS]
+        if not simbolos_filtrados: return False
+        if not coletor.coletar_e_processar_dados(simbolos_filtrados): return False
+        
+        self.dados_por_ativo = coletor.dados_por_ativo
+        self.dados_fundamentalistas = coletor.dados_fundamentalistas
+        self.ativos_sucesso = coletor.ativos_sucesso
+        self.metricas_performance = coletor.metricas_performance
+        self.volatilidades_garch = coletor.volatilidades_garch_raw 
+        return True
+
     def calculate_cross_sectional_features(self):
         df_fund = self.dados_fundamentalistas.copy()
         if 'sector' not in df_fund.columns or 'pe_ratio' not in df_fund.columns: return
@@ -833,7 +916,7 @@ class ColetorDadosLive(object):
                  if ativo in self.metricas_performance.index and 'volatilidade_anual' in self.metricas_performance.columns:
                       self.volatilidades_garch[ativo] = self.metricas_performance.loc[ativo, 'volatilidade_anual']
         log_debug("Verificando volatilidades GARCH. Aplicando fallback histórico onde necessário.")
-
+        
     def treinar_modelos_ensemble(self, dias_lookback_ml: int = LOOKBACK_ML, otimizar: bool = False, progress_callback=None):
         ativos_com_dados = [s for s in self.ativos_sucesso if s in self.dados_por_ativo]
         log_debug("Iniciando Pipeline de Treinamento ML/Clusterização.")
@@ -1674,8 +1757,7 @@ def aba_construtor_portfolio():
                 log_debug(f"Perfil calculado: {risk_level} (Score {score}). Horizonte ML: {lookback} dias.")
                 
                 try:
-                    # O erro NameError: name 'ConstrutorPortfolioAutoML' is not defined pode ocorrer aqui se o ambiente
-                    # Streamlit não reconhecer a classe. Se persistir, é um problema de ambiente/configuração.
+                    # Instância do ConstrutorPortfolioAutoML
                     builder_local = ConstrutorPortfolioAutoML(investment)
                     st.session_state.builder = builder_local
                 except Exception as e:
@@ -1807,7 +1889,7 @@ def aba_construtor_portfolio():
                     fig_alloc.update_layout(**template)
                     fig_alloc.update_layout(title_text="Distribuição Otimizada por Ativo")
                     
-                    st.plotly_chart(fig_alloc, use_container_width=True)
+                    st.plotly_chart(fig_alloc, use_container_width=False, width='stretch')
                 else:
                     st.warning("Nenhuma alocação significativa para exibir. Otimização não retornou pesos.")
             
@@ -1840,7 +1922,7 @@ def aba_construtor_portfolio():
                         })
                 
                 df_alloc = pd.DataFrame(alloc_table)
-                st.dataframe(df_alloc, use_container_width=True, hide_index=True)
+                st.dataframe(df_alloc, use_container_width=False, width='stretch')
         
         with tab2:
             st.markdown('#### Métricas Chave do Portfólio (Histórico Recente)')
@@ -1874,7 +1956,7 @@ def aba_construtor_portfolio():
                 template = obter_template_grafico()
                 fig_cum.update_layout(**template)
                 fig_cum.update_layout(title_text="Retorno Acumulado dos Tickers Selecionados", yaxis_title="Retorno Acumulado (Base 1)", xaxis_title="Data", height=500)
-                st.plotly_chart(fig_cum, use_container_width=True)
+                st.plotly_chart(fig_cum, use_container_width=False, width='stretch')
             else:
                 st.info("Gráfico de retorno indisponível (Modo Estático Ativo - Sem histórico de preços).")
         
@@ -1921,14 +2003,14 @@ def aba_construtor_portfolio():
                     
                     fig_ml.update_layout(title_text=title_text_plot, yaxis_title="Score", xaxis_title="Ticker", height=400)
                     
-                    st.plotly_chart(fig_ml, use_container_width=True)
+                    st.plotly_chart(fig_ml, use_container_width=False, width='stretch')
                     
                     st.markdown("---")
                     st.markdown('#### Detalhamento Técnico')
                     df_ml_display = df_ml.copy()
                     df_ml_display['Score/Prob.'] = df_ml_display['Score/Prob.'].round(2)
                     df_ml_display['Confiança'] = df_ml_display['Confiança'].apply(lambda x: safe_format(x))
-                    st.dataframe(df_ml_display, use_container_width=True, hide_index=True)
+                    st.dataframe(df_ml_display, use_container_width=False, width='stretch')
                  else:
                      st.warning("Não há dados de ML para exibir.")
 
@@ -1946,7 +2028,7 @@ def aba_construtor_portfolio():
                      
                      st.dataframe(df_cluster_display.style.format({
                          'Score Fund.': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}'
-                     }).background_gradient(cmap='Blues', subset=['Score Fund.']), use_container_width=True)
+                     }).background_gradient(cmap='Blues', subset=['Score Fund.']), use_container_width=False, width='stretch')
                  else:
                      st.warning("Dados de fundamentos insuficientes para exibir clusters.")
         
@@ -2001,11 +2083,11 @@ def aba_construtor_portfolio():
                             fig_garch.update_layout(**template)
                             fig_garch.update_layout(title_text="Volatilidade Anualizada: Histórica vs. Condicional (GARCH)", yaxis_title="Volatilidade Anual (%)", barmode='group', height=400)
                             
-                            st.plotly_chart(fig_garch, use_container_width=True)
+                            st.plotly_chart(fig_garch, use_container_width=False, width='stretch')
                         else:
                             st.info("Dados de volatilidade insuficientes para gráfico.")
 
-                        st.dataframe(df_garch, use_container_width=True, hide_index=True)
+                        st.dataframe(df_garch, use_container_width=False, width='stretch')
                     else:
                         st.warning("Não há dados de volatilidade para exibir.")
                 else:
@@ -2054,7 +2136,7 @@ def aba_construtor_portfolio():
                 
                 st.dataframe(df_scores_display.style.format(
                     final_format_dict
-                ).background_gradient(cmap='Greys', subset=['Score Total'] if 'Score Total' in df_scores_display.columns else None), use_container_width=True)
+                ).background_gradient(cmap='Greys', subset=['Score Total'] if 'Score Total' in df_scores_display.columns else None), use_container_width=False, width='stretch')
             else:
                 st.warning("Tabela de scores indisponível (falha no processamento de dados).")
             
@@ -2077,7 +2159,7 @@ def aba_construtor_portfolio():
             st.markdown("---")
             col_space1, col_btn, col_space2 = st.columns([1, 1, 1])
             with col_btn:
-                if st.button("🔄 Recalibrar Perfil e Otimizar Novamente", type="primary", use_container_width=True):
+                if st.button("🔄 Recalibrar Perfil e Otimizar Novamente", type="primary", use_container_width=False):
                     st.session_state.builder_complete = False
                     st.session_state.builder = None
                     st.session_state.profile = {}
@@ -2113,7 +2195,7 @@ def aba_analise_individual():
     # Botão Centralizado Abaixo
     c1, c2, c3 = st.columns([1, 1, 1])
     with c2:
-        if st.button("🔄 Executar Análise", key='analyze_asset_button_v8', type="primary", use_container_width=True):
+        if st.button("🔄 Executar Análise", key='analyze_asset_button_v8', type="primary", use_container_width=False):
             st.session_state.analisar_ativo_triggered = True 
     
     if 'analisar_ativo_triggered' not in st.session_state or not st.session_state.analisar_ativo_triggered:
@@ -2183,7 +2265,7 @@ def aba_analise_individual():
                     fig.update_layout(**template)
                     fig.update_layout(height=600)
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, use_container_width=False, width='stretch')
                 else: st.info("Gráfico indisponível (Modo Estático Ativo).")
 
             with tab2:
@@ -2239,7 +2321,7 @@ def aba_analise_individual():
                      clean_fund = {k: v for k, v in features_fund.items() if k not in ['static_mode', 'garch_volatility', 'max_drawdown']}
                      df_fund_show = pd.DataFrame([clean_fund]).T.reset_index()
                      df_fund_show.columns = ['Indicador', 'Valor']
-                     st.dataframe(df_fund_show, use_container_width=True, hide_index=True)
+                     st.dataframe(df_fund_show, use_container_width=False, width='stretch')
 
             with tab3:
                 # LÓGICA DE EXIBIÇÃO: SÓ MOSTRA SE NÃO ESTIVER EM MODO ESTÁTICO
@@ -2258,7 +2340,7 @@ def aba_analise_individual():
                     fig_rsi.update_layout(**template)
                     fig_rsi.update_layout(height=300)
                     
-                    st.plotly_chart(fig_rsi, use_container_width=True)
+                    st.plotly_chart(fig_rsi, use_container_width=False, width='stretch')
                     
                     # Gráfico MACD
                     fig_macd = make_subplots(rows=1, cols=1)
@@ -2271,7 +2353,7 @@ def aba_analise_individual():
                     fig_macd.update_layout(**template)
                     fig_macd.update_layout(height=300)
                     
-                    st.plotly_chart(fig_macd, use_container_width=True)
+                    st.plotly_chart(fig_macd, use_container_width=False, width='stretch')
                     
                     # Gráfico BB
                     rolling_mean = df_completo['Close'].rolling(window=20).mean()
@@ -2289,7 +2371,7 @@ def aba_analise_individual():
                     fig_bb.update_layout(**template)
                     fig_bb.update_layout(height=400)
                     
-                    st.plotly_chart(fig_bb, use_container_width=True)
+                    st.plotly_chart(fig_bb, use_container_width=False, width='stretch')
                     
                 else: st.warning("Análise Técnica não disponível sem histórico de preços.")
 
@@ -2322,7 +2404,7 @@ def aba_analise_individual():
                     template['title']['text'] = 'Top 5 Fatores de Decisão'
                     fig_imp.update_layout(**template)
                     fig_imp.update_layout(height=300)
-                    st.plotly_chart(fig_imp, use_container_width=True)
+                    st.plotly_chart(fig_imp, use_container_width=False, width='stretch')
 
             with tab5: 
                 st.markdown("### 🔬 Clusterização Geral (Ibovespa)")
@@ -2372,7 +2454,7 @@ def aba_analise_individual():
                         fig_pca.update_layout(**template)
                         fig_pca.update_layout(height=500)
                     
-                    st.plotly_chart(fig_pca, use_container_width=True)
+                    st.plotly_chart(fig_pca, use_container_width=False, width='stretch')
                     
                     # Identifica pares
                     if ativo_selecionado in resultado_cluster.index:
