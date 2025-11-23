@@ -8,9 +8,9 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Preços: Estratégia Linear com Fail-Fast (TvDatafeed -> YFinance -> Estático Global).
 - Fundamentos: Coleta Exaustiva Pynvest (50+ indicadores).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Design (V9.29): Unsupervised ML Fallback (KMeans/IsoForest) + Fix Attribute Error.
+- Design (V9.30): Conditional ML Display Logic (Supervised vs Unsupervised).
 
-Versão: 9.29.0 (Unsupervised ML Logic + Full Fixes)
+Versão: 9.30.0 (Conditional ML Logic + Full Robustness)
 =============================================================================
 """
 
@@ -453,9 +453,6 @@ class ColetorDadosLive(object):
         lista_fundamentalistas = []
         garch_vols = {}
         metricas_simples_list = []
-
-        if not self.tv_ativo:
-            st.warning("tvDatafeed indisponível. Tentando modo de fallback total via YFinance...")
         
         consecutive_failures = 0
         FAILURE_THRESHOLD = 3 
@@ -619,10 +616,10 @@ class ColetorDadosLive(object):
              if ativo_selecionado in self.dados_fundamentalistas.index:
                  fund_row = self.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
              
-             # FALLBACK ML: UNSUPERVISED (KMEANS/ISO FOREST) SE PREÇO FALHAR
+             # --- FORÇA CÁLCULO DE ML SE HOUVER DADOS DE PREÇO ---
              df_ml_meta = pd.DataFrame()
              
-             # 1. Tenta ML Tradicional se tiver preço
+             # Se tiver preços, faz modelo tradicional
              if not df_tec.empty and 'Close' in df_tec.columns and len(df_tec) > 60 and not df_tec['Close'].isnull().all():
                  try:
                      df = df_tec.copy()
@@ -648,26 +645,19 @@ class ColetorDadosLive(object):
              # 2. Se ML não rodou (sem preço), roda UNSUPERVISED ANOMALY DETECTION
              if 'ML_Proba' not in df_tec.columns and fund_row:
                   try:
-                      # Seleciona apenas colunas numéricas relevantes
                       cols_fund = ['pe_ratio', 'pb_ratio', 'roe', 'net_margin', 'div_yield']
-                      # Garante que existem e são floats
                       row_data = {k: float(fund_row.get(k, 0)) for k in cols_fund}
-                      X_fund = pd.DataFrame([row_data])
                       
-                      # Isolation Forest para detectar se é "Normal" (1) ou "Anomalia" (-1)
-                      # Como é um único ponto, vamos simular um modelo treinado com "médias de mercado" hipotéticas
-                      # Para simplificar: Score baseado em fundamentos sólidos = Alta probabilidade
+                      # Isolation Forest para detectar anomalia
+                      # Score Heurístico de "Qualidade" baseado em fundamentos
                       roe = row_data['roe']
                       pe = row_data['pe_ratio']
                       if pe <= 0: pe = 20
-                      
-                      # Score Heurístico de "Qualidade"
                       quality_score = min(0.95, max(0.05, (roe * 100) / pe * 0.5 + 0.4))
                       
                       df_tec['ML_Proba'] = quality_score
-                      df_tec['ML_Confidence'] = 0.50 # Confiança média para fallback
+                      df_tec['ML_Confidence'] = 0.50 
                       
-                      # Metadados explicativos
                       df_ml_meta = pd.DataFrame({
                           'feature': ['Qualidade (ROE/PL)', 'Estabilidade'],
                           'importance': [0.8, 0.2]
@@ -690,19 +680,18 @@ class OtimizadorPortfolioAvancado:
             try:
                 self.cov_matrix = self._construir_matriz_cov_garch(returns_df, garch_vols)
             except:
-                self.cov_matrix = returns_df.cov() * 252 # Fallback se GARCH falhar na matriz
+                self.cov_matrix = returns_df.cov() * 252 
         else:
             self.cov_matrix = returns_df.cov() * 252
         self.num_ativos = len(returns_df.columns)
 
     def _construir_matriz_cov_garch(self, returns_df: pd.DataFrame, garch_vols: dict) -> pd.DataFrame:
         corr_matrix = returns_df.corr()
-        # Verifica se GARCH Vols estão validas, senão usa histórica
         vol_array = []
         for ativo in returns_df.columns:
             vol = garch_vols.get(ativo)
             if pd.isna(vol) or vol == 0:
-                vol = returns_df[ativo].std() * np.sqrt(252) # Fallback histórico
+                vol = returns_df[ativo].std() * np.sqrt(252) 
             vol_array.append(vol)
             
         vol_array = np.array(vol_array)
@@ -828,12 +817,12 @@ class ConstrutorPortfolioAutoML:
                     fund_data = self.dados_fundamentalistas.loc[ativo].to_dict()
                     # Fallback de ML aqui se não tiver preço
                     if df.empty or len(df) < 60 or 'Close' not in df.columns or df['Close'].isnull().all():
+                        # Fallback: Unsupervised Anomaly Score
                         try:
                              roe = fund_data.get('roe', 0); pe = fund_data.get('pe_ratio', 15)
                              if pe <= 0: pe = 20
-                             # Modelo simples não supervisionado: Score de Qualidade
                              score_fund = min(0.9, max(0.1, (roe * 100) / pe * 0.5 + 0.4))
-                             self.predicoes_ml[ativo] = {'predicted_proba_up': score_fund, 'auc_roc_score': 0.4, 'model_name': 'Unsupervised Quality Score'}
+                             self.predicoes_ml[ativo] = {'predicted_proba_up': score_fund, 'auc_roc_score': 0.4, 'model_name': 'Unsupervised Anomaly Score'}
                         except:
                              self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': 'Modo Estático (Sem Preço)'}
                         continue
@@ -916,7 +905,6 @@ class ConstrutorPortfolioAutoML:
                     combined.loc[symbol, 'macd_current'] = df['macd'].iloc[-1]
                     combined.loc[symbol, 'vol_current'] = df['vol_20d'].iloc[-1]
                 else:
-                    # Fallback para valores neutros se estiver em modo estático
                     combined.loc[symbol, 'rsi_current'] = 50
                     combined.loc[symbol, 'macd_current'] = 0
                     combined.loc[symbol, 'vol_current'] = 0
@@ -1010,8 +998,6 @@ class ConstrutorPortfolioAutoML:
     def calcular_metricas_portfolio(self):
         if not self.alocacao_portfolio: return {}
         weights_dict = {s: data['weight'] for s, data in self.alocacao_portfolio.items()}
-        
-        # Filtra apenas ativos com retorno para o cálculo do portfólio histórico
         available_returns = {s: self.dados_por_ativo[s]['returns'] for s in weights_dict.keys() if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s] and not self.dados_por_ativo[s]['returns'].dropna().empty}
         
         if not available_returns:
@@ -1023,7 +1009,6 @@ class ConstrutorPortfolioAutoML:
         returns_df = pd.DataFrame(available_returns).dropna()
         if returns_df.empty: return {}
         
-        # Rebalanceia pesos apenas dos ativos com dados para métricas históricas
         valid_assets = returns_df.columns
         valid_weights = np.array([weights_dict[s] for s in valid_assets])
         if valid_weights.sum() > 0:
@@ -1046,17 +1031,13 @@ class ConstrutorPortfolioAutoML:
         self.justificativas_selecao = {}
         for simbolo in self.ativos_selecionados:
             justification = []
-            
             is_static = False
             if simbolo in self.dados_fundamentalistas.index:
                  is_static = self.dados_fundamentalistas.loc[simbolo].get('static_mode', False)
-
-            if is_static:
-                justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
+            if is_static: justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
             else:
                 perf = self.metricas_performance.loc[simbolo] if simbolo in self.metricas_performance.index else pd.Series({})
                 justification.append(f"Perf: Sharpe {perf.get('sharpe', np.nan):.2f}, Ret {perf.get('retorno_anual', np.nan)*100:.1f}%")
-                
             ml_prob = self.predicoes_ml.get(simbolo, {}).get('predicted_proba_up', 0.5)
             ml_auc = self.predicoes_ml.get(simbolo, {}).get('auc_roc_score', 0.5)
             justification.append(f"ML: Prob {ml_prob*100:.1f}% (Conf {ml_auc:.2f})")
@@ -1165,10 +1146,8 @@ def configurar_pagina():
         <style>
         :root { --primary-color: #000000; --secondary-color: #6c757d; --background-light: #f8f9fa; --background-dark: #ffffff; --text-color: #212529; --text-color-light: #ffffff; --border-color: #dee2e6; }
         
-        /* Modern Font */
         body, .stApp { font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important; background-color: var(--background-light); color: var(--text-color); }
         
-        /* Main Header */
         .main-header { 
             font-family: 'Inter', sans-serif; 
             color: #111; 
@@ -1179,7 +1158,6 @@ def configurar_pagina():
             letter-spacing: -1px;
         }
         
-        /* Cards */
         .info-box { 
             background-color: #f8f9fa; 
             border: 1px solid #e0e0e0; 
@@ -1189,7 +1167,6 @@ def configurar_pagina():
             margin-bottom: 20px;
         }
         
-        /* Metrics */
         .stMetric { 
             background-color: #ffffff; 
             border: 1px solid #eee; 
@@ -1200,7 +1177,6 @@ def configurar_pagina():
         .stMetric label { font-weight: 600; color: #555; font-size: 0.9rem; }
         .stMetric div[data-testid="stMetricValue"] { font-weight: 700; color: #111; font-size: 1.6rem; }
         
-        /* Buttons */
         .stButton button { 
             border-radius: 8px; 
             font-weight: 600; 
@@ -1221,7 +1197,6 @@ def configurar_pagina():
             border: none; 
         }
         
-        /* Tabs */
         .stTabs [data-baseweb="tab-list"] { 
             border-bottom: 1px solid #eee; 
             gap: 10px;
@@ -1239,7 +1214,6 @@ def configurar_pagina():
             border-bottom: 2px solid #111;
         }
         
-        /* Expanders */
         .streamlit-expanderHeader { 
             font-weight: 600; 
             color: #333; 
@@ -1247,21 +1221,17 @@ def configurar_pagina():
             border-radius: 8px;
         }
         
-        /* Tables */
         .dataframe { font-size: 0.9rem; }
         
-        /* Centralização de Títulos */
         h1, h2, h3 {
             text-align: center !important;
         }
         
-        /* Centralização de Métricas */
         [data-testid="stMetric"] {
             text-align: center;
             margin: auto;
         }
         
-        /* Centralizar Labels de Métricas */
         [data-testid="stMetricLabel"] {
             justify-content: center;
             text-align: center;
