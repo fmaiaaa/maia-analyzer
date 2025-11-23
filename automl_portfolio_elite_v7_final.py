@@ -816,21 +816,41 @@ class ConstrutorPortfolioAutoML:
         
     def treinar_modelos_ensemble(self, dias_lookback_ml: int = LOOKBACK_ML, otimizar: bool = False, progress_callback=None):
         ativos_com_dados = [s for s in self.ativos_sucesso if s in self.dados_por_ativo]
-        clustering_df = self.dados_fundamentalistas[['pe_ratio', 'pb_ratio', 'div_yield', 'roe']].join(
-            self.metricas_performance[['sharpe', 'volatilidade_anual']], how='inner',
-            lsuffix='_fund', rsuffix='_perf' 
-        ).fillna(0)
         
-        if len(clustering_df) >= 5:
-            scaler = StandardScaler()
-            data_scaled = scaler.fit_transform(clustering_df)
-            pca = PCA(n_components=min(data_scaled.shape[1], 3))
-            data_pca = pca.fit_transform(data_scaled)
-            kmeans = KMeans(n_clusters=min(len(data_pca), 5), random_state=42, n_init=10)
-            clusters = kmeans.fit_predict(data_pca)
-            self.dados_fundamentalistas['Cluster'] = pd.Series(clusters, index=clustering_df.index).fillna(-1).astype(int)
+        # --- CORREÇÃO: VERIFICAÇÃO ROBUSTA DE COLUNAS FUNDAMENTAIS ---
+        
+        required_cols = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe']
+        
+        # Filtra as colunas que realmente existem no DataFrame
+        available_fund_cols = [col for col in required_cols if col in self.dados_fundamentalistas.columns]
+        
+        # Verifica se temos o mínimo necessário para a clusterização
+        if len(available_fund_cols) >= 4 and len(self.dados_fundamentalistas) >= 5:
+            
+            # Executa a clusterização normalmente
+            clustering_df = self.dados_fundamentalistas[available_fund_cols].join(
+                self.metricas_performance[['sharpe', 'volatilidade_anual']], how='inner',
+                lsuffix='_fund', rsuffix='_perf' 
+            ).fillna(0)
+            
+            # Garante que clustering_df não está vazio após o join
+            if len(clustering_df) >= 5:
+                # Lógica original de Clusterização (KMeans + PCA)
+                scaler = StandardScaler()
+                data_scaled = scaler.fit_transform(clustering_df)
+                pca = PCA(n_components=min(data_scaled.shape[1], 3))
+                data_pca = pca.fit_transform(data_scaled)
+                kmeans = KMeans(n_clusters=min(len(data_pca), 5), random_state=42, n_init=10)
+                clusters = kmeans.fit_predict(data_pca)
+                self.dados_fundamentalistas['Cluster'] = pd.Series(clusters, index=clustering_df.index).fillna(-1).astype(int)
+            else:
+                self.dados_fundamentalistas['Cluster'] = 0
+                st.warning("⚠️ Dados insuficientes após o JOIN. Clusterização ignorada.")
+        
         else:
+            # FALLBACK: Se as colunas fundamentais não existirem (Pynvest falhou)
             self.dados_fundamentalistas['Cluster'] = 0
+            st.warning("⚠️ Falha na coleta de dados fundamentais (P/L, ROE, etc.). Usando Cluster = 0.")
 
         features_ml = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'sma_200',
             'pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster']
