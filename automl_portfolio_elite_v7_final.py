@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.20 (Update: ADD Min Score Selection Filter & Isolation Forest Visualization)
+Versão: 9.32.21 (Update: FIX ML dynamic feature selection, GARCH robustness, and RESTORE FULL UI CENTRALIZATION)
 =============================================================================
 """
 
@@ -647,7 +647,7 @@ class ColetorDadosLive(object):
                             df_tecnicos.rename(columns={col: rename_map[base_col]}, inplace=True)
 
                 if 'Close' in df_tecnicos.columns:
-                    df_tecnicos = df_tecnicos.dropna(subset=['Close'])
+                    # Não filtramos por NaNs aqui, deixamos o CalculadoraTecnica tratar.
                     if not df_tecnicos.empty:
                         df_tecnicos = CalculadoraTecnica.enriquecer_dados_tecnicos(df_tecnicos)
                     else:
@@ -694,14 +694,16 @@ class ColetorDadosLive(object):
                 garch_vol = vol_anual # Fallback inicial GARCH = Histórico
                 if len(retornos) > 60: 
                     try:
+                        # GARCH é sensível a dados muito longos ou ruído, mantemos a chamada.
                         am = arch_model(retornos * 100, mean='Zero', vol='Garch', p=1, q=1)
                         res = am.fit(disp='off', last_obs=retornos.index[-1]) 
                         garch_std_daily = res.conditional_volatility.iloc[-1] / 100 
                         garch_vol = garch_std_daily * np.sqrt(252)
+                        if np.isnan(garch_vol) or garch_vol == 0: raise ValueError("GARCH returned NaN or zero.")
                         log_debug(f"Ativo {simbolo}: GARCH concluído. Vol Condicional: {garch_vol*100:.2f}%.")
-                    except Exception:
+                    except Exception as e:
                         garch_vol = vol_anual 
-                        log_debug(f"Ativo {simbolo}: GARCH falhou. Usando Vol Histórica como Vol Condicional.")
+                        log_debug(f"Ativo {simbolo}: GARCH falhou ({str(e)[:20]}). Usando Vol Histórica como Vol Condicional.")
                 # --- FIM DA IMPLEMENTAÇÃO GARCH ---
             
             fund_data.update({
@@ -773,6 +775,10 @@ class ColetorDadosLive(object):
         
         is_price_data_available = not df_tec.empty and 'Close' in df_tec.columns and len(df_tec) > 60 and not df_tec['Close'].isnull().all()
         
+        # --- NOVO: Feature Pool Completo para ML e GARCH ---
+        ALL_TECH_FEATURES = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'momentum_60']
+        ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster']
+        
         if is_price_data_available:
             log_debug(f"Análise Individual ML: Iniciando modelo supervisionado para {ativo_selecionado}.")
             try:
@@ -781,19 +787,27 @@ class ColetorDadosLive(object):
                 
                 df['Future_Direction'] = np.where(df['Close'].pct_change(5).shift(-5) > 0, 1, 0)
                 
-                features_ml = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50']
-                current_features = [f for f in features_ml if f in df.columns]
-                df_model = df.dropna(subset=current_features + ['Future_Direction'])
+                # Identifica features válidas para este ativo
+                available_features = [f for f in (ALL_TECH_FEATURES + ALL_FUND_FEATURES) if f in df.columns]
                 
+                # Remove NaNs apenas para as features de interesse
+                df_model = df.dropna(subset=available_features + ['Future_Direction'])
+
                 if len(df_model) > 50:
                     log_debug(f"ML Individual: {len(df_model)} pontos válidos para treino. Treinando RF...")
 
-                    X = df_model[current_features].iloc[:-5]
+                    X = df_model[available_features].iloc[:-5]
                     y = df_model['Future_Direction'].iloc[:-5]
+                    
+                    # Identifica features que ainda são todas NaN após o dropna (impossível se dropna for bem sucedido, mas seguro)
+                    final_features = [col for col in X.columns if not X[col].isnull().all()]
+                    X = X[final_features]
+
+
                     model = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
                     model.fit(X, y)
                     
-                    last_features = df[current_features].iloc[[-1]].copy().fillna(0) # Garantir que o input de predição não tem NaN
+                    last_features = df[final_features].iloc[[-1]].copy().fillna(0) # Garantir que o input de predição não tem NaN
                     proba = model.predict_proba(last_features)[0][1]
                     
                     # --- CÁLCULO DE AUC PARA CONFIANÇA ---
@@ -823,7 +837,7 @@ class ColetorDadosLive(object):
                         log_debug(f"ML Individual: Sucesso. Prob: {proba_final:.2f}, AUC: {conf_final:.2f}.")
 
                     importances = pd.DataFrame({
-                        'feature': current_features,
+                        'feature': final_features,
                         'importance': model.feature_importances_
                     }).sort_values('importance', ascending=False)
                     
@@ -937,9 +951,14 @@ class ConstrutorPortfolioAutoML:
         ativos_com_dados = [s for s in self.ativos_sucesso if s in self.dados_por_ativo]
         log_debug("Iniciando Pipeline de Treinamento ML/Clusterização.")
         
+        # --- Feature Pool Completo ---
+        ALL_TECH_FEATURES = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'momentum_60']
+        ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster']
+
+
         # --- Clusterização Inicial (Fundamentos) ---
-        required_cols = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe']
-        available_fund_cols = [col for col in required_cols if col in self.dados_fundamentalistas.columns]
+        required_cols_cluster = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe']
+        available_fund_cols = [col for col in required_cols_cluster if col in self.dados_fundamentalistas.columns]
         
         if len(available_fund_cols) >= 4 and len(self.dados_fundamentalistas) >= 5:
             log_debug("Executando Clusterização inicial (KMeans + PCA) nos fundamentos.")
@@ -970,9 +989,6 @@ class ConstrutorPortfolioAutoML:
             log_debug("AVISO: Falha na coleta de dados fundamentais (P/L, ROE, etc.). Usando Cluster = 0.")
         
         # --- Pipeline ML ---
-        features_ml = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50',
-            'pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster']
-        
         for i, ativo in enumerate(ativos_com_dados):
             try:
                 if progress_callback: progress_callback.progress(50 + int((i/len(ativos_com_dados))*20), text=f"Treinando RF Pipeline: {ativo}...")
@@ -998,10 +1014,27 @@ class ConstrutorPortfolioAutoML:
                     continue
 
                 df['Future_Direction'] = np.where(df['Close'].pct_change(dias_lookback_ml).shift(-dias_lookback_ml) > 0, 1, 0)
-                current_features = [f for f in features_ml if f in df.columns]
-                # A LINHA CRÍTICA que causa a perda de dados. Mantemos o mínimo para 30.
-                df_model = df.dropna(subset=current_features + ['Future_Direction'])
                 
+                # Juntando dados técnicos e fundamentais no DF
+                current_features_raw = ALL_TECH_FEATURES + ALL_FUND_FEATURES
+                
+                # Cria um DF de modelo preenchendo as features fundamentais disponíveis na última linha
+                last_idx = df.index[-1] if not df.empty else None
+                if last_idx:
+                    for f_col in ALL_FUND_FEATURES:
+                        if f_col in fund_data and f_col not in df.columns:
+                            # Adiciona a feature fundamental como uma nova coluna
+                            df.loc[last_idx, f_col] = fund_data[f_col]
+                        elif f_col not in df.columns:
+                             # Adiciona NaN se a feature fundamental não existir
+                            df[f_col] = np.nan
+                
+                # Garante que as colunas existem antes de tentar o dropna
+                available_features = [f for f in current_features_raw if f in df.columns]
+                
+                # Remove NaNs apenas para as features de interesse e a coluna alvo
+                df_model = df.dropna(subset=available_features + ['Future_Direction'])
+
                 if len(df_model) < 30:
                     self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.5, 'model_name': 'Dados Insuficientes'}
                     log_debug(f"ML (Ignorado): Ativo {ativo} pulado. Apenas {len(df_model)} pontos de dados válidos para treino. Mínimo é 30.")
@@ -1009,9 +1042,14 @@ class ConstrutorPortfolioAutoML:
                 
                 log_debug(f"ML (Supervisionado): Ativo {ativo} tem {len(df_model)} pontos válidos para treino (Mín. 30).")
 
-
-                X = df_model[current_features].iloc[:-dias_lookback_ml]
+                # Selecionando dados de treino/teste
+                X = df_model[available_features].iloc[:-dias_lookback_ml]
                 y = df_model['Future_Direction'].iloc[:-dias_lookback_ml]
+                
+                # Filtra features que são completamente NaN no subconjunto de treino (embora o dropna devesse prevenir isso)
+                final_features = [col for col in X.columns if not X[col].isnull().all()]
+                X = X[final_features]
+                
                 if 'Cluster' in X.columns: X['Cluster'] = X['Cluster'].astype(str)
                 
                 categorical_cols = ['Cluster'] if 'Cluster' in X.columns else []
@@ -1030,8 +1068,13 @@ class ConstrutorPortfolioAutoML:
                     avg_auc = scores.mean()
                 
                 model.fit(X, y)
-                last_features = df[current_features].iloc[[-1]].copy()
+                
+                # Preparando dados de predição (última linha)
+                last_features_raw = df[available_features].iloc[[-1]].copy()
+                last_features = last_features_raw[final_features].fillna(0) # Deve ter colunas finais
+                
                 if 'Cluster' in last_features.columns: last_features['Cluster'] = last_features['Cluster'].astype(str)
+                
                 proba = model.predict_proba(last_features)[0][1]
 
                 # --- MODO SUPERVISIONADO: Fallback para Proxy se o modelo for Neutro ---
@@ -1464,7 +1507,7 @@ def configurar_pagina():
             margin-bottom: 20px;
         }
         
-        /* Regras de centralização do design original, ajustadas para ocupar a largura */
+        /* Regras de centralização RESTAURADAS */
         /* H2 e H3 CENTRALIZADOS */
         h2, h3 {
             text-align: center !important;
@@ -1498,7 +1541,21 @@ def configurar_pagina():
             background-color: white; 
             border-bottom: 2px solid #111;
         }
-        /* FIM DAS REGRAS DE CENTRALIZAÇÃO RESTAURADAS */
+        
+        /* Botões CENTRALIZADOS FORÇADOS (usando flexbox no container pai) */
+        [data-testid="stFormSubmitButton"], .stButton {
+            display: flex;
+            justify-content: center;
+            margin: 10px 0;
+        }
+        
+        /* Garante que tabelas e gráficos ocupem a largura do container principal */
+        div.stPlotlyChart {
+            width: 100% !important;
+        }
+        div.stDataFrame {
+            width: 100% !important;
+        }
 
 
         /* Outros estilos básicos */
@@ -2480,7 +2537,7 @@ def aba_analise_individual():
                     st.plotly_chart(fig_anomaly, use_container_width=False, width='stretch')
                     
                     # Tabela de Anomalia
-                    st.markdown('##### Tabela de Scores de Anomalia (Quanto maior, mais normal)')
+                    st.markdown('##### Tabela de Scores de Anomalia (Quanto maior, menos anômalo)')
                     df_anomaly_show = resultado_cluster[['Anomaly_Score', 'Anomalia']].copy()
                     df_anomaly_show.rename(columns={'Anomaly_Score': 'Score Anomalia', 'Anomalia': 'Status'}, inplace=True)
                     df_anomaly_show['Status'] = df_anomaly_show['Status'].replace({1: 'Normal', -1: 'Outlier/Anomalia'})
