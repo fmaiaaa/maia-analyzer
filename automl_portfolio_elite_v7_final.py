@@ -424,6 +424,8 @@ class ColetorDadosLive(object):
             if col_orig in row:
                 val = row[col_orig]
                 if isinstance(val, str):
+                    if val.strip() == '':
+                        val = np.nan
                     val = val.replace('.', '').replace(',', '.')
                     if val.endswith('%'):
                         val = val.replace('%', '')
