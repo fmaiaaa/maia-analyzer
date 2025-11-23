@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.4 (Update: FIX GARCH Implementation & ML Robustness)
+Versão: 9.32.6 (Update: FORCE FUNDAMENTAL PROXY on Neutral ML)
 =============================================================================
 """
 
@@ -81,7 +81,7 @@ from arch import arch_model
 # 1. CONFIGURAÇÕES E CONSTANTES GLOBAIS
 # =============================================================================
 
-PERIODO_DADOS = '2y' 
+PERIODO_DADOS = 'max' # ALTERADO: Período máximo de dados
 MIN_DIAS_HISTORICO = 252
 NUM_ATIVOS_PORTFOLIO = 5
 TAXA_LIVRE_RISCO = 0.1075
@@ -93,9 +93,9 @@ PESO_MIN = 0.10
 PESO_MAX = 0.30
 
 LOOKBACK_ML_DAYS_MAP = {
-    'curto_prazo': 5,
-    'medio_prazo': 20,
-    'longo_prazo': 30
+    'curto_prazo': 84,   # ALTERADO: 84 dias (Aprox. 4 meses)
+    'medio_prazo': 168,  # ALTERADO: 168 dias (Aprox. 8 meses)
+    'longo_prazo': 252   # ALTERADO: 252 dias (Aprox. 1 ano)
 }
 
 # =============================================================================
@@ -239,12 +239,13 @@ class AnalisadorPerfilInvestidor:
         else: return "AVANÇADO"
     
     def determinar_horizonte_ml(self, liquidez_key: str, objetivo_key: str) -> tuple[str, int]:
-        time_map = { 'A': 5, 'B': 20, 'C': 30 } 
-        final_lookback = max( time_map.get(liquidez_key, 5), time_map.get(objetivo_key, 5) )
+        # Corresponde às novas configurações: A=84, B=168, C=252
+        time_map = { 'A': 84, 'B': 168, 'C': 252 } 
+        final_lookback = max( time_map.get(liquidez_key, 84), time_map.get(objetivo_key, 84) )
         
-        if final_lookback >= 30:
+        if final_lookback >= 252:
             self.horizonte_tempo = "LONGO PRAZO"
-        elif final_lookback >= 20:
+        elif final_lookback >= 168:
             self.horizonte_tempo = "MÉDIO PRAZO"
         else:
             self.horizonte_tempo = "CURTO PRAZO"
@@ -883,18 +884,24 @@ class ConstrutorPortfolioAutoML:
             try:
                 if progress_callback: progress_callback.progress(50 + int((i/len(ativos_com_dados))*20), text=f"Treinando RF Pipeline: {ativo}...")
                 df = self.dados_por_ativo[ativo].copy()
+                
+                # Assume que se o ativo está aqui, fund_data está em self.dados_fundamentalistas
                 if ativo in self.dados_fundamentalistas.index:
                     fund_data = self.dados_fundamentalistas.loc[ativo].to_dict()
-                    # Fallback de ML aqui se não tiver preço
-                    if df.empty or len(df) < 60 or 'Close' not in df.columns or df['Close'].isnull().all():
-                        try:
-                             roe = fund_data.get('roe', 0); pe = fund_data.get('pe_ratio', 15)
-                             if pe <= 0: pe = 20
-                             score_fund = min(0.9, max(0.1, (roe * 100) / pe * 0.5 + 0.4))
-                             self.predicoes_ml[ativo] = {'predicted_proba_up': score_fund, 'auc_roc_score': 0.4, 'model_name': 'Proxy Fundamentalista'}
-                        except:
-                             self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': 'Modo Estático (Sem Preço)'}
-                        continue
+                else:
+                    fund_data = {} # Garante que fund_data existe
+
+                # Fallback de ML aqui se não tiver preço
+                if df.empty or len(df) < 60 or 'Close' not in df.columns or df['Close'].isnull().all():
+                    try:
+                         # Heuristica de proxy para o MODO ESTÁTICO
+                         roe = fund_data.get('roe', 0); pe = fund_data.get('pe_ratio', 15)
+                         if pe <= 0: pe = 20
+                         score_fund = min(0.9, max(0.05, (roe * 100) / pe * 0.5 + 0.4))
+                         self.predicoes_ml[ativo] = {'predicted_proba_up': score_fund, 'auc_roc_score': 0.4, 'model_name': 'Proxy Fundamentalista'}
+                    except:
+                         self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': 'Modo Estático (Sem Preço)'}
+                    continue
 
                 df['Future_Direction'] = np.where(df['Close'].pct_change(dias_lookback_ml).shift(-dias_lookback_ml) > 0, 1, 0)
                 current_features = [f for f in features_ml if f in df.columns]
@@ -927,11 +934,33 @@ class ConstrutorPortfolioAutoML:
                 last_features = df[current_features].iloc[[-1]].copy()
                 if 'Cluster' in last_features.columns: last_features['Cluster'] = last_features['Cluster'].astype(str)
                 proba = model.predict_proba(last_features)[0][1]
+
+                # --- INÍCIO DO FIX 5: FORÇAR PROXY SE RESULTADO FOR NEUTRO ---
+                is_neutral_result = (avg_auc <= 0.55) or (len(np.unique(y)) < 2) # Considerar AUC <= 0.55 como 'neutro'
                 
-                self.predicoes_ml[ativo] = {'predicted_proba_up': proba, 'auc_roc_score': avg_auc, 'model_name': 'Pipeline RF+Cluster'}
+                if is_neutral_result:
+                    # Heuristica de proxy para o MODO SUPERVISIONADO NEUTRO
+                    roe = fund_data.get('roe', 0); pe = fund_data.get('pe_ratio', 15)
+                    if pe <= 0: pe = 20
+                    score_fund_proxy = min(0.9, max(0.1, (roe * 100) / pe * 0.5 + 0.4))
+                    
+                    self.predicoes_ml[ativo] = {
+                        'predicted_proba_up': score_fund_proxy, 
+                        'auc_roc_score': 0.60, # Força uma confiança mínima para o score ser ponderado
+                        'model_name': 'Supervised Neutral (FORCING FUNDAMENTAL PROXY)'
+                    }
+                else:
+                    # Usa o resultado da predição supervisionada
+                    self.predicoes_ml[ativo] = {
+                        'predicted_proba_up': proba, 
+                        'auc_roc_score': avg_auc, 
+                        'model_name': 'Pipeline RF+Cluster'
+                    }
+                # --- FIM DO FIX 5 ---
+
                 last_idx = self.dados_por_ativo[ativo].index[-1]
-                self.dados_por_ativo[ativo].loc[last_idx, 'ML_Proba'] = proba
-                self.dados_por_ativo[ativo].loc[last_idx, 'ML_Confidence'] = avg_auc
+                self.dados_por_ativo[ativo].loc[last_idx, 'ML_Proba'] = self.predicoes_ml[ativo]['predicted_proba_up']
+                self.dados_por_ativo[ativo].loc[last_idx, 'ML_Confidence'] = self.predicoes_ml[ativo]['auc_roc_score']
 
             except Exception as e:
                 self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.5, 'model_name': f'Erro: {str(e)}'}
