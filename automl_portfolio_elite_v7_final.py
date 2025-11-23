@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.28 (Update: FIX ML/GARCH Robustness, UNBOUND LOCAL, and Restore UI)
+Versão: 9.32.29 (Update: FIX ML Logic, ADD EXPANDED TECHNICAL FEATURES, FIX SCOPE)
 =============================================================================
 """
 
@@ -76,6 +76,16 @@ except ImportError:
 
 # --- 7. SPECIALIZED TIME SERIES & ECONOMETRICS ---
 from arch import arch_model
+# --- IMPORTAÇÕES ADICIONAIS PARA INDICADORES (DO ARQUIVO mlrun.py) ---
+try:
+    from ta.trend import SMAIndicator, EMAIndicator, MACD
+    from ta.momentum import RSIIndicator, StochasticOscillator, ROCIndicator, WilliamsRIndicator
+    from ta.volatility import BollingerBands, AverageTrueRange, KeltnerChannel, DonchianChannel
+    from ta.volume import OnBalanceVolumeIndicator, ChaikinMoneyFlowIndicator, MFIIndicator, VolumeWeightedAveragePrice
+    from ta.trend import ADXIndicator, CCIIndicator
+except ImportError:
+    st.warning("Biblioteca 'ta' não instalada. Indicadores avançados estarão limitados.")
+
 
 # =============================================================================
 # 1. CONFIGURAÇÕES E CONSTANTES GLOBAIS
@@ -290,37 +300,81 @@ class CalculadoraTecnica:
     def enriquecer_dados_tecnicos(df_ativo: pd.DataFrame) -> pd.DataFrame:
         if df_ativo.empty: return df_ativo
         df = df_ativo.sort_index().copy()
+        
+        # --- Cálculo de Retornos (Necessário para a maioria dos indicadores) ---
         df['returns'] = df['Close'].pct_change()
         
-        # RSI
+        # --- INDICADORES EXPANDIDOS (Do mlrun.py) ---
+        
+        # 1. Volatilidade e Retornos
+        df['log_returns'] = np.log(df['Close'] / df['Close'].shift(1))
+        df['volatility_20'] = df['returns'].rolling(window=20).std() * np.sqrt(252)
+        df['volatility_60'] = df['returns'].rolling(window=60).std() * np.sqrt(252)
+        
+        # 2. Médias Móveis (SMA, EMA - 50 dias é o máximo usado no ML principal)
+        for periodo in [5, 10, 20, 50]:
+            if len(df) >= periodo:
+                df[f'sma_{periodo}'] = df['Close'].rolling(window=periodo).mean()
+                df[f'ema_{periodo}'] = df['Close'].ewm(span=periodo, adjust=False).mean()
+
+        # 3. RSI
         delta = df['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        # Evita divisão por zero
         rs = gain / loss.replace(0, np.nan)
         df['rsi_14'] = 100 - (100 / (1 + rs))
         
-        # MACD
+        # 4. MACD
         ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
         ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
         df['macd'] = ema_12 - ema_26
         df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
         df['macd_diff'] = df['macd'] - df['macd_signal']
         
-        # Volatilidade e Momentum
-        df['vol_20d'] = df['returns'].rolling(window=20).std() * np.sqrt(252)
+        # 5. Momentum
         df['momentum_10'] = df['Close'] / df['Close'].shift(10) - 1
-        df['sma_50'] = df['Close'].rolling(window=50).mean()
         df['momentum_60'] = df['Close'].pct_change(60)
         
-        # Bollinger Bands Width
+        # 6. Bollinger Bands Width
         rolling_mean = df['Close'].rolling(window=20).mean()
         rolling_std = df['Close'].rolling(window=20).std()
         upper = rolling_mean + (rolling_std * 2)
         lower = rolling_mean - (rolling_std * 2)
-        # Evita divisão por zero/NaN
         df['bb_width'] = (upper - lower) / rolling_mean.replace(0, np.nan)
         
+        # 7. ADX (média de 14)
+        if len(df) >= 28 and 'High' in df.columns and 'Low' in df.columns:
+            try:
+                adx_indicator = ADXIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=14)
+                df['adx'] = adx_indicator.adx()
+            except Exception:
+                df['adx'] = np.nan
+        else:
+            df['adx'] = np.nan
+            
+        # 8. ATR
+        if len(df) >= 14 and 'High' in df.columns and 'Low' in df.columns:
+             try:
+                 atr_indicator = AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'], window=14)
+                 df['atr'] = atr_indicator.average_true_range()
+             except Exception:
+                 df['atr'] = np.nan
+        else:
+            df['atr'] = np.nan
+
+        # 9. Lags e estatísticas rolling simples (para robustez)
+        for lag in [1, 5, 20]:
+            df[f'returns_lag_{lag}'] = df['returns'].shift(lag)
+        
+        for window in [5, 20]:
+            df[f'returns_mean_{window}'] = df['returns'].rolling(window).mean()
+            
+        # 10. Temporal encoding
+        df['day_of_week'] = df.index.dayofweek
+        df['month'] = df.index.month
+        df['week_of_year'] = df.index.isocalendar().week
+
+        # Retorna o DataFrame completo (sem dropna aqui, o ML fará o dropna no subset de features)
         return df
 
 # =============================================================================
@@ -467,6 +521,7 @@ class ColetorDadosLive(object):
             st.error(f"Erro ao inicializar tvDatafeed: {e}")
         
         try:
+            from pynvest.scrappers.fundamentus import Fundamentus
             self.pynvest_scrapper = Fundamentus()
             self.pynvest_ativo = True
             log_debug("Pynvest (Fundamentus) inicializado com sucesso.")
@@ -784,14 +839,13 @@ class ColetorDadosLive(object):
         is_price_data_available = 'Close' in df_tec.columns and not df_tec['Close'].isnull().all() and len(df_tec.dropna(subset=['Close'])) > 60
         
         # --- NOVO: Feature Pool Completo para ML e GARCH ---
-        ALL_TECH_FEATURES = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'momentum_60', 'bb_width']
+        ALL_TECH_FEATURES = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'momentum_60', 'bb_width', 'adx', 'atr', 'returns_lag_1', 'returns_lag_5', 'returns_lag_20', 'returns_mean_5', 'returns_mean_20']
         ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
         
         if is_price_data_available:
             log_debug(f"Análise Individual ML: Iniciando modelo supervisionado para {ativo_selecionado}.")
             try:
                 df = df_tec.copy()
-                # O enrichment já foi feito no coletor, mas garantimos que as colunas existem
                 
                 df['Future_Direction'] = np.where(df['Close'].pct_change(5).shift(-5) > 0, 1, 0)
                 
@@ -2204,10 +2258,13 @@ def aba_construtor_portfolio():
         if has_price_data and has_usable_ml:
             tab4_cluster = tabs_map[3]
             with tab4_cluster:
-                st.markdown('#### 🔭 Visualização da Diversificação e Clusters')
-                st.info("Esta análise utiliza PCA sobre os scores para visualizar a distribuição dos ativos selecionados no 'espaço de risco/retorno' e confirmar a diversificação entre os clusters.")
-                
+                st.markdown('#### 🔬 Clusters e Anomalias')
+                st.info("Esta aba exibe a clusterização dos ativos e a detecção de anomalias (outliers) baseada em fundamentos para identificar ativos únicos.")
+
+                # -----------------------------------------------
                 # Reutiliza o PCA e Clusterização dos Scores Finais
+                # -----------------------------------------------
+                
                 if 'Final_Cluster' in builder.scores_combinados.columns and len(builder.scores_combinados) >= 2:
                     df_viz = builder.scores_combinados.loc[assets].copy().reset_index().rename(columns={'index': 'Ticker'})
                     
@@ -2217,39 +2274,60 @@ def aba_construtor_portfolio():
                     
                     scaler = StandardScaler()
                     data_scaled = scaler.fit_transform(data_pca_input)
-                    pca = PCA(n_components=2)
+                    pca = PCA(n_components=3) # Usar 3 componentes para tentar gráfico 3D
                     pca_result = pca.fit_transform(data_scaled)
                     
                     df_viz['PC1'] = pca_result[:, 0]
                     df_viz['PC2'] = pca_result[:, 1]
+                    if pca_result.shape[1] >= 3:
+                         df_viz['PC3'] = pca_result[:, 2]
                     
-                    # Gráfico de Dispersão 2D dos Clusters
-                    fig_cluster_scatter = px.scatter(
-                        df_viz, 
-                        x='PC1', 
-                        y='PC2', 
-                        color=df_viz['Final_Cluster'].astype(str),
-                        size=df_viz['total_score'] / df_viz['total_score'].max() * 20, # Tamanho pela pontuação
-                        hover_data={'Ticker': True, 'total_score': ':.2f', 'Final_Cluster': True},
-                        text=df_viz['Ticker'].str.replace('.SA', ''),
-                        title="Distribuição do Portfólio no Espaço PCA (Scores Finais)"
-                    )
-                    
-                    template = obter_template_grafico()
-                    fig_cluster_scatter.update_layout(**template)
-                    fig_cluster_scatter.update_traces(textposition='top center')
-                    fig_cluster_scatter.update_layout(height=600)
+                    # Gráfico de Clusterização Principal (2D/3D)
+                    st.markdown('##### 🔭 Visualização de Clusters (Risco x Retorno)')
+                    if 'PC3' in df_viz.columns:
+                        fig_cluster_scatter = px.scatter_3d(
+                            df_viz, x='PC1', y='PC2', z='PC3', 
+                            color=df_viz['Final_Cluster'].astype(str),
+                            hover_name=df_viz['Ticker'].str.replace('.SA', ''),
+                            title="Distribuição do Portfólio no Espaço PCA (3D)"
+                        )
+                        fig_cluster_scatter.update_layout(**obter_template_grafico(), height=650)
+                    else:
+                        fig_cluster_scatter = px.scatter(
+                            df_viz, x='PC1', y='PC2', 
+                            color=df_viz['Final_Cluster'].astype(str),
+                            hover_name=df_viz['Ticker'].str.replace('.SA', ''),
+                            text=df_viz['Ticker'].str.replace('.SA', ''),
+                            title="Distribuição do Portfólio no Espaço PCA (2D)"
+                        )
+                        fig_cluster_scatter.update_layout(**obter_template_grafico(), height=600)
                     
                     st.plotly_chart(fig_cluster_scatter, use_container_width=True)
                     
-                    st.markdown("##### Distribuição Setorial (Confirmação de Diversificação)")
-                    df_sector = df_viz.groupby('sector')['Ticker'].count().reset_index()
-                    df_sector.columns = ['Setor', 'Contagem']
-                    fig_sector = px.bar(df_sector, x='Setor', y='Contagem', title='Contagem de Ativos por Setor')
-                    st.plotly_chart(fig_sector, use_container_width=True)
+                    # -----------------------------------------------
+                    # Tabela de Anomalias (Isolation Forest)
+                    # Usamos a lógica de anomalia do módulo individual para a lista completa de ativos
+                    # -----------------------------------------------
+                    st.markdown('##### 🚨 Detecção de Anomalias (Outliers) - Isolamento de Dados Atuais')
                     
+                    # Para simplificar, usamos a lógica do Isolation Forest sobre os scores atuais
+                    # (Embora não seja o Isolation Forest Global, é uma proxy útil)
+                    data_anomaly = builder.scores_combinados[features_for_pca].copy().fillna(50)
+                    iso_model = IsolationForest(contamination='auto', random_state=42)
+                    data_anomaly['Anomaly_Flag'] = iso_model.fit_predict(data_anomaly)
+                    data_anomaly['Anomaly_Score'] = iso_model.decision_function(data_anomaly)
+                    
+                    df_anomaly_report = data_anomaly.loc[assets].reset_index().rename(columns={'index': 'Ticker'})
+                    df_anomaly_report['Outlier'] = df_anomaly_report['Anomaly_Flag'].apply(lambda x: '🚨 OUTLIER' if x == -1 else '✓ Normal')
+                    df_anomaly_report['Score'] = df_anomaly_report['Anomaly_Score'].apply(lambda x: f"{x:.4f}")
+                    
+                    st.dataframe(df_anomaly_report[['Ticker', 'Outlier', 'Score']].sort_values('Score'), use_container_width=True)
+
+
                 else:
                      st.warning("Dados de scores insuficientes para análise de Clusterização do Portfólio.")
+
+
         
         # O bloco tab_garch só existe se has_price_data and has_garch_data and not is_garch_redundant for True
         if tab_garch is not None:
