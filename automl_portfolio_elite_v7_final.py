@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.29 (Update: FIX ML Logic, ADD EXPANDED TECHNICAL FEATURES, FIX SCOPE)
+Versão: 9.32.30 (Update: FIX ML/GARCH Robustness, ADD EXPANDED TECHNICAL FEATURES, FIX SCOPE 2)
 =============================================================================
 """
 
@@ -304,78 +304,145 @@ class CalculadoraTecnica:
         # --- Cálculo de Retornos (Necessário para a maioria dos indicadores) ---
         df['returns'] = df['Close'].pct_change()
         
-        # --- INDICADORES EXPANDIDOS (Do mlrun.py) ---
-        
         # 1. Volatilidade e Retornos
         df['log_returns'] = np.log(df['Close'] / df['Close'].shift(1))
         df['volatility_20'] = df['returns'].rolling(window=20).std() * np.sqrt(252)
         df['volatility_60'] = df['returns'].rolling(window=60).std() * np.sqrt(252)
+        df['volatility_252'] = df['returns'].rolling(window=252).std() * np.sqrt(252)
         
-        # 2. Médias Móveis (SMA, EMA - 50 dias é o máximo usado no ML principal)
-        for periodo in [5, 10, 20, 50]:
+        # 2. Médias Móveis (SMA, EMA, WMA, HMA)
+        for periodo in [5, 10, 20, 50, 100, 200]:
             if len(df) >= periodo:
-                df[f'sma_{periodo}'] = df['Close'].rolling(window=periodo).mean()
+                df[f'sma_{periodo}'] = df['Close'].rolling(periodo).mean()
                 df[f'ema_{periodo}'] = df['Close'].ewm(span=periodo, adjust=False).mean()
+                
+                # WMA (Weighted Moving Average)
+                weights = np.arange(1, periodo + 1)
+                # Use numpy for WMA for robustness
+                df[f'wma_{periodo}'] = df['Close'].rolling(periodo).apply(lambda x: np.dot(x, weights[:len(x)]) / weights[:len(x)].sum(), raw=True)
+                
+        # Hull Moving Average (HMA) - Requires SMA/WMA dependencies
+        for periodo in [20, 50]:
+            if len(df) >= periodo:
+                wma_half_series = df['Close'].rolling(periodo // 2).apply(lambda x: np.dot(x, np.arange(1, len(x) + 1)) / np.arange(1, len(x) + 1).sum(), raw=True)
+                wma_full_series = df['Close'].rolling(periodo).apply(lambda x: np.dot(x, np.arange(1, len(x) + 1)) / np.arange(1, len(x) + 1).sum(), raw=True)
+                df[f'hma_{periodo}'] = (2 * wma_half_series - wma_full_series).rolling(int(np.sqrt(periodo))).mean()
+        
+        # 3. Razões de preço e cruzamentos (Requere SMA 20, 50, 200)
+        df['price_sma20_ratio'] = df['Close'] / df.get('sma_20')
+        df['price_sma50_ratio'] = df['Close'] / df.get('sma_50')
+        df['price_sma200_ratio'] = df['Close'] / df.get('sma_200')
+        df['sma20_sma50_cross'] = (df.get('sma_20', pd.Series(0)) > df.get('sma_50', pd.Series(0))).astype(int)
+        df['sma50_sma200_cross'] = (df.get('sma_50', pd.Series(0)) > df.get('sma_200', pd.Series(0))).astype(int)
+        df['death_cross'] = (df['Close'] < df.get('sma_200', pd.Series(0))).astype(int)
+        
+        # 4. RSI (múltiplos períodos)
+        for periodo in [7, 14, 21, 28]:
+            delta = df['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=periodo).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=periodo).mean()
+            rs = gain / loss.replace(0, np.nan)
+            df[f'rsi_{periodo}'] = 100 - (100 / (1 + rs))
 
-        # 3. RSI
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss.replace(0, np.nan)
-        df['rsi_14'] = 100 - (100 / (1 + rs))
-        
-        # 4. MACD
-        ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
-        ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
-        df['macd'] = ema_12 - ema_26
-        df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
-        df['macd_diff'] = df['macd'] - df['macd_signal']
-        
-        # 5. Momentum
-        df['momentum_10'] = df['Close'] / df['Close'].shift(10) - 1
-        df['momentum_60'] = df['Close'].pct_change(60)
-        
-        # 6. Bollinger Bands Width
-        rolling_mean = df['Close'].rolling(window=20).mean()
-        rolling_std = df['Close'].rolling(window=20).std()
-        upper = rolling_mean + (rolling_std * 2)
-        lower = rolling_mean - (rolling_std * 2)
-        df['bb_width'] = (upper - lower) / rolling_mean.replace(0, np.nan)
-        
-        # 7. ADX (média de 14)
-        if len(df) >= 28 and 'High' in df.columns and 'Low' in df.columns:
-            try:
-                adx_indicator = ADXIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=14)
-                df['adx'] = adx_indicator.adx()
-            except Exception:
-                df['adx'] = np.nan
-        else:
-            df['adx'] = np.nan
+        # 5. Stochastic Oscillator
+        if 'High' in df.columns and 'Low' in df.columns and len(df) >= 14:
+            stoch = StochasticOscillator(high=df['High'], low=df['Low'], close=df['Close'], window=14, smooth_window=3)
+            df['stoch_k'] = stoch.stoch()
+            df['stoch_d'] = stoch.stoch_signal()
             
-        # 8. ATR
+            # Williams %R
+            df['williams_r'] = WilliamsRIndicator(high=df['High'], low=df['Low'], close=df['Close'], lbp=14).williams_r()
+        
+        # 6. MACD (múltiplas configurações)
+        if len(df) >= 26:
+            macd = MACD(close=df['Close'], window_slow=26, window_fast=12, window_sign=9)
+            df['macd'] = macd.macd()
+            df['macd_signal'] = macd.macd_signal()
+            df['macd_diff'] = macd.macd_diff()
+            
+            # MACD alternativo (5, 35, 5)
+            macd_alt = MACD(close=df['Close'], window_slow=35, window_fast=5, window_sign=5)
+            df['macd_alt'] = macd_alt.macd()
+        
+        # 7. Bollinger Bands
+        if len(df) >= 20:
+            bb = BollingerBands(close=df['Close'], window=20, window_dev=2)
+            df['bb_middle'] = bb.bollinger_mavg()
+            df['bb_upper'] = bb.bollinger_hband()
+            df['bb_lower'] = bb.bollinger_lband()
+            df['bb_width'] = bb.bollinger_wband()
+            df['bb_position'] = bb.bollinger_pband()
+            # df['bb_position'] = (df['Close'] - df['bb_lower']) / (df['bb_upper'] - df['bb_lower'])
+        
+        # 8. Keltner Channel
+        if len(df) >= 20 and 'High' in df.columns and 'Low' in df.columns:
+            kc = KeltnerChannel(high=df['High'], low=df['Low'], close=df['Close'], window=20, window_atr=10)
+            df['kc_upper'] = kc.keltner_channel_hband()
+            df['kc_lower'] = kc.keltner_channel_lband()
+            df['kc_middle'] = kc.keltner_channel_mband()
+            df['kc_width'] = (df['kc_upper'] - df['kc_lower']) / df['kc_middle']
+            
+        # 9. Donchian Channel
+        if len(df) >= 20 and 'High' in df.columns and 'Low' in df.columns:
+            dc = DonchianChannel(high=df['High'], low=df['Low'], close=df['Close'], window=20)
+            df['dc_upper'] = dc.donchian_channel_hband()
+            df['dc_lower'] = dc.donchian_channel_lband()
+            df['dc_middle'] = dc.donchian_channel_mband()
+            
+        # 10. ATR (Average True Range)
         if len(df) >= 14 and 'High' in df.columns and 'Low' in df.columns:
-             try:
-                 atr_indicator = AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'], window=14)
-                 df['atr'] = atr_indicator.average_true_range()
-             except Exception:
-                 df['atr'] = np.nan
-        else:
-            df['atr'] = np.nan
-
-        # 9. Lags e estatísticas rolling simples (para robustez)
+            atr = AverageTrueRange(high=df['High'], low=df['Low'], close=df['Close'], window=14)
+            df['atr'] = atr.average_true_range()
+            df['atr_percent'] = (df['atr'] / df['Close']) * 100
+            
+            # ADX (Average Directional Index)
+            adx = ADXIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=14)
+            df['adx'] = adx.adx()
+            df['adx_pos'] = adx.adx_pos()
+            df['adx_neg'] = adx.adx_neg()
+            
+        # 11. CCI (Commodity Channel Index)
+        if len(df) >= 20 and 'High' in df.columns and 'Low' in df.columns:
+            df['cci'] = CCIIndicator(high=df['High'], low=df['Low'], close=df['Close'], window=20).cci()
+        
+        # 12. Momentum indicators (Rate of Change)
+        for periodo in [10, 20, 60]:
+            if len(df) >= periodo:
+                df[f'roc_{periodo}'] = ROCIndicator(close=df['Close'], window=periodo).roc()
+        
+        # 13. Volume indicators
+        if 'Volume' in df.columns:
+            df['obv'] = OnBalanceVolumeIndicator(close=df['Close'], volume=df['Volume']).on_balance_volume()
+            if len(df) >= 20:
+                df['cmf'] = ChaikinMoneyFlowIndicator(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume'], window=20).chaikin_money_flow()
+            if len(df) >= 14:
+                df['mfi'] = MFIIndicator(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume'], window=14).money_flow_index()
+            
+            df['vwap'] = VolumeWeightedAveragePrice(high=df['High'], low=df['Low'], close=df['Close'], volume=df['Volume']).volume_weighted_average_price()
+        
+        # 14. Drawdown
+        cumulative_returns = (1 + df['returns']).cumprod()
+        running_max = cumulative_returns.expanding().max()
+        df['drawdown'] = (cumulative_returns - running_max) / running_max
+        if len(df) >= 252:
+            df['max_drawdown_252'] = df['drawdown'].rolling(252).min()
+        
+        # 15. Lags e Rolling statistics
         for lag in [1, 5, 20]:
             df[f'returns_lag_{lag}'] = df['returns'].shift(lag)
         
         for window in [5, 20]:
             df[f'returns_mean_{window}'] = df['returns'].rolling(window).mean()
-            
-        # 10. Temporal encoding
+        
+        # 16. Temporal encoding
         df['day_of_week'] = df.index.dayofweek
         df['month'] = df.index.month
         df['week_of_year'] = df.index.isocalendar().week
-
-        # Retorna o DataFrame completo (sem dropna aqui, o ML fará o dropna no subset de features)
-        return df
+        
+        # O DROPNA É AQUI: Retorna o DataFrame removendo TODAS as linhas que contêm NaN
+        # Isso garante que apenas dados completos (onde todos os indicadores puderam ser calculados)
+        # sejam usados para o treino, resolvendo a falha de "0 pontos válidos".
+        return df.dropna(axis=0, how='any')
 
 # =============================================================================
 # 6. CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR
@@ -709,7 +776,7 @@ class ColetorDadosLive(object):
                             df_tecnicos.rename(columns={col: rename_map[base_col]}, inplace=True)
 
                 if 'Close' in df_tecnicos.columns:
-                    # Não filtramos por NaNs aqui, deixamos o CalculadoraTecnica tratar.
+                    # Aplicar o enriquecimento de features expandido
                     if not df_tecnicos.empty:
                         df_tecnicos = CalculadoraTecnica.enriquecer_dados_tecnicos(df_tecnicos)
                     else:
@@ -839,7 +906,15 @@ class ColetorDadosLive(object):
         is_price_data_available = 'Close' in df_tec.columns and not df_tec['Close'].isnull().all() and len(df_tec.dropna(subset=['Close'])) > 60
         
         # --- NOVO: Feature Pool Completo para ML e GARCH ---
-        ALL_TECH_FEATURES = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'momentum_60', 'bb_width', 'adx', 'atr', 'returns_lag_1', 'returns_lag_5', 'returns_lag_20', 'returns_mean_5', 'returns_mean_20']
+        # Features completas definidas com o enriquecimento expandido:
+        ALL_TECH_FEATURES = [
+            'rsi_14', 'macd_diff', 'volatility_20', 'volatility_60', 'log_returns', 'sma_5', 'ema_50', 
+            'bb_width', 'adx', 'atr', 'returns_lag_5', 'returns_mean_20', 'day_of_week', 'month', 
+            # Adicionado mais indicadores para aumentar a chance de ter > 50 pontos:
+            'stoch_k', 'stoch_d', 'williams_r', 'macd_signal', 'macd_alt', 'bb_middle', 
+            'bb_upper', 'bb_lower', 'bb_position', 'bb_pband', 'cmf', 'vwap'
+        ]
+        
         ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
         
         if is_price_data_available:
@@ -1013,7 +1088,8 @@ class ConstrutorPortfolioAutoML:
         log_debug("Iniciando Pipeline de Treinamento ML/Clusterização.")
         
         # --- Feature Pool Completo ---
-        ALL_TECH_FEATURES = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'momentum_60', 'bb_width']
+        ALL_TECH_FEATURES = ['rsi_14', 'macd_diff', 'volatility_20', 'volatility_60', 'log_returns', 'sma_5', 'ema_50', 
+            'bb_width', 'adx', 'atr', 'returns_lag_1', 'returns_lag_5', 'returns_lag_20', 'returns_mean_5', 'returns_mean_20']
         ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
 
 
@@ -1207,7 +1283,7 @@ class ConstrutorPortfolioAutoML:
                 if not df.empty and 'rsi_14' in df.columns:
                     combined.loc[symbol, 'rsi_current'] = df['rsi_14'].iloc[-1]
                     combined.loc[symbol, 'macd_current'] = df['macd'].iloc[-1]
-                    combined.loc[symbol, 'vol_current'] = df['vol_20d'].iloc[-1]
+                    combined.loc[symbol, 'vol_current'] = df['volatility_20'].iloc[-1] # Usando volatility_20
                 else:
                     # Fallback para valores neutros se estiver em modo estático
                     combined.loc[symbol, 'rsi_current'] = 50
@@ -2028,17 +2104,17 @@ def aba_construtor_portfolio():
         tab1 = tabs_map[0] # Alocação
         tab2 = tabs_map[1] # Performance/Retornos
         
-        # --- CORRIGINDO MAPPING DE ABAS ---
-        # Mapeia a aba de ML/Clusters
+        # Define as abas dinâmicas baseado na existência
+        tab_justificativas = tabs_map[-1]
+        
+        # Encontra a aba de Clusters e GARCH/ML
         if has_price_data and has_usable_ml:
             tab3_ml = tabs_map[2]
             tab4_cluster = tabs_map[3]
             tab_garch = tabs_map[4] if "📉 Fator Volatilidade GARCH" in tabs_list else None
-            tab_justificativas = tabs_map[-1]
         else:
             tab3_cluster = tabs_map[2]
             tab_garch = tabs_map[3] if "📉 Fator Volatilidade GARCH" in tabs_list else None
-            tab_justificativas = tabs_map[-1]
 
         
         with tab1:
@@ -2133,11 +2209,12 @@ def aba_construtor_portfolio():
         
         
         # =====================================================================
-        # ML / CLUSTER (ABA 3)
+        # ML / CLUSTER (ABA 3 - DINÂMICA)
         # =====================================================================
+        # Conteúdo da aba 3 (índice 2)
         with tabs_map[2]: 
             
-            if has_price_data and has_usable_ml:
+            if tab_title_ml == "🤖 Fator Predição ML":
                  # ---- MODO ML SUPERVISIONADO (tab3) ----
                  st.markdown('#### 🤖 Predição de Movimento Direcional (Random Forest)')
                  st.markdown("O modelo abaixo utiliza histórico de preços para prever a probabilidade de alta no curto prazo.")
@@ -2481,6 +2558,7 @@ def main():
     # Esta linha foi simplificada no código de produção para uso das abas
     tabs_list = ["📚 Metodologia", "🎯 Seleção de Ativos", "🏗️ Construtor de Portfólio", "🔍 Análise Individual", "📖 Referências"]
     
+    # Este é o ponto onde o NameError pode ocorrer. Garantimos que todas as funções sejam definidas.
     tab1, tab2, tab3, tab4, tab5 = st.tabs(tabs_list)
     
     with tab1: aba_introducao()
