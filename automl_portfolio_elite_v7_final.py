@@ -641,7 +641,7 @@ class ColetorDadosLive(object):
                      df = CalculadoraTecnica.enriquecer_dados_tecnicos(df)
                      
                      df['Future_Direction'] = np.where(df['Close'].pct_change(5).shift(-5) > 0, 1, 0)
-                     features_ml = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'sma_200']
+                     features_ml = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50']
                      current_features = [f for f in features_ml if f in df.columns]
                      df_model = df.dropna(subset=current_features + ['Future_Direction'])
                      
@@ -853,7 +853,7 @@ class ConstrutorPortfolioAutoML:
             st.warning("⚠️ Falha na coleta de dados fundamentais (P/L, ROE, etc.). Usando Cluster = 0.")
         # --- FIM DA CORREÇÃO DE CLUSTERIZAÇÃO ---
 
-        features_ml = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'sma_200',
+        features_ml = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50',
             'pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster']
         
         for i, ativo in enumerate(ativos_com_dados):
