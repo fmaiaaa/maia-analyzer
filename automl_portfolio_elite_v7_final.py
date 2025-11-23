@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.21 (Update: FIX ML dynamic feature selection, GARCH robustness, and RESTORE FULL UI CENTRALIZATION)
+Versão: 9.32.22 (Update: FIX ALL UI CENTRALIZATION, ML Data Scarcity, Conditional Tabs)
 =============================================================================
 """
 
@@ -952,8 +952,8 @@ class ConstrutorPortfolioAutoML:
         log_debug("Iniciando Pipeline de Treinamento ML/Clusterização.")
         
         # --- Feature Pool Completo ---
-        ALL_TECH_FEATURES = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'momentum_60']
-        ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster']
+        ALL_TECH_FEATURES = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'momentum_60', 'bb_width']
+        ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
 
 
         # --- Clusterização Inicial (Fundamentos) ---
@@ -1507,7 +1507,8 @@ def configurar_pagina():
             margin-bottom: 20px;
         }
         
-        /* Regras de centralização RESTAURADAS */
+        /* Regras de centralização RESTAURADAS E APRIMORADAS PARA LARGURA TOTAL */
+        
         /* H2 e H3 CENTRALIZADOS */
         h2, h3 {
             text-align: center !important;
@@ -1550,13 +1551,17 @@ def configurar_pagina():
         }
         
         /* Garante que tabelas e gráficos ocupem a largura do container principal */
-        div.stPlotlyChart {
+        /* Note: Streamlit's internal layout mechanism tries to apply width to parent divs. We target the inner elements and force width to 100%. */
+        div.stPlotlyChart > div {
             width: 100% !important;
         }
         div.stDataFrame {
             width: 100% !important;
+            /* Garante que o container da tabela se estique */
         }
-
+        
+        /* Estilo para centralizar as tabelas dentro do container stDataFrame */
+        /* IMPORTANTE: Centralizar tabelas dentro de um wide layout é complexo. Usamos o padrão flex no container pai (colunas Streamlit) para centralizar. */
 
         /* Outros estilos básicos */
         .stMetric { 
@@ -2327,6 +2332,9 @@ def aba_analise_individual():
             # Detecta Modo Estático (Sem Preço)
             static_mode = features_fund.get('static_mode', False) or (df_completo is not None and df_completo['Close'].isnull().all())
 
+            # --- Verifica se o ML supervisionado foi ignorado ---
+            is_ml_trained = 'ML_Proba' in df_completo.columns and not static_mode
+            
             if static_mode:
                 st.warning(f"⚠️ **MODO ESTÁTICO:** Preços indisponíveis. Exibindo apenas Análise Fundamentalista.")
 
@@ -2479,35 +2487,39 @@ def aba_analise_individual():
                 else: st.warning("Análise Técnica não disponível sem histórico de preços.")
 
             with tab4:
-                st.markdown("### Predição de Machine Learning")
-                
-                # Se veio do ML Real (com preço) ou do Fallback (sem preço)
-                ml_proba = df_completo['ML_Proba'].iloc[-1] if 'ML_Proba' in df_completo.columns else 0.5
-                ml_conf = df_completo['ML_Confidence'].iloc[-1] if 'ML_Confidence' in df_completo.columns else 0.0
-                
-                col1, col2 = st.columns(2)
-                col1.metric("Probabilidade de Alta" if not static_mode else "Score de Anomalia Positiva", f"{ml_proba*100:.1f}%")
-                
-                if static_mode:
-                    col2.metric("Status", "Fallback Não-Supervisionado")
-                    st.info("ℹ️ **Modo Fallback Ativo:** Como não há histórico de preços, este score reflete uma análise de anomalia (Isolation Forest) baseada nos fundamentos. Um score alto indica que o ativo se destaca positivamente em relação aos seus pares.")
-                elif ml_conf <= 0.55:
-                     col2.metric("Confiança do Modelo (AUC)", f"{ml_conf:.2f}")
-                     st.info("ℹ️ **Modelo Supervisionado Neutro:** A confiança do modelo é baixa (AUC ≤ 0.55). O score de probabilidade exibido foi ajustado para um **Proxy Fundamentalista** para garantir relevância na classificação.")
+                # --- EXCLUI A ABA SE ML NÃO FOI TREINADO DEVIDO A DADOS CRÍTICOS AUSENTES ---
+                if 'ML_Proba' not in df_completo.columns:
+                    st.info("⚠️ O modelo de Machine Learning Supervisionado não foi executado ou falhou devido a dados de preço insuficientes.")
                 else:
-                    col2.metric("Confiança do Modelo (AUC)", f"{ml_conf:.2f}")
-                    st.info("ℹ️ **Modelo Supervisionado Ativo:** O score reflete a probabilidade de alta do ativo nos próximos 5 dias, conforme previsto pelo modelo Random Forest treinado com indicadores técnicos e fundamentais.")
+                    st.markdown("### Predição de Machine Learning")
                     
-                if df_ml_meta is not None and not df_ml_meta.empty:
-                    st.markdown("#### Importância dos Fatores na Decisão")
-                    fig_imp = px.bar(df_ml_meta.head(5), x='importance', y='feature', orientation='h', title='Top Fatores')
+                    # Se veio do ML Real (com preço) ou do Fallback (sem preço)
+                    ml_proba = df_completo['ML_Proba'].iloc[-1] if 'ML_Proba' in df_completo.columns else 0.5
+                    ml_conf = df_completo['ML_Confidence'].iloc[-1] if 'ML_Confidence' in df_completo.columns else 0.0
                     
-                    template = obter_template_grafico()
-                    # Correção do Erro de 'title' aqui também
-                    template['title']['text'] = 'Top 5 Fatores de Decisão'
-                    fig_imp.update_layout(**template)
-                    fig_imp.update_layout(height=300)
-                    st.plotly_chart(fig_imp, use_container_width=False, width='stretch')
+                    col1, col2 = st.columns(2)
+                    col1.metric("Probabilidade de Alta" if not static_mode else "Score de Anomalia Positiva", f"{ml_proba*100:.1f}%")
+                    
+                    if static_mode:
+                        col2.metric("Status", "Fallback Não-Supervisionado")
+                        st.info("ℹ️ **Modo Fallback Ativo:** Como não há histórico de preços, este score reflete uma análise de anomalia (Isolation Forest) baseada nos fundamentos. Um score alto indica que o ativo se destaca positivamente em relação aos seus pares.")
+                    elif ml_conf <= 0.55:
+                         col2.metric("Confiança do Modelo (AUC)", f"{ml_conf:.2f}")
+                         st.info("ℹ️ **Modelo Supervisionado Neutro:** A confiança do modelo é baixa (AUC ≤ 0.55). O score de probabilidade exibido foi ajustado para um **Proxy Fundamentalista** para garantir relevância na classificação.")
+                    else:
+                        col2.metric("Confiança do Modelo (AUC)", f"{ml_conf:.2f}")
+                        st.info("ℹ️ **Modelo Supervisionado Ativo:** O score reflete a probabilidade de alta do ativo nos próximos 5 dias, conforme previsto pelo modelo Random Forest treinado com indicadores técnicos e fundamentais.")
+                        
+                    if df_ml_meta is not None and not df_ml_meta.empty:
+                        st.markdown("#### Importância dos Fatores na Decisão")
+                        fig_imp = px.bar(df_ml_meta.head(5), x='importance', y='feature', orientation='h', title='Top Fatores')
+                        
+                        template = obter_template_grafico()
+                        # Correção do Erro de 'title' aqui também
+                        template['title']['text'] = 'Top 5 Fatores de Decisão'
+                        fig_imp.update_layout(**template)
+                        fig_imp.update_layout(height=300)
+                        st.plotly_chart(fig_imp, use_container_width=False, width='stretch')
 
             with tab5: 
                 st.markdown("### 🔬 Clusterização Geral (Ibovespa)")
@@ -2521,9 +2533,34 @@ def aba_analise_individual():
                 if resultado_cluster is not None:
                     st.success(f"Identificados {n_clusters} grupos (clusters) de qualidade fundamentalista.")
                     
-                    # --- NOVO: GRÁFICO E TABELA DE ANOMALIA (ISOLATION FOREST) ---
+                    # --- NOVO: Colocando 3D primeiro ---
+                    # Visualização 3D SE TIVER 3 COMPONENTES
+                    if 'PC3' in resultado_cluster.columns:
+                        fig_pca_3d = px.scatter_3d(
+                            resultado_cluster, x='PC1', y='PC2', z='PC3',
+                            color=resultado_cluster['Cluster'].astype(str),
+                            hover_name=resultado_cluster.index.str.replace('.SA', ''), 
+                            color_discrete_sequence=obter_template_grafico()['colorway'],
+                            opacity=0.8,
+                            labels={'Cluster': 'Grupo'}
+                        )
+                        
+                        template = obter_template_grafico()
+                        template['title']['text'] = "Mapa de Similaridade 3D (Global) por Cluster"
+                        # Ajusta template para 3D scene
+                        fig_pca_3d.update_layout(
+                            title=template['title'],
+                            paper_bgcolor=template['paper_bgcolor'],
+                            plot_bgcolor=template['plot_bgcolor'],
+                            font=template['font'],
+                            scene=dict(xaxis_title='PCA 1', yaxis_title='PCA 2', zaxis_title='PCA 3'),
+                            margin=dict(l=0, r=0, b=0, t=40),
+                            height=600
+                        )
+                        st.plotly_chart(fig_pca_3d, use_container_width=False, width='stretch')
                     
                     # Gráfico 2D da Detecção de Anomalia
+                    st.markdown('#### Detecção de Anomalias (Isolation Forest)')
                     fig_anomaly = px.scatter(
                         resultado_cluster, x='PC1', y='PC2',
                         color=resultado_cluster['Anomalia'].astype(str).replace({'1': 'Normal', '-1': 'Outlier/Anomalia'}),
@@ -2538,51 +2575,12 @@ def aba_analise_individual():
                     
                     # Tabela de Anomalia
                     st.markdown('##### Tabela de Scores de Anomalia (Quanto maior, menos anômalo)')
-                    df_anomaly_show = resultado_cluster[['Anomaly_Score', 'Anomalia']].copy()
-                    df_anomaly_show.rename(columns={'Anomaly_Score': 'Score Anomalia', 'Anomalia': 'Status'}, inplace=True)
+                    df_anomaly_show = resultado_cluster[['Anomaly_Score', 'Anomalia', 'Cluster']].copy()
+                    df_anomaly_show.rename(columns={'Anomaly_Score': 'Score Anomalia', 'Anomalia': 'Status', 'Cluster': 'Grupo Cluster'}, inplace=True)
                     df_anomaly_show['Status'] = df_anomaly_show['Status'].replace({1: 'Normal', -1: 'Outlier/Anomalia'})
                     
                     st.dataframe(df_anomaly_show.sort_values('Score Anomalia', ascending=False), use_container_width=False, width='stretch')
                     st.markdown("---")
-                    
-                    # Visualização 3D SE TIVER 3 COMPONENTES
-                    if 'PC3' in resultado_cluster.columns:
-                        fig_pca = px.scatter_3d(
-                            resultado_cluster, x='PC1', y='PC2', z='PC3',
-                            color=resultado_cluster['Cluster'].astype(str),
-                            hover_name=resultado_cluster.index.str.replace('.SA', ''), 
-                            color_discrete_sequence=obter_template_grafico()['colorway'],
-                            opacity=0.8,
-                            labels={'Cluster': 'Grupo'}
-                        )
-                        
-                        template = obter_template_grafico()
-                        template['title']['text'] = "Mapa de Similaridade 3D (Global) por Cluster"
-                        # Ajusta template para 3D scene
-                        fig_pca.update_layout(
-                            title=template['title'],
-                            paper_bgcolor=template['paper_bgcolor'],
-                            plot_bgcolor=template['plot_bgcolor'],
-                            font=template['font'],
-                            scene=dict(xaxis_title='PCA 1', yaxis_title='PCA 2', zaxis_title='PCA 3'),
-                            margin=dict(l=0, r=0, b=0, t=40),
-                            height=600
-                        )
-                    else:
-                        # Fallback para 2D se PCA 3D falhar (poucos dados)
-                        fig_pca = px.scatter(
-                            resultado_cluster, x='PC1', y='PC2', 
-                            color=resultado_cluster['Cluster'].astype(str),
-                            hover_name=resultado_cluster.index.str.replace('.SA', ''), 
-                            color_discrete_sequence=obter_template_grafico()['colorway'],
-                            title="Mapa de Similaridade 2D (Global) por Cluster"
-                        )
-                        template = obter_template_grafico()
-                        # Título já definido acima
-                        fig_pca.update_layout(**template)
-                        fig_pca.update_layout(height=500)
-                    
-                    st.plotly_chart(fig_pca, use_container_width=False, width='stretch')
                     
                     # Identifica pares
                     if ativo_selecionado in resultado_cluster.index:
