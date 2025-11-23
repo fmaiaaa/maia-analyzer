@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.7 (Update: FIX GARCH Implementation & ML Robustness)
+Versão: 9.32.7 (Update: Fix UI/ML Fallback Display & GARCH Tab Logic)
 =============================================================================
 """
 
@@ -1728,18 +1728,37 @@ def aba_construtor_portfolio():
         # Verifica se temos dados de preço para decidir o que mostrar
         has_price_data = not builder.metricas_performance.empty and 'volatilidade_anual' in builder.metricas_performance.columns and builder.metricas_performance['volatilidade_anual'].sum() != 0
         
-        # FIX 2: A aba ML só é exibida se houver resultados de ML utilizáveis (AUC > 0.55)
-        # O ML Score Weighted será 0 se a confiança for muito baixa (0.50), refletindo inutilidade.
+        # FIX 4: Verifica se o GARCH foi minimamente bem sucedido (soma da vol GARCH > 0)
+        has_garch_data = builder.volatilidades_garch.values() and any(v > 0.05 for v in builder.volatilidades_garch.values()) 
+        
+        # FIX 2: A aba ML só é exibida se houver resultados de ML utilizáveis (soma do score ponderado > 0)
         has_usable_ml = builder.scores_combinados['ml_score_weighted'].sum() > 0 if not builder.scores_combinados.empty else False
+        
+        # Define as abas com base na disponibilidade dos dados
+        tabs_list = ["📊 Alocação de Capital", "📈 Performance e Retornos", ]
         
         if has_price_data and has_usable_ml:
              tab_title_ml = "🤖 Fator Predição ML"
         else:
              tab_title_ml = "🔬 Clusters e Anomalias"
+             
+        tabs_list.append(tab_title_ml)
+        
+        if has_price_data and has_garch_data:
+             tabs_list.append("📉 Fator Volatilidade GARCH")
+             
+        tabs_list.append("❓ Justificativas e Ranqueamento")
 
-        tab1, tab2, tab3, tab4, tab5 = st.tabs([
-            "📊 Alocação de Capital", "📈 Performance e Retornos", tab_title_ml, "📉 Fator Volatilidade GARCH", "❓ Justificativas e Ranqueamento"
-        ])
+        # Mapeia os índices das abas
+        tabs_map = st.tabs(tabs_list)
+        tab1, tab2, tab3 = tabs_map[0], tabs_map[1], tabs_map[2]
+        
+        # Atribuição dinâmica das últimas abas
+        if "📉 Fator Volatilidade GARCH" in tabs_list:
+            tab4, tab5 = tabs_map[3], tabs_map[4]
+        else:
+            tab4 = tabs_map[3]
+            tab5 = tab4 # tab 5 original agora é o último índice
         
         with tab1:
             col_alloc, col_table = st.columns([1, 2])
@@ -1838,115 +1857,132 @@ def aba_construtor_portfolio():
                  st.markdown('#### 🤖 Predição de Movimento Direcional (Random Forest)')
                  st.markdown("O modelo abaixo utiliza histórico de preços para prever a probabilidade de alta no curto prazo.")
                  title_text_plot = "Probabilidade de Alta (0-100%)"
+                 
+                 # Exibe os gráficos de barra de ML (mantidos aqui se has_usable_ml for True)
+                 ml_data = []
+                 for asset in assets:
+                    if asset in builder.predicoes_ml:
+                        ml_info = builder.predicoes_ml[asset]
+                        ml_data.append({
+                            'Ticker': asset.replace('.SA', ''),
+                            'Score/Prob.': ml_info.get('predicted_proba_up', 0.5) * 100,
+                            'Confiança': ml_info.get('auc_roc_score', np.nan),
+                            'Modelo': ml_info.get('model_name', 'N/A')
+                        })
+                 
+                 df_ml = pd.DataFrame(ml_data)
+            
+                 if not df_ml.empty:
+                    fig_ml = go.Figure()
+                    plot_df_ml = df_ml.sort_values('Score/Prob.', ascending=False)
+                    
+                    fig_ml.add_trace(go.Bar(
+                        x=plot_df_ml['Ticker'],
+                        y=plot_df_ml['Score/Prob.'],
+                        marker=dict(
+                            color=plot_df_ml['Score/Prob.'],
+                            colorscale='Viridis', # Cor profissional
+                            showscale=True,
+                            colorbar=dict(title="Score")
+                        ),
+                        text=plot_df_ml['Score/Prob.'].round(1),
+                        textposition='outside'
+                    ))
+                    
+                    template = obter_template_grafico()
+                    fig_ml.update_layout(**template)
+                    
+                    fig_ml.update_layout(title_text=title_text_plot, yaxis_title="Score", xaxis_title="Ticker", height=400)
+                    
+                    st.plotly_chart(fig_ml, use_container_width=True)
+                    
+                    st.markdown("---")
+                    st.markdown('#### Detalhamento Técnico')
+                    df_ml_display = df_ml.copy()
+                    df_ml_display['Score/Prob.'] = df_ml_display['Score/Prob.'].round(2)
+                    df_ml_display['Confiança'] = df_ml_display['Confiança'].apply(lambda x: safe_format(x))
+                    st.dataframe(df_ml_display, use_container_width=True, hide_index=True)
+                 else:
+                     st.warning("Não há dados de ML para exibir.")
+
+
             else:
+                 # FIX 6: Exibe a tabela de clusters e scores se o modo fallback estiver ativo
                  st.markdown('#### 🔬 Análise de Qualidade Fundamentalista (Unsupervised Learning)')
                  st.info("ℹ️ **Modo Fallback Ativo:** O modelo de predição supervisionada não encontrou padrões significativos ou o histórico de preços é limitado. O sistema está utilizando a **Clusterização Fundamentalista** (qualidade) como fator ML dominante.")
-                 title_text_plot = "Score de Qualidade Fundamentalista (0-100)"
-
-            ml_data = []
-            for asset in assets:
-                if asset in builder.predicoes_ml:
-                    ml_info = builder.predicoes_ml[asset]
-                    ml_data.append({
-                        'Ticker': asset.replace('.SA', ''),
-                        'Score/Prob.': ml_info.get('predicted_proba_up', 0.5) * 100,
-                        'Confiança': ml_info.get('auc_roc_score', np.nan),
-                        'Modelo': ml_info.get('model_name', 'N/A')
-                    })
-            
-            df_ml = pd.DataFrame(ml_data)
-            
-            if not df_ml.empty:
-                fig_ml = go.Figure()
-                plot_df_ml = df_ml.sort_values('Score/Prob.', ascending=False)
-                
-                fig_ml.add_trace(go.Bar(
-                    x=plot_df_ml['Ticker'],
-                    y=plot_df_ml['Score/Prob.'],
-                    marker=dict(
-                        color=plot_df_ml['Score/Prob.'],
-                        colorscale='Viridis', # Cor profissional
-                        showscale=True,
-                        colorbar=dict(title="Score")
-                    ),
-                    text=plot_df_ml['Score/Prob.'].round(1),
-                    textposition='outside'
-                ))
-                
-                template = obter_template_grafico()
-                fig_ml.update_layout(**template)
-                
-                fig_ml.update_layout(title_text=title_text_plot, yaxis_title="Score", xaxis_title="Ticker", height=400)
-                
-                st.plotly_chart(fig_ml, use_container_width=True)
-                
-                st.markdown("---")
-                st.markdown('#### Detalhamento Técnico')
-                df_ml_display = df_ml.copy()
-                df_ml_display['Score/Prob.'] = df_ml_display['Score/Prob.'].round(2)
-                df_ml_display['Confiança'] = df_ml_display['Confiança'].apply(lambda x: safe_format(x))
-                st.dataframe(df_ml_display, use_container_width=True, hide_index=True)
-            else:
-                st.warning("Não há dados de ML para exibir.")
+                 
+                 st.markdown("##### Score Fundamentalista e Cluster por Ativo")
+                 # Garante que o df_fund_clean tem as colunas necessárias
+                 if not builder.scores_combinados.empty:
+                     df_cluster_display = builder.scores_combinados[['fundamental_score', 'Final_Cluster', 'pe_ratio', 'roe']].copy()
+                     df_cluster_display.rename(columns={'fundamental_score': 'Score Fund.', 'Final_Cluster': 'Cluster', 'pe_ratio': 'P/L', 'roe': 'ROE'}, inplace=True)
+                     
+                     st.dataframe(df_cluster_display.style.format({
+                         'Score Fund.': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}'
+                     }).background_gradient(cmap='Blues', subset=['Score Fund.']), use_container_width=True)
+                 else:
+                     st.warning("Dados de fundamentos insuficientes para exibir clusters.")
         
-        with tab4:
-            st.markdown('#### Volatilidade Condicional (GARCH) e Histórica')
-            
-            # IF ROBUSTO: SÓ MOSTRA SE TIVER PREÇO
-            if has_price_data:
-                dados_garch = []
-                for ativo in assets:
-                    if ativo in builder.metricas_performance.index and ativo in builder.volatilidades_garch:
-                        perf = builder.metricas_performance.loc[ativo]
-                        vol_hist = perf.get('volatilidade_anual', np.nan)
-                        vol_garch = builder.volatilidades_garch.get(ativo)
-                        
-                        if vol_garch is not None and not np.isnan(vol_garch):
-                            status = '✓ GARCH Ajustado (Previsão de Risco)'
-                            vol_display = vol_garch
-                        elif vol_hist is not None and not np.isnan(vol_hist): 
-                            status = '⚠️ Histórica (Fallback)'
-                            vol_display = vol_hist
-                        else:
-                            status = '❌ Indisponível'
-                            vol_display = np.nan
-                        
-                        dados_garch.append({
-                            'Ticker': ativo.replace('.SA', ''),
-                            'Vol. Histórica (%)': vol_hist * 100 if not np.isnan(vol_hist) else 'N/A',
-                            'Vol. Condicional (%)': vol_display * 100 if vol_display is not None and not np.isnan(vol_display) else 'N/A',
-                            'Status de Cálculo': status
-                        })
+        # O bloco tab4 só existe se has_price_data and has_garch_data for True
+        if "📉 Fator Volatilidade GARCH" in tabs_list:
+            with tab4:
+                st.markdown('#### Volatilidade Condicional (GARCH) e Histórica')
                 
-                df_garch = pd.DataFrame(dados_garch)
-                
-                if not df_garch.empty:
-                    fig_garch = go.Figure()
+                # IF ROBUSTO: SÓ MOSTRA SE TIVER PREÇO
+                if has_price_data:
+                    dados_garch = []
+                    for ativo in assets:
+                        if ativo in builder.metricas_performance.index and ativo in builder.volatilidades_garch:
+                            perf = builder.metricas_performance.loc[ativo]
+                            vol_hist = perf.get('volatilidade_anual', np.nan)
+                            vol_garch = builder.volatilidades_garch.get(ativo)
+                            
+                            if vol_garch is not None and not np.isnan(vol_garch):
+                                status = '✓ GARCH Ajustado (Previsão de Risco)'
+                                vol_display = vol_garch
+                            elif vol_hist is not None and not np.isnan(vol_hist): 
+                                status = '⚠️ Histórica (Fallback)'
+                                vol_display = vol_hist
+                            else:
+                                status = '❌ Indisponível'
+                                vol_display = np.nan
+                            
+                            dados_garch.append({
+                                'Ticker': ativo.replace('.SA', ''),
+                                'Vol. Histórica (%)': vol_hist * 100 if not np.isnan(vol_hist) else 'N/A',
+                                'Vol. Condicional (%)': vol_display * 100 if vol_display is not None and not np.isnan(vol_display) else 'N/A',
+                                'Status de Cálculo': status
+                            })
                     
-                    # Safe filtering for plotting
-                    plot_df_garch = df_garch[df_garch['Vol. Condicional (%)'] != 'N/A'].copy()
-                    if not plot_df_garch.empty:
-                        plot_df_garch['Vol. Condicional (%)'] = plot_df_garch['Vol. Condicional (%)'].astype(float)
-                        plot_df_garch['Vol. Histórica (%)'] = plot_df_garch['Vol. Histórica (%)'].apply(lambda x: float(x) if x != 'N/A' else np.nan)
+                    df_garch = pd.DataFrame(dados_garch)
+                    
+                    if not df_garch.empty:
+                        fig_garch = go.Figure()
+                        
+                        # Safe filtering for plotting
+                        plot_df_garch = df_garch[df_garch['Vol. Condicional (%)'] != 'N/A'].copy()
+                        if not plot_df_garch.empty:
+                            plot_df_garch['Vol. Condicional (%)'] = plot_df_garch['Vol. Condicional (%)'].astype(float)
+                            plot_df_garch['Vol. Histórica (%)'] = plot_df_garch['Vol. Histórica (%)'].apply(lambda x: float(x) if x != 'N/A' else np.nan)
 
-                        template_colors = obter_template_grafico()['colorway']
-                        
-                        fig_garch.add_trace(go.Bar(name='Volatilidade Histórica', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Histórica (%)'], marker=dict(color=template_colors[2]), opacity=0.7)) 
-                        fig_garch.add_trace(go.Bar(name='Volatilidade Condicional', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Condicional (%)'], marker=dict(color=template_colors[0]))) 
-                        
-                        template = obter_template_grafico()
-                        fig_garch.update_layout(**template)
-                        fig_garch.update_layout(title_text="Volatilidade Anualizada: Histórica vs. Condicional (GARCH)", yaxis_title="Volatilidade Anual (%)", barmode='group', height=400)
-                        
-                        st.plotly_chart(fig_garch, use_container_width=True)
+                            template_colors = obter_template_grafico()['colorway']
+                            
+                            fig_garch.add_trace(go.Bar(name='Volatilidade Histórica', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Histórica (%)'], marker=dict(color=template_colors[2]), opacity=0.7)) 
+                            fig_garch.add_trace(go.Bar(name='Volatilidade Condicional', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Condicional (%)'], marker=dict(color=template_colors[0]))) 
+                            
+                            template = obter_template_grafico()
+                            fig_garch.update_layout(**template)
+                            fig_garch.update_layout(title_text="Volatilidade Anualizada: Histórica vs. Condicional (GARCH)", yaxis_title="Volatilidade Anual (%)", barmode='group', height=400)
+                            
+                            st.plotly_chart(fig_garch, use_container_width=True)
+                        else:
+                            st.info("Dados de volatilidade insuficientes para gráfico.")
+
+                        st.dataframe(df_garch, use_container_width=True, hide_index=True)
                     else:
-                        st.info("Dados de volatilidade insuficientes para gráfico.")
-
-                    st.dataframe(df_garch, use_container_width=True, hide_index=True)
+                        st.warning("Não há dados de volatilidade para exibir.")
                 else:
-                    st.warning("Não há dados de volatilidade para exibir.")
-            else:
-                 st.warning("⚠️ Dados de preços insuficientes para calcular volatilidade histórica ou GARCH.")
+                     st.warning("⚠️ Dados de preços insuficientes para calcular volatilidade histórica ou GARCH.")
         
         with tab5:
             st.markdown('#### Ranqueamento Final e Justificativas Detalhadas')
@@ -2172,225 +2208,921 @@ def aba_analise_individual():
                      st.dataframe(df_fund_show, use_container_width=True, hide_index=True)
 
             with tab3:
-                if not static_mode:
-                    st.markdown("### Indicadores Técnicos"); col1, col2, col3 = st.columns(3)
-                    col1.metric("RSI (14)", f"{df_completo['rsi_14'].iloc[-1]:.2f}" if 'rsi_14' in df_completo else "N/A")
-                    col2.metric("MACD Diff", f"{df_completo['macd_diff'].iloc[-1]:.4f}" if 'macd_diff' in df_completo else "N/A")
-                    col3.metric("BB Width", f"{df_completo['bb_width'].iloc[-1]:.2f}" if 'bb_width' in df_completo else "N/A")
-                    
-                    # Gráfico RSI
-                    fig_rsi = go.Figure(go.Scatter(x=df_completo.index, y=df_completo['rsi_14'], name='RSI', line=dict(color='#8E44AD')))
-                    fig_rsi.add_hline(y=70, line_dash="dash", line_color="red"); fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
-                    
-                    template = obter_template_grafico()
-                    template['title']['text'] = "RSI (14)" 
-                    fig_rsi.update_layout(**template)
-                    fig_rsi.update_layout(height=300)
-                    
-                    st.plotly_chart(fig_rsi, use_container_width=True)
-                    
-                    # Gráfico MACD
-                    fig_macd = make_subplots(rows=1, cols=1)
-                    fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd'], name='MACD', line=dict(color='#2980B9')))
-                    fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd_signal'], name='Signal', line=dict(color='#E74C3C')))
-                    fig_macd.add_trace(go.Bar(x=df_completo.index, y=df_completo['macd_diff'], name='Histograma', marker_color='#BDC3C7'))
-                    
-                    template = obter_template_grafico()
-                    template['title']['text'] = "MACD (12,26,9)"
-                    fig_macd.update_layout(**template)
-                    fig_macd.update_layout(height=300)
-                    
-                    st.plotly_chart(fig_macd, use_container_width=True)
-                    
-                    # Gráfico BB
-                    rolling_mean = df_completo['Close'].rolling(window=20).mean()
-                    rolling_std = df_completo['Close'].rolling(window=20).std()
-                    upper_band = rolling_mean + (rolling_std * 2)
-                    lower_band = rolling_mean - (rolling_std * 2)
-                    
-                    fig_bb = go.Figure()
-                    fig_bb.add_trace(go.Scatter(x=df_completo.index, y=upper_band, name='Upper Band', line=dict(color='#95A5A6'), showlegend=False))
-                    fig_bb.add_trace(go.Scatter(x=df_completo.index, y=lower_band, name='Lower Band', line=dict(color='#95A5A6'), fill='tonexty', fillcolor='rgba(149, 165, 166, 0.1)', showlegend=False))
-                    fig_bb.add_trace(go.Scatter(x=df_completo.index, y=df_completo['Close'], name='Close', line=dict(color='#2C3E50')))
-                    
-                    template = obter_template_grafico()
-                    template['title']['text'] = "Bandas de Bollinger (20, 2)"
-                    fig_bb.update_layout(**template)
-                    fig_bb.update_layout(height=400)
-                    
-                    st.plotly_chart(fig_bb, use_container_width=True)
-                    
-                else: st.warning("Análise Técnica não disponível sem histórico de preços.")
+                # LÓGICA ROBUSTA DE IF PARA EXIBIÇÃO DO MODELO
+                if has_price_data and has_usable_ml:
+                     st.markdown('#### 🤖 Predição de Movimento Direcional (Random Forest)')
+                     st.markdown("O modelo abaixo utiliza histórico de preços para prever a probabilidade de alta no curto prazo.")
+                     title_text_plot = "Probabilidade de Alta (0-100%)"
+                     
+                     # Exibe os gráficos de barra de ML (mantidos aqui se has_usable_ml for True)
+                     ml_data = []
+                     for asset in assets:
+                        if asset in builder.predicoes_ml:
+                            ml_info = builder.predicoes_ml[asset]
+                            ml_data.append({
+                                'Ticker': asset.replace('.SA', ''),
+                                'Score/Prob.': ml_info.get('predicted_proba_up', 0.5) * 100,
+                                'Confiança': ml_info.get('auc_roc_score', np.nan),
+                                'Modelo': ml_info.get('model_name', 'N/A')
+                            })
+                     
+                     df_ml = pd.DataFrame(ml_data)
+                
+                     if not df_ml.empty:
+                        fig_ml = go.Figure()
+                        plot_df_ml = df_ml.sort_values('Score/Prob.', ascending=False)
+                        
+                        fig_ml.add_trace(go.Bar(
+                            x=plot_df_ml['Ticker'],
+                            y=plot_df_ml['Score/Prob.'],
+                            marker=dict(
+                                color=plot_df_ml['Score/Prob.'],
+                                colorscale='Viridis', # Cor profissional
+                                showscale=True,
+                                colorbar=dict(title="Score")
+                            ),
+                            text=plot_df_ml['Score/Prob.'].round(1),
+                            textposition='outside'
+                        ))
+                        
+                        template = obter_template_grafico()
+                        fig_ml.update_layout(**template)
+                        
+                        fig_ml.update_layout(title_text=title_text_plot, yaxis_title="Score", xaxis_title="Ticker", height=400)
+                        
+                        st.plotly_chart(fig_ml, use_container_width=True)
+                        
+                        st.markdown("---")
+                        st.markdown('#### Detalhamento Técnico')
+                        df_ml_display = df_ml.copy()
+                        df_ml_display['Score/Prob.'] = df_ml_display['Score/Prob.'].round(2)
+                        df_ml_display['Confiança'] = df_ml_display['Confiança'].apply(lambda x: safe_format(x))
+                        st.dataframe(df_ml_display, use_container_width=True, hide_index=True)
+                     else:
+                         st.warning("Não há dados de ML para exibir.")
 
-            with tab4:
-                st.markdown("### Predição de Machine Learning")
-                
-                # Se veio do ML Real (com preço) ou do Fallback (sem preço)
-                ml_proba = df_completo['ML_Proba'].iloc[-1] if 'ML_Proba' in df_completo.columns else 0.5
-                ml_conf = df_completo['ML_Confidence'].iloc[-1] if 'ML_Confidence' in df_completo.columns else 0.0
-                
-                col1, col2 = st.columns(2)
-                col1.metric("Probabilidade de Alta" if not static_mode else "Score de Anomalia Positiva", f"{ml_proba*100:.1f}%")
-                
-                if static_mode:
-                    col2.metric("Status", "Fallback Não-Supervisionado")
-                    st.info("ℹ️ **Modo Fallback Ativo:** Como não há histórico de preços, este score reflete uma análise de anomalia (Isolation Forest) baseada nos fundamentos. Um score alto indica que o ativo se destaca positivamente em relação aos seus pares.")
+
                 else:
-                    col2.metric("Confiança do Modelo (AUC)", f"{ml_conf:.2f}")
+                     # FIX 6: Exibe a tabela de clusters e scores se o modo fallback estiver ativo
+                     st.markdown('#### 🔬 Análise de Qualidade Fundamentalista (Unsupervised Learning)')
+                     st.info("ℹ️ **Modo Fallback Ativo:** O modelo de predição supervisionada não encontrou padrões significativos ou o histórico de preços é limitado. O sistema está utilizando a **Clusterização Fundamentalista** (qualidade) como fator ML dominante.")
+                     
+                     st.markdown("##### Score Fundamentalista e Cluster por Ativo")
+                     # Garante que o df_fund_clean tem as colunas necessárias
+                     if not builder.scores_combinados.empty:
+                         df_cluster_display = builder.scores_combinados[['fundamental_score', 'Final_Cluster', 'pe_ratio', 'roe']].copy()
+                         df_cluster_display.rename(columns={'fundamental_score': 'Score Fund.', 'Final_Cluster': 'Cluster', 'pe_ratio': 'P/L', 'roe': 'ROE'}, inplace=True)
+                         
+                         st.dataframe(df_cluster_display.style.format({
+                             'Score Fund.': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}'
+                         }).background_gradient(cmap='Blues', subset=['Score Fund.']), use_container_width=True)
+                     else:
+                         st.warning("Dados de fundamentos insuficientes para exibir clusters.")
+            
+            # Reatribui tab4 e tab5 para o bloco subsequente, dependendo da existência da aba GARCH
+            if "📉 Fator Volatilidade GARCH" in tabs_list:
+                with tab4:
+                    st.markdown('#### Volatilidade Condicional (GARCH) e Histórica')
                     
-                if df_ml_meta is not None and not df_ml_meta.empty:
-                    st.markdown("#### Importância dos Fatores na Decisão")
-                    fig_imp = px.bar(df_ml_meta.head(5), x='importance', y='feature', orientation='h', title='Top Fatores')
-                    
-                    template = obter_template_grafico()
-                    # Correção do Erro de 'title' aqui também
-                    template['title']['text'] = 'Top 5 Fatores de Decisão'
-                    fig_imp.update_layout(**template)
-                    fig_imp.update_layout(height=300)
-                    st.plotly_chart(fig_imp, use_container_width=True)
+                    # IF ROBUSTO: SÓ MOSTRA SE TIVER PREÇO
+                    if has_price_data:
+                        dados_garch = []
+                        for ativo in assets:
+                            if ativo in builder.metricas_performance.index and ativo in builder.volatilidades_garch:
+                                perf = builder.metricas_performance.loc[ativo]
+                                vol_hist = perf.get('volatilidade_anual', np.nan)
+                                vol_garch = builder.volatilidades_garch.get(ativo)
+                                
+                                if vol_garch is not None and not np.isnan(vol_garch):
+                                    status = '✓ GARCH Ajustado (Previsão de Risco)'
+                                    vol_display = vol_garch
+                                elif vol_hist is not None and not np.isnan(vol_hist): 
+                                    status = '⚠️ Histórica (Fallback)'
+                                    vol_display = vol_hist
+                                else:
+                                    status = '❌ Indisponível'
+                                    vol_display = np.nan
+                                
+                                dados_garch.append({
+                                    'Ticker': ativo.replace('.SA', ''),
+                                    'Vol. Histórica (%)': vol_hist * 100 if not np.isnan(vol_hist) else 'N/A',
+                                    'Vol. Condicional (%)': vol_display * 100 if vol_display is not None and not np.isnan(vol_display) else 'N/A',
+                                    'Status de Cálculo': status
+                                })
+                        
+                        df_garch = pd.DataFrame(dados_garch)
+                        
+                        if not df_garch.empty:
+                            fig_garch = go.Figure()
+                            
+                            # Safe filtering for plotting
+                            plot_df_garch = df_garch[df_garch['Vol. Condicional (%)'] != 'N/A'].copy()
+                            if not plot_df_garch.empty:
+                                plot_df_garch['Vol. Condicional (%)'] = plot_df_garch['Vol. Condicional (%)'].astype(float)
+                                plot_df_garch['Vol. Histórica (%)'] = plot_df_garch['Vol. Histórica (%)'].apply(lambda x: float(x) if x != 'N/A' else np.nan)
 
-            with tab5: 
-                st.markdown("### 🔬 Clusterização Geral (Ibovespa)")
-                
-                st.info(f"Analisando similaridade do **{ativo_selecionado.replace('.SA', '')}** com **TODOS** os ativos do Ibovespa (Baseado apenas em Fundamentos).")
-                
-                # 2. Coleta e Clusteriza (Apenas Fundamentos - Lista Global)
-                resultado_cluster, n_clusters = AnalisadorIndividualAtivos.realizar_clusterizacao_fundamentalista_geral(coletor, ativo_selecionado)
-                
-                if resultado_cluster is not None:
-                    st.success(f"Identificados {n_clusters} grupos (clusters) de qualidade fundamentalista.")
-                    
-                    # Visualização 3D SE TIVER 3 COMPONENTES
-                    if 'PC3' in resultado_cluster.columns:
-                        fig_pca = px.scatter_3d(
-                            resultado_cluster, x='PC1', y='PC2', z='PC3',
-                            color=resultado_cluster['Cluster'].astype(str),
-                            hover_name=resultado_cluster.index.str.replace('.SA', ''), 
-                            # title=f'Mapa de Similaridade 3D (Global)', # REMOVIDO DAQUI PARA EVITAR CONFLITO
-                            color_discrete_sequence=obter_template_grafico()['colorway'],
-                            opacity=0.8,
-                            labels={'Cluster': 'Grupo'}
-                        )
-                        
-                        template = obter_template_grafico()
-                        template['title']['text'] = "Mapa de Similaridade 3D (Global)"
-                        # Ajusta template para 3D scene
-                        fig_pca.update_layout(
-                            title=template['title'],
-                            paper_bgcolor=template['paper_bgcolor'],
-                            plot_bgcolor=template['plot_bgcolor'],
-                            font=template['font'],
-                            scene=dict(xaxis_title='PCA 1', yaxis_title='PCA 2', zaxis_title='PCA 3'),
-                            margin=dict(l=0, r=0, b=0, t=40),
-                            height=600
-                        )
-                    else:
-                        # Fallback para 2D se PCA 3D falhar (poucos dados)
-                        fig_pca = px.scatter(
-                            resultado_cluster, x='PC1', y='PC2', 
-                            color=resultado_cluster['Cluster'].astype(str),
-                            hover_name=resultado_cluster.index.str.replace('.SA', ''), 
-                            # title=f'Mapa de Similaridade 2D (Global)', # REMOVIDO DAQUI
-                            color_discrete_sequence=obter_template_grafico()['colorway']
-                        )
-                        template = obter_template_grafico()
-                        template['title']['text'] = "Mapa de Similaridade 2D (Global)"
-                        fig_pca.update_layout(**template)
-                        fig_pca.update_layout(height=500)
-                    
-                    st.plotly_chart(fig_pca, use_container_width=True)
-                    
-                    # Identifica pares
-                    if ativo_selecionado in resultado_cluster.index:
-                        cluster_ativo = resultado_cluster.loc[ativo_selecionado, 'Cluster']
-                        pares = resultado_cluster[resultado_cluster['Cluster'] == cluster_ativo].index.tolist()
-                        pares = [p.replace('.SA', '') for p in pares if p != ativo_selecionado]
-                        
-                        with st.expander(f"📋 Ver {len(pares)} ativos similares no Cluster {cluster_ativo}", expanded=True):
-                            if pares:
-                                st.write(", ".join(pares))
+                                template_colors = obter_template_grafico()['colorway']
+                                
+                                fig_garch.add_trace(go.Bar(name='Volatilidade Histórica', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Histórica (%)'], marker=dict(color=template_colors[2]), opacity=0.7)) 
+                                fig_garch.add_trace(go.Bar(name='Volatilidade Condicional', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Condicional (%)'], marker=dict(color=template_colors[0]))) 
+                                
+                                template = obter_template_grafico()
+                                fig_garch.update_layout(**template)
+                                fig_garch.update_layout(title_text="Volatilidade Anualizada: Histórica vs. Condicional (GARCH)", yaxis_title="Volatilidade Anual (%)", barmode='group', height=400)
+                                
+                                st.plotly_chart(fig_garch, use_container_width=True)
                             else:
-                                st.write("Este ativo possui características únicas (Outlier).")
+                                st.info("Dados de volatilidade insuficientes para gráfico.")
+
+                            st.dataframe(df_garch, use_container_width=True, hide_index=True)
+                        else:
+                            st.warning("Não há dados de volatilidade para exibir.")
                     else:
-                        st.warning("Ativo não encontrado no mapa de clusters (provavelmente sem dados suficientes).")
+                         st.warning("⚠️ Dados de preços insuficientes para calcular volatilidade histórica ou GARCH.")
+            
+            with tab5:
+                st.markdown('#### Ranqueamento Final e Justificativas Detalhadas')
+                
+                st.markdown(f"**Pesos Adaptativos Usados:** Performance: {builder.pesos_atuais['Performance']:.2f} | Fundamentos: {builder.pesos_atuais['Fundamentos']:.2f} | Técnicos: {builder.pesos_atuais['Técnicos']:.2f} | ML: {builder.pesos_atuais['ML']:.2f}")
+                st.markdown("---")
+                
+                # Safe Rename Logic (Check columns existence first)
+                rename_map = {
+                    'total_score': 'Score Total', 
+                    'performance_score': 'Score Perf.', 
+                    'fundamental_score': 'Score Fund.', 
+                    'technical_score': 'Score Téc.', 
+                    'ml_score_weighted': 'Score ML', 
+                    'sharpe_ratio': 'Sharpe', 
+                    'pe_ratio': 'P/L', 
+                    'roe': 'ROE', 
+                    'rsi_14': 'RSI 14', 
+                    'macd_diff': 'MACD Hist.', 
+                    'ML_Proba': 'Prob. Alta ML'
+                }
+                
+                if not builder.scores_combinados.empty:
+                    # Select only existing columns to avoid KeyError
+                    cols_existentes = [col for col in rename_map.keys() if col in builder.scores_combinados.columns]
+                    df_scores_display = builder.scores_combinados[cols_existentes].copy()
+                    df_scores_display.rename(columns=rename_map, inplace=True)
+                    
+                    if 'ROE' in df_scores_display.columns:
+                         df_scores_display['ROE'] = df_scores_display['ROE'] * 100
+                         
+                    df_scores_display = df_scores_display.iloc[:15] 
+                    
+                    st.markdown("##### Ranqueamento Ponderado Multi-Fatorial (Top 15 Tickers do Universo Analisado)")
+                    
+                    # Formatação condicional
+                    format_dict = {
+                        'Score Total': '{:.3f}', 'Score Perf.': '{:.3f}', 'Score Fund.': '{:.3f}', 'Score Téc.': '{:.3f}', 'Score ML': '{:.3f}',
+                        'Sharpe': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}%', 'RSI 14': '{:.2f}', 'MACD Hist.': '{:.4f}', 'Prob. Alta ML': '{:.2f}'
+                    }
+                    final_format_dict = {k: v for k, v in format_dict.items() if k in df_scores_display.columns}
+                    
+                    st.dataframe(df_scores_display.style.format(
+                        final_format_dict
+                    ).background_gradient(cmap='Greys', subset=['Score Total'] if 'Score Total' in df_scores_display.columns else None), use_container_width=True)
                 else:
-                    st.warning("Dados insuficientes para gerar clusters confiáveis.")
-        
-        except Exception as e:
-            st.error(f"Erro ao analisar o ticker {ativo_selecionado}: {str(e)}")
-            st.code(traceback.format_exc())
+                    st.warning("Tabela de scores indisponível (falha no processamento de dados).")
+                
+                st.markdown("---")
+                st.markdown('##### Resumo da Seleção de Ativos (Portfólio Final)')
+                
+                if not builder.justificativas_selecao:
+                    st.warning("Nenhuma justificativa gerada.")
+                else:
+                    for asset, justification in builder.justificativas_selecao.items():
+                        weight = builder.alocacao_portfolio.get(asset, {}).get('weight', 0)
+                        st.markdown(f"""
+                        <div class="info-box">
+                        <h4>{asset.replace('.SA', '')} ({weight*100:.2f}%)</h4>
+                        <p><strong>Fatores-Chave:</strong> {justification}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+            
+            # Botão Recalibrar Centralizado no Final
+            st.markdown("---")
+            col_space1, col_btn, col_space2 = st.columns([1, 1, 1])
+            with col_btn:
+                if st.button("🔄 Recalibrar Perfil e Otimizar Novamente", type="primary", use_container_width=True):
+                    st.session_state.builder_complete = False
+                    st.session_state.builder = None
+                    st.session_state.profile = {}
+                    st.rerun()
 
-def aba_referencias():
-    """Aba 5: Referências Bibliográficas Completas (V8.7 Original)"""
+def aba_analise_individual():
+    """Aba 4: Análise Individual de Ativos (Autônoma e Geral)"""
     
-    st.markdown("## 📚 Referências e Bibliografia")
-    st.markdown("Esta seção consolida as referências bibliográficas indicadas nas ementas das disciplinas relacionadas (GRDECO222 e GRDECO203).")
+    st.markdown("## 🔍 Análise de Fatores por Ticker")
+    
+    # Carrega lista de ativos (se o builder não rodou, usa lista estática)
+    if 'ativos_para_analise' in st.session_state and st.session_state.ativos_para_analise:
+        ativos_disponiveis = sorted(list(set(st.session_state.ativos_para_analise)))
+    else:
+        ativos_disponiveis = TODOS_ATIVOS 
+            
+    if not ativos_disponiveis:
+        st.error("Nenhum ativo disponível.")
+        return
 
-    st.markdown("---")
+    # Layout Centralizado da Seleção
+    col_sel, = st.columns(1)
+    with col_sel:
+        ativo_selecionado = st.selectbox(
+            "Selecione um ticker para análise detalhada:",
+            options=ativos_disponiveis,
+            format_func=lambda x: x.replace('.SA', '') if isinstance(x, str) else x,
+            key='individual_asset_select_v8' 
+        )
     
-    st.markdown("### GRDECO222: Machine Learning (Prof. Rafael Martins de Souza)")
+    st.write("") # Spacer
     
-    st.markdown("**Bibliografia Obrigatória**")
+    # Botão Centralizado Abaixo
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c2:
+        if st.button("🔄 Executar Análise", key='analyze_asset_button_v8', type="primary", use_container_width=True):
+            st.session_state.analisar_ativo_triggered = True 
     
-    st.markdown("1. **Jupter Notebooks apresentados em sala de aula.**")
-    with st.expander("Explicação"):
-        st.write("O material principal do curso é prático, baseado nos códigos e exemplos desenvolvidos pelo professor durante as aulas.")
-        
-    st.markdown("2. **Géron, A. Mãos à Obra: Aprendizado de Máquina com Scikit-Learn, Keras e TensorFlow.**")
-    with st.expander("Explicação"):
-        st.write("Considerado um dos principais livros-texto práticos sobre Machine Learning. Cobre desde os fundamentos (Regressão, SVMs, Árvores de Decisão) até tópicos avançados de Deep Learning, com foco na implementação usando bibliotecas Python populares.")
+    if 'analisar_ativo_triggered' not in st.session_state or not st.session_state.analisar_ativo_triggered:
+        st.info("👆 Selecione um ticker e clique em 'Executar Análise' para obter o relatório completo.")
+        return
+    
+    with st.spinner(f"Analisando {ativo_selecionado} (Coleta em Tempo Real)..."):
+        try:
+            # Coletor Autônomo (Instância local, sem depender do builder global)
+            coletor = ColetorDadosLive()
+            
+            # Coleta dados específicos do ativo (Preço + Fundamentos)
+            df_completo, features_fund, df_ml_meta = coletor.coletar_ativo_unico_gcs(ativo_selecionado)
+            
+            # Verificação Básica
+            if features_fund is None:
+                st.error(f"❌ Dados indisponíveis para **{ativo_selecionado.replace('.SA', '')}**.")
+                return
 
-    st.markdown("---")
-    st.markdown("**Bibliografia Complementar**")
-    
-    st.markdown("1. **Coleman, C., Spencer Lyon, S., Jesse Perla, J. QuantEcon Data Science, Introduction to Economic Modeling and Data Science. (https://datascience.quantecon.org/)**")
-    with st.expander("Explicação"):
-        st.write("Um recurso online focado na aplicação de Ciência de Dados especificamente para modelagem econômica, alinhado com os objetivos da disciplina.")
+            # Detecta Modo Estático (Sem Preço)
+            static_mode = features_fund.get('static_mode', False) or (df_completo is not None and df_completo['Close'].isnull().all())
 
-    st.markdown("2. **Sargent, T. J., Stachurski, J., Quantitative Economics with Python. (https://python.quantecon.org/)**")
-    with st.expander("Explicação"):
-        st.write("Outro projeto da QuantEcon, focado em métodos quantitativos e economia computacional usando Python. É uma referência padrão para economistas que programam.")
-    
-    st.markdown("---")
-    
-    st.markdown("### GRDECO203: Laboratório de Ciência de Dados Aplicados à Finanças (Prof. Diogo Tavares Robaina)")
+            if static_mode:
+                st.warning(f"⚠️ **MODO ESTÁTICO:** Preços indisponíveis. Exibindo apenas Análise Fundamentalista.")
 
-    st.markdown("**Bibliografia Básica**")
-    
-    st.markdown("1. **HILPISCH, Y. J. Python for finance: analyze big financial dat. O'Reilly Media, 2015.**")
-    with st.expander("Explicação"):
-        st.write("Uma referência clássica para finanças quantitativas em Python. Cobre manipulação de dados financeiros (séries temporais), análise de risco, e implementação de estratégias de trading e precificação de derivativos.")
+            tab1, tab2, tab3, tab4, tab5 = st.tabs([
+                "📊 Visão Geral", "💼 Fundamentos", "🔧 Análise Técnica", "🤖 Machine Learning", "🔬 Clusterização Geral"
+            ])
+            
+            # Abas 1-4: Lógica Padrão de Exibição (igual à versão anterior)
+            with tab1:
+                st.markdown(f"### {ativo_selecionado.replace('.SA', '')} - Resumo de Mercado")
+                col1, col2, col3, col4, col5 = st.columns(5)
+                if not static_mode and 'Close' in df_completo.columns:
+                    preco_atual = df_completo['Close'].iloc[-1]
+                    variacao_dia = df_completo['returns'].iloc[-1] * 100 if 'returns' in df_completo.columns else 0.0
+                    volume_medio = df_completo['Volume'].mean() if 'Volume' in df_completo.columns else 0.0
+                    vol_anual = features_fund.get('annual_volatility', 0) * 100
+                    col1.metric("Preço", f"R$ {preco_atual:.2f}", f"{variacao_dia:+.2f}%")
+                    col2.metric("Volume Médio", f"{volume_medio:,.0f}")
+                    col5.metric("Volatilidade", f"{vol_anual:.2f}%")
+                else:
+                    col1.metric("Preço", "N/A", "N/A"); col2.metric("Volume Médio", "N/A"); col5.metric("Volatilidade", "N/A")
+                
+                # Fallback para Setor se pynvest falhar
+                setor = features_fund.get('sector')
+                if setor == 'Unknown' or setor is None:
+                     setor = FALLBACK_SETORES.get(ativo_selecionado, 'N/A')
 
-    st.markdown("2. **ARRATIA, A. Computational finance an introductory course with R. Atlantis, 2014.**")
-    with st.expander("Explicação"):
-        st.write("Focado em finanças computacionais usando a linguagem R, abordando conceitos introdutórios e modelagem.")
-    
-    st.markdown("3. **RASCHKA, S. Python machine learning: unlock deeper insights... Packt Publishing, 2015.**")
-    with st.expander("Explicação"):
-        st.write("Um guia popular focado na aplicação prática de algoritmos de Machine Learning com Scikit-Learn em Python, similar ao livro de Géron.")
-    
-    st.markdown("4. **MAINDONALD, J., and Braun, J. Data analysis and graphics using R: an example-based approach. Cambridge University Press, 2006.**")
-    with st.expander("Explicação"):
-        st.write("Livro focado em análise de dados e visualização gráfica utilizando a linguagem R.")
-    
-    st.markdown("5. **REYES, J. M. M. Introduction to Data Science for Social and Policy Research. Cambridge University Press, 2017.**")
-    with st.expander("Explicação"):
-        st.write("Aborda a aplicação de Ciência de Dados no contexto de ciências sociais e pesquisa de políticas públicas, relevante para a análise econômica.")
-    
-    st.markdown("---")
-    st.markdown("**Bibliografia Complementar**")
+                col3.metric("Setor", setor)
+                col4.metric("Indústria", features_fund.get('industry', 'N/A'))
+                
+                if not static_mode and not df_completo.empty and 'Open' in df_completo.columns:
+                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
+                    fig.add_trace(go.Candlestick(x=df_completo.index, open=df_completo['Open'], high=df_completo['High'], low=df_completo['Low'], close=df_completo['Close'], name='Preço'), row=1, col=1)
+                    fig.add_trace(go.Bar(x=df_completo.index, y=df_completo['Volume'], name='Volume'), row=2, col=1)
+                    
+                    template = obter_template_grafico()
+                    template['title']['text'] = f"Gráfico Diário - {ativo_selecionado}" # Define no dict
+                    fig.update_layout(**template)
+                    fig.update_layout(height=600)
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                else: st.info("Gráfico indisponível (Modo Estático Ativo).")
 
-    st.markdown("1. **TEAM, R. Core. 'R language definition.' R foundation for statistical computing (2000).**")
-    with st.expander("Explicação"):
-        st.write("A documentação oficial da linguagem R.")
+            with tab2:
+                # --- TROCA DE ORDEM: PRIMEIRO INDICADORES PRINCIPAIS, DEPOIS TABELA GERAL ---
+                st.markdown("### Principais Métricas")
+                
+                # Helper para troca de indicadores caso NaN
+                def get_valid_metric(data, primary_key, primary_label, secondary_key, secondary_label):
+                     val = data.get(primary_key)
+                     if pd.isna(val):
+                         return secondary_label, data.get(secondary_key)
+                     return primary_label, val
+                
+                # Obtem Beta de Fallback se necessário (Yahoo Finance)
+                beta_val = features_fund.get('beta')
+                if pd.isna(beta_val):
+                     try:
+                         beta_val = yf.Ticker(ativo_selecionado).info.get('beta')
+                     except: 
+                         beta_val = np.nan
+                
+                # Linha 1
+                col1, col2, col3, col4, col5 = st.columns(5)
+                
+                # Se P/L for NaN, tenta mostrar EV/EBITDA no lugar
+                l1, v1 = get_valid_metric(features_fund, 'pe_ratio', 'P/L', 'ev_ebitda', 'EV/EBITDA')
+                col1.metric(l1, safe_format(v1))
+                
+                col2.metric("P/VP", safe_format(features_fund.get('pb_ratio', np.nan)))
+                col3.metric("ROE", safe_format(features_fund.get('roe', np.nan)))
+                col4.metric("Margem Líq.", safe_format(features_fund.get('net_margin', np.nan)))
+                col5.metric("Div. Yield", safe_format(features_fund.get('div_yield', np.nan)))
+                
+                st.write("") # Spacer
+                
+                # Linha 2
+                col1, col2, col3, col4, col5 = st.columns(5)
+                col1.metric("Dívida Bruta/PL", safe_format(features_fund.get('debt_to_equity', np.nan)))
+                col2.metric("Liq. Corrente", safe_format(features_fund.get('current_ratio', np.nan)))
+                col3.metric("EV/EBITDA", safe_format(features_fund.get('ev_ebitda', np.nan)))
+                
+                # FIX 5: Substitui 'Cresc. Receita (5a)' que estava dando N/A por ROIC (Return on Invested Capital)
+                col4.metric("ROIC", safe_format(features_fund.get('roic', np.nan))) 
+                
+                col5.metric("Beta (Yahoo)", safe_format(beta_val))
 
-    st.markdown("2. **MISHRA, R.; RAM, B. Portfolio Selection Using R. Yugoslav Journal of Operations Research, 2020.**")
-    with st.expander("Explicação"):
-        st.write("Um artigo de pesquisa focado especificamente na aplicação da linguagem R para otimização e seleção de portfólios, muito relevante para a disciplina.")
+                st.markdown("---")
+                st.markdown("### Tabela Geral de Indicadores")
+                
+                # Exibição de tabela expansível com TODOS os indicadores
+                with st.expander("📋 Ver Tabela Completa de Indicadores", expanded=False):
+                     # Remove chaves internas de controle antes de exibir
+                     clean_fund = {k: v for k, v in features_fund.items() if k not in ['static_mode', 'garch_volatility', 'max_drawdown']}
+                     df_fund_show = pd.DataFrame([clean_fund]).T.reset_index()
+                     df_fund_show.columns = ['Indicador', 'Valor']
+                     st.dataframe(df_fund_show, use_container_width=True, hide_index=True)
 
-    st.markdown("3. **WICKHAM, H., et al. (dplyr, Tidy data, Advanced R, ggplot2, R for data science).**")
-    with st.expander("Explicação"):
-        st.write("Múltiplas referências de Hadley Wickham, o criador do 'Tidyverse' em R. São os pacotes e livros fundamentais para a manipulação de dados moderna (dplyr), organização (Tidy data) e visualização (ggplot2) na linguagem R.")
+            with tab3:
+                # LÓGICA ROBUSTA DE IF PARA EXIBIÇÃO DO MODELO
+                if has_price_data and has_usable_ml:
+                     st.markdown('#### 🤖 Predição de Movimento Direcional (Random Forest)')
+                     st.markdown("O modelo abaixo utiliza histórico de preços para prever a probabilidade de alta no curto prazo.")
+                     title_text_plot = "Probabilidade de Alta (0-100%)"
+                     
+                     # Exibe os gráficos de barra de ML (mantidos aqui se has_usable_ml for True)
+                     ml_data = []
+                     for asset in assets:
+                        if asset in builder.predicoes_ml:
+                            ml_info = builder.predicoes_ml[asset]
+                            ml_data.append({
+                                'Ticker': asset.replace('.SA', ''),
+                                'Score/Prob.': ml_info.get('predicted_proba_up', 0.5) * 100,
+                                'Confiança': ml_info.get('auc_roc_score', np.nan),
+                                'Modelo': ml_info.get('model_name', 'N/A')
+                            })
+                     
+                     df_ml = pd.DataFrame(ml_data)
+                
+                     if not df_ml.empty:
+                        fig_ml = go.Figure()
+                        plot_df_ml = df_ml.sort_values('Score/Prob.', ascending=False)
+                        
+                        fig_ml.add_trace(go.Bar(
+                            x=plot_df_ml['Ticker'],
+                            y=plot_df_ml['Score/Prob.'],
+                            marker=dict(
+                                color=plot_df_ml['Score/Prob.'],
+                                colorscale='Viridis', # Cor profissional
+                                showscale=True,
+                                colorbar=dict(title="Score")
+                            ),
+                            text=plot_df_ml['Score/Prob.'].round(1),
+                            textposition='outside'
+                        ))
+                        
+                        template = obter_template_grafico()
+                        fig_ml.update_layout(**template)
+                        
+                        fig_ml.update_layout(title_text=title_text_plot, yaxis_title="Score", xaxis_title="Ticker", height=400)
+                        
+                        st.plotly_chart(fig_ml, use_container_width=True)
+                        
+                        st.markdown("---")
+                        st.markdown('#### Detalhamento Técnico')
+                        df_ml_display = df_ml.copy()
+                        df_ml_display['Score/Prob.'] = df_ml_display['Score/Prob.'].round(2)
+                        df_ml_display['Confiança'] = df_ml_display['Confiança'].apply(lambda x: safe_format(x))
+                        st.dataframe(df_ml_display, use_container_width=True, hide_index=True)
+                     else:
+                         st.warning("Não há dados de ML para exibir.")
+
+
+                else:
+                     # FIX 6: Exibe a tabela de clusters e scores se o modo fallback estiver ativo
+                     st.markdown('#### 🔬 Análise de Qualidade Fundamentalista (Unsupervised Learning)')
+                     st.info("ℹ️ **Modo Fallback Ativo:** O modelo de predição supervisionada não encontrou padrões significativos ou o histórico de preços é limitado. O sistema está utilizando a **Clusterização Fundamentalista** (qualidade) como fator ML dominante.")
+                     
+                     st.markdown("##### Score Fundamentalista e Cluster por Ativo")
+                     # Garante que o df_fund_clean tem as colunas necessárias
+                     if not builder.scores_combinados.empty:
+                         df_cluster_display = builder.scores_combinados[['fundamental_score', 'Final_Cluster', 'pe_ratio', 'roe']].copy()
+                         df_cluster_display.rename(columns={'fundamental_score': 'Score Fund.', 'Final_Cluster': 'Cluster', 'pe_ratio': 'P/L', 'roe': 'ROE'}, inplace=True)
+                         
+                         st.dataframe(df_cluster_display.style.format({
+                             'Score Fund.': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}'
+                         }).background_gradient(cmap='Blues', subset=['Score Fund.']), use_container_width=True)
+                     else:
+                         st.warning("Dados de fundamentos insuficientes para exibir clusters.")
+            
+            # Reatribui tab4 e tab5 para o bloco subsequente, dependendo da existência da aba GARCH
+            if "📉 Fator Volatilidade GARCH" in tabs_list:
+                with tab4:
+                    st.markdown('#### Volatilidade Condicional (GARCH) e Histórica')
+                    
+                    # IF ROBUSTO: SÓ MOSTRA SE TIVER PREÇO
+                    if has_price_data:
+                        dados_garch = []
+                        for ativo in assets:
+                            if ativo in builder.metricas_performance.index and ativo in builder.volatilidades_garch:
+                                perf = builder.metricas_performance.loc[ativo]
+                                vol_hist = perf.get('volatilidade_anual', np.nan)
+                                vol_garch = builder.volatilidades_garch.get(ativo)
+                                
+                                if vol_garch is not None and not np.isnan(vol_garch):
+                                    status = '✓ GARCH Ajustado (Previsão de Risco)'
+                                    vol_display = vol_garch
+                                elif vol_hist is not None and not np.isnan(vol_hist): 
+                                    status = '⚠️ Histórica (Fallback)'
+                                    vol_display = vol_hist
+                                else:
+                                    status = '❌ Indisponível'
+                                    vol_display = np.nan
+                                
+                                dados_garch.append({
+                                    'Ticker': ativo.replace('.SA', ''),
+                                    'Vol. Histórica (%)': vol_hist * 100 if not np.isnan(vol_hist) else 'N/A',
+                                    'Vol. Condicional (%)': vol_display * 100 if vol_display is not None and not np.isnan(vol_display) else 'N/A',
+                                    'Status de Cálculo': status
+                                })
+                        
+                        df_garch = pd.DataFrame(dados_garch)
+                        
+                        if not df_garch.empty:
+                            fig_garch = go.Figure()
+                            
+                            # Safe filtering for plotting
+                            plot_df_garch = df_garch[df_garch['Vol. Condicional (%)'] != 'N/A'].copy()
+                            if not plot_df_garch.empty:
+                                plot_df_garch['Vol. Condicional (%)'] = plot_df_garch['Vol. Condicional (%)'].astype(float)
+                                plot_df_garch['Vol. Histórica (%)'] = plot_df_garch['Vol. Histórica (%)'].apply(lambda x: float(x) if x != 'N/A' else np.nan)
+
+                                template_colors = obter_template_grafico()['colorway']
+                                
+                                fig_garch.add_trace(go.Bar(name='Volatilidade Histórica', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Histórica (%)'], marker=dict(color=template_colors[2]), opacity=0.7)) 
+                                fig_garch.add_trace(go.Bar(name='Volatilidade Condicional', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Condicional (%)'], marker=dict(color=template_colors[0]))) 
+                                
+                                template = obter_template_grafico()
+                                fig_garch.update_layout(**template)
+                                fig_garch.update_layout(title_text="Volatilidade Anualizada: Histórica vs. Condicional (GARCH)", yaxis_title="Volatilidade Anual (%)", barmode='group', height=400)
+                                
+                                st.plotly_chart(fig_garch, use_container_width=True)
+                            else:
+                                st.info("Dados de volatilidade insuficientes para gráfico.")
+
+                            st.dataframe(df_garch, use_container_width=True, hide_index=True)
+                        else:
+                            st.warning("Não há dados de volatilidade para exibir.")
+                    else:
+                         st.warning("⚠️ Dados de preços insuficientes para calcular volatilidade histórica ou GARCH.")
+            
+            with tab5:
+                st.markdown('#### Ranqueamento Final e Justificativas Detalhadas')
+                
+                st.markdown(f"**Pesos Adaptativos Usados:** Performance: {builder.pesos_atuais['Performance']:.2f} | Fundamentos: {builder.pesos_atuais['Fundamentos']:.2f} | Técnicos: {builder.pesos_atuais['Técnicos']:.2f} | ML: {builder.pesos_atuais['ML']:.2f}")
+                st.markdown("---")
+                
+                # Safe Rename Logic (Check columns existence first)
+                rename_map = {
+                    'total_score': 'Score Total', 
+                    'performance_score': 'Score Perf.', 
+                    'fundamental_score': 'Score Fund.', 
+                    'technical_score': 'Score Téc.', 
+                    'ml_score_weighted': 'Score ML', 
+                    'sharpe_ratio': 'Sharpe', 
+                    'pe_ratio': 'P/L', 
+                    'roe': 'ROE', 
+                    'rsi_14': 'RSI 14', 
+                    'macd_diff': 'MACD Hist.', 
+                    'ML_Proba': 'Prob. Alta ML'
+                }
+                
+                if not builder.scores_combinados.empty:
+                    # Select only existing columns to avoid KeyError
+                    cols_existentes = [col for col in rename_map.keys() if col in builder.scores_combinados.columns]
+                    df_scores_display = builder.scores_combinados[cols_existentes].copy()
+                    df_scores_display.rename(columns=rename_map, inplace=True)
+                    
+                    if 'ROE' in df_scores_display.columns:
+                         df_scores_display['ROE'] = df_scores_display['ROE'] * 100
+                         
+                    df_scores_display = df_scores_display.iloc[:15] 
+                    
+                    st.markdown("##### Ranqueamento Ponderado Multi-Fatorial (Top 15 Tickers do Universo Analisado)")
+                    
+                    # Formatação condicional
+                    format_dict = {
+                        'Score Total': '{:.3f}', 'Score Perf.': '{:.3f}', 'Score Fund.': '{:.3f}', 'Score Téc.': '{:.3f}', 'Score ML': '{:.3f}',
+                        'Sharpe': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}%', 'RSI 14': '{:.2f}', 'MACD Hist.': '{:.4f}', 'Prob. Alta ML': '{:.2f}'
+                    }
+                    final_format_dict = {k: v for k, v in format_dict.items() if k in df_scores_display.columns}
+                    
+                    st.dataframe(df_scores_display.style.format(
+                        final_format_dict
+                    ).background_gradient(cmap='Greys', subset=['Score Total'] if 'Score Total' in df_scores_display.columns else None), use_container_width=True)
+                else:
+                    st.warning("Tabela de scores indisponível (falha no processamento de dados).")
+                
+                st.markdown("---")
+                st.markdown('##### Resumo da Seleção de Ativos (Portfólio Final)')
+                
+                if not builder.justificativas_selecao:
+                    st.warning("Nenhuma justificativa gerada.")
+                else:
+                    for asset, justification in builder.justificativas_selecao.items():
+                        weight = builder.alocacao_portfolio.get(asset, {}).get('weight', 0)
+                        st.markdown(f"""
+                        <div class="info-box">
+                        <h4>{asset.replace('.SA', '')} ({weight*100:.2f}%)</h4>
+                        <p><strong>Fatores-Chave:</strong> {justification}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+            
+            # Botão Recalibrar Centralizado no Final
+            st.markdown("---")
+            col_space1, col_btn, col_space2 = st.columns([1, 1, 1])
+            with col_btn:
+                if st.button("🔄 Recalibrar Perfil e Otimizar Novamente", type="primary", use_container_width=True):
+                    st.session_state.builder_complete = False
+                    st.session_state.builder = None
+                    st.session_state.profile = {}
+                    st.rerun()
+
+def aba_analise_individual():
+    """Aba 4: Análise Individual de Ativos (Autônoma e Geral)"""
+    
+    st.markdown("## 🔍 Análise de Fatores por Ticker")
+    
+    # Carrega lista de ativos (se o builder não rodou, usa lista estática)
+    if 'ativos_para_analise' in st.session_state and st.session_state.ativos_para_analise:
+        ativos_disponiveis = sorted(list(set(st.session_state.ativos_para_analise)))
+    else:
+        ativos_disponiveis = TODOS_ATIVOS 
+            
+    if not ativos_disponiveis:
+        st.error("Nenhum ativo disponível.")
+        return
+
+    # Layout Centralizado da Seleção
+    col_sel, = st.columns(1)
+    with col_sel:
+        ativo_selecionado = st.selectbox(
+            "Selecione um ticker para análise detalhada:",
+            options=ativos_disponiveis,
+            format_func=lambda x: x.replace('.SA', '') if isinstance(x, str) else x,
+            key='individual_asset_select_v8' 
+        )
+    
+    st.write("") # Spacer
+    
+    # Botão Centralizado Abaixo
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c2:
+        if st.button("🔄 Executar Análise", key='analyze_asset_button_v8', type="primary", use_container_width=True):
+            st.session_state.analisar_ativo_triggered = True 
+    
+    if 'analisar_ativo_triggered' not in st.session_state or not st.session_state.analisar_ativo_triggered:
+        st.info("👆 Selecione um ticker e clique em 'Executar Análise' para obter o relatório completo.")
+        return
+    
+    with st.spinner(f"Analisando {ativo_selecionado} (Coleta em Tempo Real)..."):
+        try:
+            # Coletor Autônomo (Instância local, sem depender do builder global)
+            coletor = ColetorDadosLive()
+            
+            # Coleta dados específicos do ativo (Preço + Fundamentos)
+            df_completo, features_fund, df_ml_meta = coletor.coletar_ativo_unico_gcs(ativo_selecionado)
+            
+            # Verificação Básica
+            if features_fund is None:
+                st.error(f"❌ Dados indisponíveis para **{ativo_selecionado.replace('.SA', '')}**.")
+                return
+
+            # Detecta Modo Estático (Sem Preço)
+            static_mode = features_fund.get('static_mode', False) or (df_completo is not None and df_completo['Close'].isnull().all())
+
+            if static_mode:
+                st.warning(f"⚠️ **MODO ESTÁTICO:** Preços indisponíveis. Exibindo apenas Análise Fundamentalista.")
+
+            tab1, tab2, tab3, tab4, tab5 = st.tabs([
+                "📊 Visão Geral", "💼 Fundamentos", "🔧 Análise Técnica", "🤖 Machine Learning", "🔬 Clusterização Geral"
+            ])
+            
+            # Abas 1-4: Lógica Padrão de Exibição (igual à versão anterior)
+            with tab1:
+                st.markdown(f"### {ativo_selecionado.replace('.SA', '')} - Resumo de Mercado")
+                col1, col2, col3, col4, col5 = st.columns(5)
+                if not static_mode and 'Close' in df_completo.columns:
+                    preco_atual = df_completo['Close'].iloc[-1]
+                    variacao_dia = df_completo['returns'].iloc[-1] * 100 if 'returns' in df_completo.columns else 0.0
+                    volume_medio = df_completo['Volume'].mean() if 'Volume' in df_completo.columns else 0.0
+                    vol_anual = features_fund.get('annual_volatility', 0) * 100
+                    col1.metric("Preço", f"R$ {preco_atual:.2f}", f"{variacao_dia:+.2f}%")
+                    col2.metric("Volume Médio", f"{volume_medio:,.0f}")
+                    col5.metric("Volatilidade", f"{vol_anual:.2f}%")
+                else:
+                    col1.metric("Preço", "N/A", "N/A"); col2.metric("Volume Médio", "N/A"); col5.metric("Volatilidade", "N/A")
+                
+                # Fallback para Setor se pynvest falhar
+                setor = features_fund.get('sector')
+                if setor == 'Unknown' or setor is None:
+                     setor = FALLBACK_SETORES.get(ativo_selecionado, 'N/A')
+
+                col3.metric("Setor", setor)
+                col4.metric("Indústria", features_fund.get('industry', 'N/A'))
+                
+                if not static_mode and not df_completo.empty and 'Open' in df_completo.columns:
+                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
+                    fig.add_trace(go.Candlestick(x=df_completo.index, open=df_completo['Open'], high=df_completo['High'], low=df_completo['Low'], close=df_completo['Close'], name='Preço'), row=1, col=1)
+                    fig.add_trace(go.Bar(x=df_completo.index, y=df_completo['Volume'], name='Volume'), row=2, col=1)
+                    
+                    template = obter_template_grafico()
+                    template['title']['text'] = f"Gráfico Diário - {ativo_selecionado}" # Define no dict
+                    fig.update_layout(**template)
+                    fig.update_layout(height=600)
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                else: st.info("Gráfico indisponível (Modo Estático Ativo).")
+
+            with tab2:
+                # --- TROCA DE ORDEM: PRIMEIRO INDICADORES PRINCIPAIS, DEPOIS TABELA GERAL ---
+                st.markdown("### Principais Métricas")
+                
+                # Helper para troca de indicadores caso NaN
+                def get_valid_metric(data, primary_key, primary_label, secondary_key, secondary_label):
+                     val = data.get(primary_key)
+                     if pd.isna(val):
+                         return secondary_label, data.get(secondary_key)
+                     return primary_label, val
+                
+                # Obtem Beta de Fallback se necessário (Yahoo Finance)
+                beta_val = features_fund.get('beta')
+                if pd.isna(beta_val):
+                     try:
+                         beta_val = yf.Ticker(ativo_selecionado).info.get('beta')
+                     except: 
+                         beta_val = np.nan
+                
+                # Linha 1
+                col1, col2, col3, col4, col5 = st.columns(5)
+                
+                # Se P/L for NaN, tenta mostrar EV/EBITDA no lugar
+                l1, v1 = get_valid_metric(features_fund, 'pe_ratio', 'P/L', 'ev_ebitda', 'EV/EBITDA')
+                col1.metric(l1, safe_format(v1))
+                
+                col2.metric("P/VP", safe_format(features_fund.get('pb_ratio', np.nan)))
+                col3.metric("ROE", safe_format(features_fund.get('roe', np.nan)))
+                col4.metric("Margem Líq.", safe_format(features_fund.get('net_margin', np.nan)))
+                col5.metric("Div. Yield", safe_format(features_fund.get('div_yield', np.nan)))
+                
+                st.write("") # Spacer
+                
+                # Linha 2
+                col1, col2, col3, col4, col5 = st.columns(5)
+                col1.metric("Dívida Bruta/PL", safe_format(features_fund.get('debt_to_equity', np.nan)))
+                col2.metric("Liq. Corrente", safe_format(features_fund.get('current_ratio', np.nan)))
+                col3.metric("EV/EBITDA", safe_format(features_fund.get('ev_ebitda', np.nan)))
+                
+                # FIX 5: Substitui 'Cresc. Receita (5a)' que estava dando N/A por ROIC (Return on Invested Capital)
+                col4.metric("ROIC", safe_format(features_fund.get('roic', np.nan))) 
+                
+                col5.metric("Beta (Yahoo)", safe_format(beta_val))
+
+                st.markdown("---")
+                st.markdown("### Tabela Geral de Indicadores")
+                
+                # Exibição de tabela expansível com TODOS os indicadores
+                with st.expander("📋 Ver Tabela Completa de Indicadores", expanded=False):
+                     # Remove chaves internas de controle antes de exibir
+                     clean_fund = {k: v for k, v in features_fund.items() if k not in ['static_mode', 'garch_volatility', 'max_drawdown']}
+                     df_fund_show = pd.DataFrame([clean_fund]).T.reset_index()
+                     df_fund_show.columns = ['Indicador', 'Valor']
+                     st.dataframe(df_fund_show, use_container_width=True, hide_index=True)
+
+            with tab3:
+                # LÓGICA ROBUSTA DE IF PARA EXIBIÇÃO DO MODELO
+                if has_price_data and has_usable_ml:
+                     st.markdown('#### 🤖 Predição de Movimento Direcional (Random Forest)')
+                     st.markdown("O modelo abaixo utiliza histórico de preços para prever a probabilidade de alta no curto prazo.")
+                     title_text_plot = "Probabilidade de Alta (0-100%)"
+                     
+                     # Exibe os gráficos de barra de ML (mantidos aqui se has_usable_ml for True)
+                     ml_data = []
+                     for asset in assets:
+                        if asset in builder.predicoes_ml:
+                            ml_info = builder.predicoes_ml[asset]
+                            ml_data.append({
+                                'Ticker': asset.replace('.SA', ''),
+                                'Score/Prob.': ml_info.get('predicted_proba_up', 0.5) * 100,
+                                'Confiança': ml_info.get('auc_roc_score', np.nan),
+                                'Modelo': ml_info.get('model_name', 'N/A')
+                            })
+                     
+                     df_ml = pd.DataFrame(ml_data)
+                
+                     if not df_ml.empty:
+                        fig_ml = go.Figure()
+                        plot_df_ml = df_ml.sort_values('Score/Prob.', ascending=False)
+                        
+                        fig_ml.add_trace(go.Bar(
+                            x=plot_df_ml['Ticker'],
+                            y=plot_df_ml['Score/Prob.'],
+                            marker=dict(
+                                color=plot_df_ml['Score/Prob.'],
+                                colorscale='Viridis', # Cor profissional
+                                showscale=True,
+                                colorbar=dict(title="Score")
+                            ),
+                            text=plot_df_ml['Score/Prob.'].round(1),
+                            textposition='outside'
+                        ))
+                        
+                        template = obter_template_grafico()
+                        fig_ml.update_layout(**template)
+                        
+                        fig_ml.update_layout(title_text=title_text_plot, yaxis_title="Score", xaxis_title="Ticker", height=400)
+                        
+                        st.plotly_chart(fig_ml, use_container_width=True)
+                        
+                        st.markdown("---")
+                        st.markdown('#### Detalhamento Técnico')
+                        df_ml_display = df_ml.copy()
+                        df_ml_display['Score/Prob.'] = df_ml_display['Score/Prob.'].round(2)
+                        df_ml_display['Confiança'] = df_ml_display['Confiança'].apply(lambda x: safe_format(x))
+                        st.dataframe(df_ml_display, use_container_width=True, hide_index=True)
+                     else:
+                         st.warning("Não há dados de ML para exibir.")
+
+
+                else:
+                     # FIX 6: Exibe a tabela de clusters e scores se o modo fallback estiver ativo
+                     st.markdown('#### 🔬 Análise de Qualidade Fundamentalista (Unsupervised Learning)')
+                     st.info("ℹ️ **Modo Fallback Ativo:** O modelo de predição supervisionada não encontrou padrões significativos ou o histórico de preços é limitado. O sistema está utilizando a **Clusterização Fundamentalista** (qualidade) como fator ML dominante.")
+                     
+                     st.markdown("##### Score Fundamentalista e Cluster por Ativo")
+                     # Garante que o df_fund_clean tem as colunas necessárias
+                     if not builder.scores_combinados.empty:
+                         df_cluster_display = builder.scores_combinados[['fundamental_score', 'Final_Cluster', 'pe_ratio', 'roe']].copy()
+                         df_cluster_display.rename(columns={'fundamental_score': 'Score Fund.', 'Final_Cluster': 'Cluster', 'pe_ratio': 'P/L', 'roe': 'ROE'}, inplace=True)
+                         
+                         st.dataframe(df_cluster_display.style.format({
+                             'Score Fund.': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}'
+                         }).background_gradient(cmap='Blues', subset=['Score Fund.']), use_container_width=True)
+                     else:
+                         st.warning("Dados de fundamentos insuficientes para exibir clusters.")
+            
+            # Reatribui tab4 e tab5 para o bloco subsequente, dependendo da existência da aba GARCH
+            if "📉 Fator Volatilidade GARCH" in tabs_list:
+                with tab4:
+                    st.markdown('#### Volatilidade Condicional (GARCH) e Histórica')
+                    
+                    # IF ROBUSTO: SÓ MOSTRA SE TIVER PREÇO
+                    if has_price_data:
+                        dados_garch = []
+                        for ativo in assets:
+                            if ativo in builder.metricas_performance.index and ativo in builder.volatilidades_garch:
+                                perf = builder.metricas_performance.loc[ativo]
+                                vol_hist = perf.get('volatilidade_anual', np.nan)
+                                vol_garch = builder.volatilidades_garch.get(ativo)
+                                
+                                if vol_garch is not None and not np.isnan(vol_garch):
+                                    status = '✓ GARCH Ajustado (Previsão de Risco)'
+                                    vol_display = vol_garch
+                                elif vol_hist is not None and not np.isnan(vol_hist): 
+                                    status = '⚠️ Histórica (Fallback)'
+                                    vol_display = vol_hist
+                                else:
+                                    status = '❌ Indisponível'
+                                    vol_display = np.nan
+                                
+                                dados_garch.append({
+                                    'Ticker': ativo.replace('.SA', ''),
+                                    'Vol. Histórica (%)': vol_hist * 100 if not np.isnan(vol_hist) else 'N/A',
+                                    'Vol. Condicional (%)': vol_display * 100 if vol_display is not None and not np.isnan(vol_display) else 'N/A',
+                                    'Status de Cálculo': status
+                                })
+                        
+                        df_garch = pd.DataFrame(dados_garch)
+                        
+                        if not df_garch.empty:
+                            fig_garch = go.Figure()
+                            
+                            # Safe filtering for plotting
+                            plot_df_garch = df_garch[df_garch['Vol. Condicional (%)'] != 'N/A'].copy()
+                            if not plot_df_garch.empty:
+                                plot_df_garch['Vol. Condicional (%)'] = plot_df_garch['Vol. Condicional (%)'].astype(float)
+                                plot_df_garch['Vol. Histórica (%)'] = plot_df_garch['Vol. Histórica (%)'].apply(lambda x: float(x) if x != 'N/A' else np.nan)
+
+                                template_colors = obter_template_grafico()['colorway']
+                                
+                                fig_garch.add_trace(go.Bar(name='Volatilidade Histórica', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Histórica (%)'], marker=dict(color=template_colors[2]), opacity=0.7)) 
+                                fig_garch.add_trace(go.Bar(name='Volatilidade Condicional', x=plot_df_garch['Ticker'], y=plot_df_garch['Vol. Condicional (%)'], marker=dict(color=template_colors[0]))) 
+                                
+                                template = obter_template_grafico()
+                                fig_garch.update_layout(**template)
+                                fig_garch.update_layout(title_text="Volatilidade Anualizada: Histórica vs. Condicional (GARCH)", yaxis_title="Volatilidade Anual (%)", barmode='group', height=400)
+                                
+                                st.plotly_chart(fig_garch, use_container_width=True)
+                            else:
+                                st.info("Dados de volatilidade insuficientes para gráfico.")
+
+                            st.dataframe(df_garch, use_container_width=True, hide_index=True)
+                        else:
+                            st.warning("Não há dados de volatilidade para exibir.")
+                    else:
+                         st.warning("⚠️ Dados de preços insuficientes para calcular volatilidade histórica ou GARCH.")
+            
+            with tab5:
+                st.markdown('#### Ranqueamento Final e Justificativas Detalhadas')
+                
+                st.markdown(f"**Pesos Adaptativos Usados:** Performance: {builder.pesos_atuais['Performance']:.2f} | Fundamentos: {builder.pesos_atuais['Fundamentos']:.2f} | Técnicos: {builder.pesos_atuais['Técnicos']:.2f} | ML: {builder.pesos_atuais['ML']:.2f}")
+                st.markdown("---")
+                
+                # Safe Rename Logic (Check columns existence first)
+                rename_map = {
+                    'total_score': 'Score Total', 
+                    'performance_score': 'Score Perf.', 
+                    'fundamental_score': 'Score Fund.', 
+                    'technical_score': 'Score Téc.', 
+                    'ml_score_weighted': 'Score ML', 
+                    'sharpe_ratio': 'Sharpe', 
+                    'pe_ratio': 'P/L', 
+                    'roe': 'ROE', 
+                    'rsi_14': 'RSI 14', 
+                    'macd_diff': 'MACD Hist.', 
+                    'ML_Proba': 'Prob. Alta ML'
+                }
+                
+                if not builder.scores_combinados.empty:
+                    # Select only existing columns to avoid KeyError
+                    cols_existentes = [col for col in rename_map.keys() if col in builder.scores_combinados.columns]
+                    df_scores_display = builder.scores_combinados[cols_existentes].copy()
+                    df_scores_display.rename(columns=rename_map, inplace=True)
+                    
+                    if 'ROE' in df_scores_display.columns:
+                         df_scores_display['ROE'] = df_scores_display['ROE'] * 100
+                         
+                    df_scores_display = df_scores_display.iloc[:15] 
+                    
+                    st.markdown("##### Ranqueamento Ponderado Multi-Fatorial (Top 15 Tickers do Universo Analisado)")
+                    
+                    # Formatação condicional
+                    format_dict = {
+                        'Score Total': '{:.3f}', 'Score Perf.': '{:.3f}', 'Score Fund.': '{:.3f}', 'Score Téc.': '{:.3f}', 'Score ML': '{:.3f}',
+                        'Sharpe': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}%', 'RSI 14': '{:.2f}', 'MACD Hist.': '{:.4f}', 'Prob. Alta ML': '{:.2f}'
+                    }
+                    final_format_dict = {k: v for k, v in format_dict.items() if k in df_scores_display.columns}
+                    
+                    st.dataframe(df_scores_display.style.format(
+                        final_format_dict
+                    ).background_gradient(cmap='Greys', subset=['Score Total'] if 'Score Total' in df_scores_display.columns else None), use_container_width=True)
+                else:
+                    st.warning("Tabela de scores indisponível (falha no processamento de dados).")
+                
+                st.markdown("---")
+                st.markdown('##### Resumo da Seleção de Ativos (Portfólio Final)')
+                
+                if not builder.justificativas_selecao:
+                    st.warning("Nenhuma justificativa gerada.")
+                else:
+                    for asset, justification in builder.justificativas_selecao.items():
+                        weight = builder.alocacao_portfolio.get(asset, {}).get('weight', 0)
+                        st.markdown(f"""
+                        <div class="info-box">
+                        <h4>{asset.replace('.SA', '')} ({weight*100:.2f}%)</h4>
+                        <p><strong>Fatores-Chave:</strong> {justification}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+            
+            # Botão Recalibrar Centralizado no Final
+            st.markdown("---")
+            col_space1, col_btn, col_space2 = st.columns([1, 1, 1])
+            with col_btn:
+                if st.button("🔄 Recalibrar Perfil e Otimizar Novamente", type="primary", use_container_width=True):
+                    st.session_state.builder_complete = False
+                    st.session_state.builder = None
+                    st.session_state.profile = {}
+                    st.rerun()
 
 def main():
     if 'builder' not in st.session_state:
