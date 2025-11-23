@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.1 (Update: Login TVDatafeed Validado)
+Versão: 9.33 (Update: Fix PyArrow Types & Streamlit Width Deprecation)
 =============================================================================
 """
 
@@ -1696,7 +1696,7 @@ def aba_construtor_portfolio():
                         })
                 
                 df_alloc = pd.DataFrame(alloc_table)
-                st.dataframe(df_alloc, use_container_width=True, hide_index=True)
+                st.dataframe(df_alloc, width='stretch', hide_index=True)
         
         with tab2:
             st.markdown('#### Métricas Chave do Portfólio (Histórico Recente)')
@@ -1787,7 +1787,7 @@ def aba_construtor_portfolio():
                 df_ml_display = df_ml.copy()
                 df_ml_display['Score/Prob.'] = df_ml_display['Score/Prob.'].round(2)
                 df_ml_display['Confiança'] = df_ml_display['Confiança'].apply(lambda x: safe_format(x))
-                st.dataframe(df_ml_display, use_container_width=True, hide_index=True)
+                st.dataframe(df_ml_display, width='stretch', hide_index=True)
             else:
                 st.warning("Não há dados de ML para exibir.")
         
@@ -1844,7 +1844,7 @@ def aba_construtor_portfolio():
                     else:
                         st.info("Dados de volatilidade insuficientes para gráfico.")
 
-                    st.dataframe(df_garch, use_container_width=True, hide_index=True)
+                    st.dataframe(df_garch, width='stretch', hide_index=True)
                 else:
                     st.warning("Não há dados de volatilidade para exibir.")
             else:
@@ -1893,7 +1893,7 @@ def aba_construtor_portfolio():
                 
                 st.dataframe(df_scores_display.style.format(
                     final_format_dict
-                ).background_gradient(cmap='Greys', subset=['Score Total'] if 'Score Total' in df_scores_display.columns else None), use_container_width=True)
+                ).background_gradient(cmap='Greys', subset=['Score Total'] if 'Score Total' in df_scores_display.columns else None), width='stretch')
             else:
                 st.warning("Tabela de scores indisponível (falha no processamento de dados).")
             
@@ -2068,7 +2068,9 @@ def aba_analise_individual():
                      clean_fund = {k: v for k, v in features_fund.items() if k not in ['static_mode', 'garch_volatility', 'max_drawdown']}
                      df_fund_show = pd.DataFrame([clean_fund]).T.reset_index()
                      df_fund_show.columns = ['Indicador', 'Valor']
-                     st.dataframe(df_fund_show, use_container_width=True, hide_index=True)
+                     # --- FIX ARROW ERROR: FORÇA CONVERSÃO PARA STRING PARA EVITAR ERRO DE TIPOS MISTOS ---
+                     df_fund_show['Valor'] = df_fund_show['Valor'].astype(str)
+                     st.dataframe(df_fund_show, width='stretch', hide_index=True)
 
             with tab3:
                 if not static_mode:
