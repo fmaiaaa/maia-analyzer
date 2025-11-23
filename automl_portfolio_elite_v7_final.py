@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.16 (Update: FIX NameError (Scope) & Add TvDatafeed Head Debug)
+Versão: 9.32.19 (Update: FIX ML data scarcity + RESTORE FULL UI CENTRALIZATION)
 =============================================================================
 """
 
@@ -121,7 +121,7 @@ ATIVOS_IBOVESPA = [
 
 ATIVOS_POR_SETOR_IBOV = {
     'Bens Industriais': ['EMBR3.SA', 'VAMO3.SA', 'WEGE3.SA', 'VIVA3.SA', 'ASAI3.SA', 'SMFT3.SA', 'CMIN3.SA', 'SLCE3.SA'],
-    'Consumo Cíclico': ['AZZA3.SA', 'ALOS3.SA', 'CEAB3.SA', 'COGN3.SA', 'CURY3.SA', 'CVCB3.SA', 'CYRE3.SA', 'DIRR3.SA', 'LREN3.SA', 'MGLU3.SA', 'MRVE3.SA', 'RENT3.SA', 'YDUQ3.SA'],
+    'Consumo Cíclico': ['AZZA3.SA', 'ALOS3.SA', 'CEAB3.SA', 'COGN3.SA', 'CURY3.SA', 'CVCB3.SA', 'CYRE3.SA', 'DIRR3.SA', 'LREN3.SA', 'MGLU3.SA', 'MRVE3.SA', 'MULT3.SA', 'NATU3.SA', 'PCAR3.SA', 'RENT3.SA', 'YDUQ3.SA'],
     'Consumo não Cíclico': ['BEEF3.SA', 'NATU3.SA', 'PCAR3.SA', 'VIVA3.SA'], 
     'Financeiro': ['B3SA3.SA', 'BBSE3.SA', 'BBDC3.SA', 'BBDC4.SA', 'BBAS3.SA', 'BPAC11.SA', 'CXSE3.SA', 'HYPE3.SA', 'IGTI11.SA', 'IRBR3.SA', 'ITSA4.SA', 'ITUB4.SA', 'MULT3.SA', 'PSSA3.SA', 'RDOR3.SA', 'SANB11.SA'],
     'Materiais Básicos': ['BRAP4.SA', 'BRKM5.SA', 'CSNA3.SA', 'GGBR4.SA', 'GOAU4.SA', 'KLBN11.SA', 'POMO4.SA', 'SUZB3.SA', 'USIM5.SA', 'VALE3.SA'],
@@ -786,6 +786,8 @@ class ColetorDadosLive(object):
                 df_model = df.dropna(subset=current_features + ['Future_Direction'])
                 
                 if len(df_model) > 50:
+                    log_debug(f"ML Individual: {len(df_model)} pontos válidos para treino. Treinando RF...")
+
                     X = df_model[current_features].iloc[:-5]
                     y = df_model['Future_Direction'].iloc[:-5]
                     model = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
@@ -997,13 +999,17 @@ class ConstrutorPortfolioAutoML:
 
                 df['Future_Direction'] = np.where(df['Close'].pct_change(dias_lookback_ml).shift(-dias_lookback_ml) > 0, 1, 0)
                 current_features = [f for f in features_ml if f in df.columns]
+                # A LINHA CRÍTICA que causa a perda de dados. Mantemos o mínimo para 30.
                 df_model = df.dropna(subset=current_features + ['Future_Direction'])
                 
                 if len(df_model) < 30:
                     self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.5, 'model_name': 'Dados Insuficientes'}
-                    log_debug(f"ML (Ignorado): Ativo {ativo} pulado. Apenas {len(df_model)} pontos de dados válidos para treino.")
+                    log_debug(f"ML (Ignorado): Ativo {ativo} pulado. Apenas {len(df_model)} pontos de dados válidos para treino. Mínimo é 30.")
                     continue
                 
+                log_debug(f"ML (Supervisionado): Ativo {ativo} tem {len(df_model)} pontos válidos para treino (Mín. 30).")
+
+
                 X = df_model[current_features].iloc[:-dias_lookback_ml]
                 y = df_model['Future_Direction'].iloc[:-dias_lookback_ml]
                 if 'Cluster' in X.columns: X['Cluster'] = X['Cluster'].astype(str)
