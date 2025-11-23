@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.0 (Update: Robust ML Fallback & Individual Analysis Tweaks)
+Versão: 9.32.1 (Update: Login TVDatafeed Validado)
 =============================================================================
 """
 
@@ -362,10 +362,18 @@ class ColetorDadosLive(object):
         self.metricas_simples = {}
         
         try:
-            self.tv = TvDatafeed('fmaiaaa102', 'Cabuloso.102') 
+            # --- CREDENCIAIS TRADINGVIEW ---
+            # Confirmação: A sintaxe TvDatafeed(user, pass) habilita o login corretamente.
+            # DICA DE SEGURANÇA: Evite deixar senhas hardcoded em código compartilhado.
+            # Considere usar st.secrets ou variáveis de ambiente em produção.
+            self.usuario_tv = 'fmaiaaa102' 
+            self.senha_tv = 'Cabuloso.102'
+
+            self.tv = TvDatafeed(self.usuario_tv, self.senha_tv) 
             self.tv_ativo = True
+            
         except Exception as e:
-            st.error(f"Erro ao inicializar tvDatafeed: {e}")
+            st.error(f"Erro ao inicializar tvDatafeed (Login Falhou): {e}")
             self.tv_ativo = False
         
         try:
@@ -402,7 +410,7 @@ class ColetorDadosLive(object):
             'pct_var_30d': 'pct_var_30d', 'pct_var_12m': 'pct_var_12m', 'pct_var_ano_a0': 'pct_var_ano_a0',
             'pct_var_ano_a1': 'pct_var_ano_a1', 'pct_var_ano_a2': 'pct_var_ano_a2', 'pct_var_ano_a3': 'pct_var_ano_a3',
             'pct_var_ano_a4': 'pct_var_ano_a4', 'pct_var_ano_a5': 'pct_var_ano_a5', 
-            'vlr_ind_p_sobre_ebit': 'p_ebit', 'vlr_ind_psr': 'psr', 'vlr_ind_p_sobre_ativ': 'p_ativo',
+            'vlr_ind_p_sobre_ebit': 'p_ebit', 'vlr_ind_psr': 'psr', 'vlr_ind_p_sobre_ativ': 'p_ativ',
             'vlr_ind_p_sobre_cap_giro': 'p_cap_giro', 'vlr_ind_p_sobre_ativ_circ_liq': 'p_ativ_circ_liq',
             'vlr_ind_ev_sobre_ebit': 'ev_ebit', 'vlr_ind_lpa': 'lpa', 'vlr_ind_vpa': 'vpa',
             'vlr_ind_margem_bruta': 'margem_bruta', 'vlr_ind_ebit_sobre_ativo': 'ebit_ativo',
