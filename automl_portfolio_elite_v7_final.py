@@ -366,7 +366,7 @@ class ColetorDadosLive(object):
             # Confirmação: A sintaxe TvDatafeed(user, pass) habilita o login corretamente.
             # DICA DE SEGURANÇA: Evite deixar senhas hardcoded em código compartilhado.
             # Considere usar st.secrets ou variáveis de ambiente em produção.
-            self.usuario_tv = 'fmaiaaa102' 
+            self.usuario_tv = 'maiathekid777' 
             self.senha_tv = 'Cabuloso.102'
 
             self.tv = TvDatafeed(self.usuario_tv, self.senha_tv) 
