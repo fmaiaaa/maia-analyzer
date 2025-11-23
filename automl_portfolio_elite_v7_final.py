@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.34 (Update: FIX Case Sensitivity for Indicators and Final Scope Fix)
+Versão: 9.32.33 (Update: FINAL SCOPE FIX 4 - Cleaning final block to resolve NameError)
 =============================================================================
 """
 
@@ -748,24 +748,17 @@ class ColetorDadosLive(object):
                 df_tecnicos.loc[pd.Timestamp.today()] = [np.nan] * len(df_tecnicos.columns)
             else:
                 log_debug(f"Ativo {simbolo}: Enriquecendo dados técnicos...")
-                
-                # --- CORREÇÃO DE CASE SENSITIVITY ---
                 rename_map = {
                     'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
                 }
+                df_tecnicos.rename(columns=rename_map, inplace=True)
                 
-                # 1. Renomear as colunas para Title Case
-                current_cols = df_tecnicos.columns
-                rename_dict = {}
-                for col in current_cols:
-                    # Lógica para colunas do YFinance (Title Case) e TvDatafeed (Lowercase ou TitleCase com prefixo)
-                    if col.lower() in rename_map:
-                        df_tecnicos.rename(columns={col: rename_map[col.lower()]}, inplace=True)
-                    elif ':' in str(col) and str(col).split(':')[-1].lower() in rename_map:
-                         base_col = str(col).split(':')[-1].lower()
-                         df_tecnicos.rename(columns={col: rename_map[base_col]}, inplace=True)
-                         
-                
+                for col in df_tecnicos.columns:
+                    if ':' in str(col):
+                        base_col = str(col).split(':')[-1]
+                        if base_col in rename_map:
+                            df_tecnicos.rename(columns={col: rename_map[base_col]}, inplace=True)
+
                 if 'Close' in df_tecnicos.columns:
                     # Aplicar o enriquecimento de features expandido
                     if not df_tecnicos.empty:
@@ -821,9 +814,9 @@ class ColetorDadosLive(object):
                         garch_vol = garch_std_daily * np.sqrt(252)
                         if np.isnan(garch_vol) or garch_vol == 0: raise ValueError("GARCH returned NaN or zero.")
                         log_debug(f"Ativo {simbolo}: GARCH concluído. Vol Condicional: {garch_vol*100:.2f}%.")
-                    except Exception:
+                    except Exception as e:
                         garch_vol = vol_anual 
-                        log_debug(f"Ativo {simbolo}: GARCH falhou (Vol Histórica como Vol Condicional).")
+                        log_debug(f"Ativo {simbolo}: GARCH falhou ({str(e)[:20]}). Usando Vol Histórica como Vol Condicional.")
                 # --- FIM DA IMPLEMENTAÇÃO GARCH ---
             
             fund_data.update({
@@ -1967,7 +1960,6 @@ def main():
     # Renderizar as abas DEPOIS que todas as funções de aba foram definidas
     tabs_list = ["📚 Metodologia", "🎯 Seleção de Ativos", "🏗️ Construtor de Portfólio", "🔍 Análise Individual", "📖 Referências"]
     
-    # Este é o ponto onde o NameError pode ocorrer. Garantimos que todas as funções sejam definidas.
     tab1, tab2, tab3, tab4, tab5 = st.tabs(tabs_list)
     
     # Chamadas às funções de aba
