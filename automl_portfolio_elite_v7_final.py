@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.32 (Update: FINAL SCOPE FIX 3, ML/GARCH ROBUSTNESS, REMOVE DEBUG)
+Versão: 9.32.33 (Update: FINAL SCOPE FIX 4 - Cleaning final block to resolve NameError)
 =============================================================================
 """
 
@@ -318,9 +318,9 @@ class CalculadoraTecnica:
         df['price_sma20_ratio'] = df['Close'] / df.get('sma_20')
         df['price_sma50_ratio'] = df['Close'] / df.get('sma_50')
         df['price_sma200_ratio'] = df['Close'] / df.get('sma_200')
-        df['sma20_sma50_cross'] = (df.get('sma_20', pd.Series(0)) > df.get('sma_50', pd.Series(0))).astype(int)
-        df['sma50_sma200_cross'] = (df.get('sma_50', pd.Series(0)) > df.get('sma_200', pd.Series(0))).astype(int)
-        df['death_cross'] = (df['Close'] < df.get('sma_200', pd.Series(0))).astype(int)
+        df['sma20_sma50_cross'] = (df.get('sma_20', pd.Series(0, index=df.index)) > df.get('sma_50', pd.Series(0, index=df.index))).astype(int)
+        df['sma50_sma200_cross'] = (df.get('sma_50', pd.Series(0, index=df.index)) > df.get('sma_200', pd.Series(0, index=df.index))).astype(int)
+        df['death_cross'] = (df['Close'] < df.get('sma_200', pd.Series(0, index=df.index))).astype(int)
         
         # 4. RSI (múltiplos períodos)
         for periodo in [7, 14, 21, 28]:
@@ -426,8 +426,6 @@ class CalculadoraTecnica:
         df['week_of_year'] = df.index.isocalendar().week
         
         # O DROPNA É AQUI: Retorna o DataFrame removendo TODAS as linhas que contêm NaN
-        # Isso garante que apenas dados completos (onde todos os indicadores puderam ser calculados)
-        # sejam usados para o treino, resolvendo a falha de "0 pontos válidos".
         return df.dropna(axis=0, how='any')
 
 # =============================================================================
@@ -1959,12 +1957,12 @@ def main():
 
     st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos</h1>', unsafe_allow_html=True)
     
-    # Esta linha foi simplificada no código de produção para uso das abas
+    # Renderizar as abas DEPOIS que todas as funções de aba foram definidas
     tabs_list = ["📚 Metodologia", "🎯 Seleção de Ativos", "🏗️ Construtor de Portfólio", "🔍 Análise Individual", "📖 Referências"]
     
-    # Este é o ponto onde o NameError pode ocorrer. Garantimos que todas as funções sejam definidas.
     tab1, tab2, tab3, tab4, tab5 = st.tabs(tabs_list)
     
+    # Chamadas às funções de aba
     with tab1: aba_introducao()
     with tab2: aba_selecao_ativos()
     with tab3: aba_construtor_portfolio()
