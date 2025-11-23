@@ -1714,7 +1714,7 @@ def aba_construtor_portfolio():
                     fig_alloc.update_layout(**template)
                     fig_alloc.update_layout(title_text="Distribuição Otimizada por Ativo")
                     
-                    st.plotly_chart(fig_alloc, use_container_width=True)
+                    st.plotly_chart(fig_alloc, width=True)
                 else:
                     st.warning("Nenhuma alocação significativa para exibir. Otimização não retornou pesos.")
             
@@ -1748,7 +1748,7 @@ def aba_construtor_portfolio():
                         })
                 
                 df_alloc = pd.DataFrame(alloc_table)
-                st.dataframe(df_alloc, use_container_width=True, hide_index=True)
+                st.dataframe(df_alloc, width=True, hide_index=True)
         
         with tab2:
             st.markdown('#### Métricas Chave do Portfólio (Histórico Recente)')
@@ -1782,7 +1782,7 @@ def aba_construtor_portfolio():
                 template = obter_template_grafico()
                 fig_cum.update_layout(**template)
                 fig_cum.update_layout(title_text="Retorno Acumulado dos Tickers Selecionados", yaxis_title="Retorno Acumulado (Base 1)", xaxis_title="Data", height=500)
-                st.plotly_chart(fig_cum, use_container_width=True)
+                st.plotly_chart(fig_cum, width=True)
             else:
                 st.info("Gráfico de retorno indisponível (Modo Estático Ativo - Sem histórico de preços).")
         
@@ -1832,14 +1832,14 @@ def aba_construtor_portfolio():
                 
                 fig_ml.update_layout(title_text=title_text_plot, yaxis_title="Score", xaxis_title="Ticker", height=400)
                 
-                st.plotly_chart(fig_ml, use_container_width=True)
+                st.plotly_chart(fig_ml, width=True)
                 
                 st.markdown("---")
                 st.markdown('#### Detalhamento Técnico')
                 df_ml_display = df_ml.copy()
                 df_ml_display['Score/Prob.'] = df_ml_display['Score/Prob.'].round(2)
                 df_ml_display['Confiança'] = df_ml_display['Confiança'].apply(lambda x: safe_format(x))
-                st.dataframe(df_ml_display, use_container_width=True, hide_index=True)
+                st.dataframe(df_ml_display, width=True, hide_index=True)
             else:
                 st.warning("Não há dados de ML para exibir.")
         
@@ -1892,11 +1892,11 @@ def aba_construtor_portfolio():
                         fig_garch.update_layout(**template)
                         fig_garch.update_layout(title_text="Volatilidade Anualizada: Histórica vs. Condicional (GARCH)", yaxis_title="Volatilidade Anual (%)", barmode='group', height=400)
                         
-                        st.plotly_chart(fig_garch, use_container_width=True)
+                        st.plotly_chart(fig_garch, width=True)
                     else:
                         st.info("Dados de volatilidade insuficientes para gráfico.")
 
-                    st.dataframe(df_garch, use_container_width=True, hide_index=True)
+                    st.dataframe(df_garch, width=True, hide_index=True)
                 else:
                     st.warning("Não há dados de volatilidade para exibir.")
             else:
@@ -1945,7 +1945,7 @@ def aba_construtor_portfolio():
                 
                 st.dataframe(df_scores_display.style.format(
                     final_format_dict
-                ).background_gradient(cmap='Greys', subset=['Score Total'] if 'Score Total' in df_scores_display.columns else None), use_container_width=True)
+                ).background_gradient(cmap='Greys', subset=['Score Total'] if 'Score Total' in df_scores_display.columns else None), width=True)
             else:
                 st.warning("Tabela de scores indisponível (falha no processamento de dados).")
             
@@ -1968,7 +1968,7 @@ def aba_construtor_portfolio():
         st.markdown("---")
         col_space1, col_btn, col_space2 = st.columns([1, 1, 1])
         with col_btn:
-            if st.button("🔄 Recalibrar Perfil e Otimizar Novamente", type="primary", use_container_width=True):
+            if st.button("🔄 Recalibrar Perfil e Otimizar Novamente", type="primary", width=True):
                 st.session_state.builder_complete = False
                 st.session_state.builder = None
                 st.session_state.profile = {}
@@ -2004,7 +2004,7 @@ def aba_analise_individual():
     # Botão Centralizado Abaixo
     c1, c2, c3 = st.columns([1, 1, 1])
     with c2:
-        if st.button("🔄 Executar Análise", key='analyze_asset_button_v8', type="primary", use_container_width=True):
+        if st.button("🔄 Executar Análise", key='analyze_asset_button_v8', type="primary", width=True):
             st.session_state.analisar_ativo_triggered = True 
     
     if 'analisar_ativo_triggered' not in st.session_state or not st.session_state.analisar_ativo_triggered:
@@ -2067,7 +2067,7 @@ def aba_analise_individual():
                     fig.update_layout(**template)
                     fig.update_layout(height=600)
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width=True)
                 else: st.info("Gráfico indisponível (Modo Estático Ativo).")
 
             with tab2:
@@ -2120,7 +2120,7 @@ def aba_analise_individual():
                      clean_fund = {k: v for k, v in features_fund.items() if k not in ['static_mode', 'garch_volatility', 'max_drawdown']}
                      df_fund_show = pd.DataFrame([clean_fund]).T.reset_index()
                      df_fund_show.columns = ['Indicador', 'Valor']
-                     st.dataframe(df_fund_show, use_container_width=True, hide_index=True)
+                     st.dataframe(df_fund_show, width=True, hide_index=True)
 
             with tab3:
                 if not static_mode:
@@ -2138,7 +2138,7 @@ def aba_analise_individual():
                     fig_rsi.update_layout(**template)
                     fig_rsi.update_layout(height=300)
                     
-                    st.plotly_chart(fig_rsi, use_container_width=True)
+                    st.plotly_chart(fig_rsi, width=True)
                     
                     # Gráfico MACD
                     fig_macd = make_subplots(rows=1, cols=1)
@@ -2151,7 +2151,7 @@ def aba_analise_individual():
                     fig_macd.update_layout(**template)
                     fig_macd.update_layout(height=300)
                     
-                    st.plotly_chart(fig_macd, use_container_width=True)
+                    st.plotly_chart(fig_macd, width=True)
                     
                     # Gráfico BB
                     rolling_mean = df_completo['Close'].rolling(window=20).mean()
@@ -2169,7 +2169,7 @@ def aba_analise_individual():
                     fig_bb.update_layout(**template)
                     fig_bb.update_layout(height=400)
                     
-                    st.plotly_chart(fig_bb, use_container_width=True)
+                    st.plotly_chart(fig_bb, width=True)
                     
                 else: st.warning("Análise Técnica não disponível sem histórico de preços.")
 
@@ -2198,7 +2198,7 @@ def aba_analise_individual():
                     template['title']['text'] = 'Top 5 Fatores de Decisão'
                     fig_imp.update_layout(**template)
                     fig_imp.update_layout(height=300)
-                    st.plotly_chart(fig_imp, use_container_width=True)
+                    st.plotly_chart(fig_imp, width=True)
 
             with tab5: 
                 st.markdown("### 🔬 Clusterização Geral (Ibovespa)")
@@ -2249,7 +2249,7 @@ def aba_analise_individual():
                         fig_pca.update_layout(**template)
                         fig_pca.update_layout(height=500)
                     
-                    st.plotly_chart(fig_pca, use_container_width=True)
+                    st.plotly_chart(fig_pca, width=True)
                     
                     # Identifica pares
                     if ativo_selecionado in resultado_cluster.index:
