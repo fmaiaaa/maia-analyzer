@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.19 (Update: FIX ML data scarcity + RESTORE FULL UI CENTRALIZATION)
+Versão: 9.32.20 (Update: ADD Min Score Selection Filter & Isolation Forest Visualization)
 =============================================================================
 """
 
@@ -86,7 +86,7 @@ MIN_DIAS_HISTORICO = 252
 NUM_ATIVOS_PORTFOLIO = 5
 TAXA_LIVRE_RISCO = 0.1075
 LOOKBACK_ML = 30
-SCORE_PERCENTILE_THRESHOLD = 0.85 
+SCORE_PERCENTILE_THRESHOLD = 0.85 # Limite para definir o score mínimo de inclusão (85% do score do 15º melhor ativo)
 
 # Pesos de alocação (Markowitz - Lógica Analyzer)
 PESO_MIN = 0.10
@@ -1142,17 +1142,50 @@ class ConstrutorPortfolioAutoML:
         
         log_debug(f"Calculando Scores Ponderados. Horizonte: {horizonte_tempo}. Pesos Finais: Fund={w_fund_final:.2f}, Tec={w_tech_final:.2f}, ML={W_ML_GLOBAL_BASE:.2f}.")
 
+        # -------------------------------------------------------------
+        # 1. CRITÉRIO DE INCLUSÃO: FILTRO DE SCORE MÍNIMO
+        # -------------------------------------------------------------
+        if len(self.scores_combinados) > NUM_ATIVOS_PORTFOLIO:
+            # Pega o score do 15º ativo (ou o último, se a lista for menor que 15)
+            # Para definir um score de corte que exclui os piores 15% (ou mais)
+            cutoff_index = min(15, len(self.scores_combinados) - 1)
+            base_score = self.scores_combinados['total_score'].iloc[cutoff_index]
+            
+            # Define o score mínimo como 85% do score base (um filtro de qualidade)
+            min_score = base_score * SCORE_PERCENTILE_THRESHOLD
+            
+            ativos_filtrados = self.scores_combinados[self.scores_combinados['total_score'] >= min_score]
+            
+            num_eliminados = len(self.scores_combinados) - len(ativos_filtrados)
+            log_debug(f"Score Mínimo Requerido: {min_score:.3f} ({SCORE_PERCENTILE_THRESHOLD*100:.0f}% do score base).")
+            log_debug(f"Ativos eliminados pelo filtro de score: {num_eliminados}")
+            
+            self.scores_combinados = ativos_filtrados
+            
+        # -------------------------------------------------------------
+        # 2. SELEÇÃO FINAL POR CLUSTER
+        # -------------------------------------------------------------
         self.realizar_clusterizacao_final()
         final_selection = []
+        
         if not self.scores_combinados.empty and 'Final_Cluster' in self.scores_combinados.columns:
             clusters_present = self.scores_combinados['Final_Cluster'].unique()
             for c in clusters_present:
+                # Pega o melhor ativo de cada cluster (o de maior 'total_score')
                 best = self.scores_combinados[self.scores_combinados['Final_Cluster'] == c].head(1).index[0]
                 final_selection.append(best)
         
+        # Adiciona os restantes, se o número de clusters for menor que o portfólio
         if len(final_selection) < NUM_ATIVOS_PORTFOLIO:
             others = [x for x in self.scores_combinados.index if x not in final_selection]
-            final_selection.extend(others[:NUM_ATIVOS_PORTFOLIO - len(final_selection)])
+            # Prioriza os melhores scores dos que sobraram
+            remaining_to_add = NUM_ATIVOS_PORTFOLIO - len(final_selection)
+            
+            if remaining_to_add > 0:
+                 # Garante que 'others' é ordenado por score
+                 others_df = self.scores_combinados.loc[others].sort_values('total_score', ascending=False)
+                 final_selection.extend(others_df.index[:remaining_to_add].tolist())
+
         self.ativos_selecionados = final_selection[:NUM_ATIVOS_PORTFOLIO]
         log_debug(f"Seleção final concluída. {len(self.ativos_selecionados)} ativos selecionados: {self.ativos_selecionados}")
 
@@ -1373,12 +1406,16 @@ class AnalisadorIndividualAtivos:
         
         # 2. Isolation Forest para Detecção de Anomalia
         iso_forest = IsolationForest(contamination=0.1, random_state=42)
-        anomalies = iso_forest.fit_predict(componentes_pca)
+        # Atenção: O Isolation Forest treina e prediz, e .decision_function dá o score de anomalia (mais negativo = mais anômalo)
+        anomalies = iso_forest.fit_predict(dados_normalizados) # 1 = normal, -1 = outlier
+        anomaly_score = iso_forest.decision_function(dados_normalizados)
+
         
         cols_pca = [f'PC{i+1}' for i in range(n_components)]
         resultado = pd.DataFrame(componentes_pca, columns=cols_pca, index=df_model.index)
         resultado['Cluster'] = clusters
         resultado['Anomalia'] = anomalies # 1 = Normal, -1 = Anomalia (Outlier)
+        resultado['Anomaly_Score'] = anomaly_score # Quanto maior, menos anômalo
         
         log_debug(f"Clusterização geral concluída. {len(df_model)} ativos processados. Identificados {n_clusters} clusters.")
         return resultado, n_clusters
@@ -1406,7 +1443,7 @@ def configurar_pagina():
         /* Modern Font */
         body, .stApp { font-family: 'Inter', 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important; background-color: var(--background-light); color: var(--text-color); }
         
-        /* Main Header */
+        /* Main Header - Mantido Centralizado */
         .main-header { 
             font-family: 'Inter', sans-serif; 
             color: #111; 
@@ -1427,39 +1464,24 @@ def configurar_pagina():
             margin-bottom: 20px;
         }
         
-        /* Metrics */
-        .stMetric { 
-            background-color: #ffffff; 
-            border: 1px solid #eee; 
-            border-radius: 10px; 
-            padding: 15px; 
-            box-shadow: 0 2px 5px rgba(0,0,0,0.03); 
+        /* Regras de centralização do design original, ajustadas para ocupar a largura */
+        /* H2 e H3 CENTRALIZADOS */
+        h2, h3 {
+            text-align: center !important;
         }
-        .stMetric label { font-weight: 600; color: #555; font-size: 0.9rem; }
-        .stMetric div[data-testid="stMetricValue"] { font-weight: 700; color: #111; font-size: 1.6rem; }
-        
-        /* Buttons */
-        .stButton button { 
-            border-radius: 8px; 
-            font-weight: 600; 
-            border: 1px solid #333; 
-            color: #333;
-            transition: all 0.2s;
+
+        /* Metrics (centralizados) */
+        [data-testid="stMetric"] {
+            text-align: center;
+            margin: auto;
         }
-        .stButton button:hover { 
-            background-color: #333; 
-            color: white; 
-            border-color: #333;
-            transform: translateY(-1px);
-            box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        [data-testid="stMetricLabel"] {
+            justify-content: center;
+            text-align: center;
+            width: 100%;
         }
-        .stButton button[kind="primary"] { 
-            background-color: #111; 
-            color: white; 
-            border: none; 
-        }
-        
-        /* Tabs */
+
+        /* Tabs (centralizadas) */
         .stTabs [data-baseweb="tab-list"] { 
             border-bottom: 1px solid #eee; 
             gap: 10px;
@@ -1476,34 +1498,38 @@ def configurar_pagina():
             background-color: white; 
             border-bottom: 2px solid #111;
         }
+        /* FIM DAS REGRAS DE CENTRALIZAÇÃO RESTAURADAS */
+
+
+        /* Outros estilos básicos */
+        .stMetric { 
+            background-color: #ffffff; 
+            border: 1px solid #eee; 
+            border-radius: 10px; 
+            padding: 15px; 
+            box-shadow: 0 2px 5px rgba(0,0,0,0.03); 
+        }
+        .stMetric label { font-weight: 600; color: #555; font-size: 0.9rem; }
+        .stMetric div[data-testid="stMetricValue"] { font-weight: 700; color: #111; font-size: 1.6rem; }
         
-        /* Expanders */
+        .stButton button { 
+            border-radius: 8px; 
+            font-weight: 600; 
+            border: 1px solid #333; 
+            color: #333;
+            transition: all 0.2s;
+        }
+        .stButton button[kind="primary"] { 
+            background-color: #111; 
+            color: white; 
+            border: none; 
+        }
+        .dataframe { font-size: 0.9rem; }
         .streamlit-expanderHeader { 
             font-weight: 600; 
             color: #333; 
             background-color: #fff; 
             border-radius: 8px;
-        }
-        
-        /* Tables */
-        .dataframe { font-size: 0.9rem; }
-        
-        /* Centralização de Títulos */
-        h1, h2, h3 {
-            text-align: center !important;
-        }
-        
-        /* Centralização de Métricas */
-        [data-testid="stMetric"] {
-            text-align: center;
-            margin: auto;
-        }
-        
-        /* Centralizar Labels de Métricas */
-        [data-testid="stMetricLabel"] {
-            justify-content: center;
-            text-align: center;
-            width: 100%;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -2438,6 +2464,30 @@ def aba_analise_individual():
                 if resultado_cluster is not None:
                     st.success(f"Identificados {n_clusters} grupos (clusters) de qualidade fundamentalista.")
                     
+                    # --- NOVO: GRÁFICO E TABELA DE ANOMALIA (ISOLATION FOREST) ---
+                    
+                    # Gráfico 2D da Detecção de Anomalia
+                    fig_anomaly = px.scatter(
+                        resultado_cluster, x='PC1', y='PC2',
+                        color=resultado_cluster['Anomalia'].astype(str).replace({'1': 'Normal', '-1': 'Outlier/Anomalia'}),
+                        hover_name=resultado_cluster.index.str.replace('.SA', ''), 
+                        color_discrete_map={'Normal': '#27AE60', 'Outlier/Anomalia': '#C0392B'},
+                        title="Detecção de Anomalias (Isolation Forest) no Espaço PCA 2D"
+                    )
+                    template = obter_template_grafico()
+                    fig_anomaly.update_layout(**template)
+                    fig_anomaly.update_layout(height=500)
+                    st.plotly_chart(fig_anomaly, use_container_width=False, width='stretch')
+                    
+                    # Tabela de Anomalia
+                    st.markdown('##### Tabela de Scores de Anomalia (Quanto maior, mais normal)')
+                    df_anomaly_show = resultado_cluster[['Anomaly_Score', 'Anomalia']].copy()
+                    df_anomaly_show.rename(columns={'Anomaly_Score': 'Score Anomalia', 'Anomalia': 'Status'}, inplace=True)
+                    df_anomaly_show['Status'] = df_anomaly_show['Status'].replace({1: 'Normal', -1: 'Outlier/Anomalia'})
+                    
+                    st.dataframe(df_anomaly_show.sort_values('Score Anomalia', ascending=False), use_container_width=False, width='stretch')
+                    st.markdown("---")
+                    
                     # Visualização 3D SE TIVER 3 COMPONENTES
                     if 'PC3' in resultado_cluster.columns:
                         fig_pca = px.scatter_3d(
@@ -2450,7 +2500,7 @@ def aba_analise_individual():
                         )
                         
                         template = obter_template_grafico()
-                        template['title']['text'] = "Mapa de Similaridade 3D (Global)"
+                        template['title']['text'] = "Mapa de Similaridade 3D (Global) por Cluster"
                         # Ajusta template para 3D scene
                         fig_pca.update_layout(
                             title=template['title'],
@@ -2467,10 +2517,11 @@ def aba_analise_individual():
                             resultado_cluster, x='PC1', y='PC2', 
                             color=resultado_cluster['Cluster'].astype(str),
                             hover_name=resultado_cluster.index.str.replace('.SA', ''), 
-                            color_discrete_sequence=obter_template_grafico()['colorway']
+                            color_discrete_sequence=obter_template_grafico()['colorway'],
+                            title="Mapa de Similaridade 2D (Global) por Cluster"
                         )
                         template = obter_template_grafico()
-                        template['title']['text'] = "Mapa de Similaridade 2D (Global)"
+                        # Título já definido acima
                         fig_pca.update_layout(**template)
                         fig_pca.update_layout(height=500)
                     
