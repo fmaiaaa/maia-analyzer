@@ -3135,7 +3135,10 @@ def main():
     configurar_pagina()
     st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos</h1>', unsafe_allow_html=True)
     
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📚 Metodologia", "🎯 Seleção de Ativos", "🏗️ Construtor de Portfólio", "🔍 Análise Individual", "📖 Referências"])
+    # Esta linha foi simplificada no código de produção para uso das abas
+    tabs_list = ["📚 Metodologia", "🎯 Seleção de Ativos", "🏗️ Construtor de Portfólio", "🔍 Análise Individual", "📖 Referências"]
+    
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(tabs_list)
     
     with tab1: aba_introducao()
     with tab2: aba_selecao_ativos()
