@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.32 (Update: ML MODES (FAST/FULL), FALLBACK LOGIC, FIX X_TEST ERROR, REVERTED TECHNICAL CHARTS)
+Versão: 9.32.33 (Update: ADVANCED AUTO GARCH, ML/GARCH FIXES, UI TITTLE CORRECTION)
 =============================================================================
 """
 
@@ -69,6 +69,7 @@ from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer 
+from tqdm import tqdm # Necessário para a função GARCH avançada
 
 # NOVO: Adicionando LightGBM e XGBoost (para o modo FULL)
 try:
@@ -493,7 +494,7 @@ class OtimizadorPortfolioAvancado:
 # =============================================================================
 # 9. CLASSE: COLETOR DE DADOS LIVE
 # =============================================================================
-# (Manter inalterado)
+# (Função Auto GARCH integrada)
 
 class ColetorDadosLive(object):
     def __init__(self, periodo=PERIODO_DADOS):
@@ -523,6 +524,71 @@ class ColetorDadosLive(object):
             self.pynvest_ativo = False
             log_debug("AVISO: Pynvest falhou ao inicializar. Coleta de fundamentos desativada.")
             st.warning("Biblioteca pynvest não inicializada corretamente.")
+
+    def _garch_auto_search(self, returns: pd.Series, symbol: str) -> tuple[float, str]:
+        """Implementa a lógica de grid search massivo (Auto GARCH)."""
+        
+        returns_percent = returns * 100
+        
+        vol_types = ["Garch", "EGARCH", "GJR-GARCH", "HARCH", "APARCH"]
+        dists = ["normal", "t", "ged"]
+        p_range = range(1, 3)     # Reduzido para 1 e 2 para velocidade no Streamlit
+        q_range = range(1, 3)     # Reduzido para 1 e 2
+        o_range = [0, 1]          # termo assimétrico (GJR/APARCH)
+
+        results = []
+        fitted_models = {}
+        
+        log_debug(f"Iniciando Auto GARCH (Grid Search) para {symbol}. Grid: {len(vol_types) * len(dists) * len(p_range) * len(q_range) * len(o_range)} combinações...")
+
+        for vol in vol_types:
+            for dist in dists:
+                for p in p_range:
+                    for q in q_range:
+                        for o in o_range:
+                            if vol not in ["GJR-GARCH", "APARCH"] and o > 0:
+                                continue 
+                            
+                            if vol in ["HARCH", "APARCH"] and p > 1:
+                                continue # HARCH/APARCH tendem a ser lentos ou redundantes com p>1
+
+                            try:
+                                model = arch_model(
+                                    returns_percent,
+                                    mean="Zero",
+                                    vol=vol,
+                                    p=p,
+                                    q=q,
+                                    o=o,
+                                    dist=dist,
+                                )
+
+                                fit = model.fit(disp="off")
+                                
+                                model_name = f"{vol}(p={p},q={q},o={o}), dist={dist}"
+                                results.append({"model": model_name, "bic": fit.bic, "aic": fit.aic})
+                                fitted_models[model_name] = fit
+
+                            except:
+                                continue
+        
+        results_df = pd.DataFrame(results)
+        if results_df.empty:
+             log_debug(f"AVISO: Auto GARCH falhou em todas as combinações para {symbol}.")
+             return np.nan, "GARCH(1,1) (Fallback: Auto-Search Failed)"
+
+        # Selecionar melhor modelo por BIC
+        best_row = results_df.loc[results_df["bic"].idxmin()]
+        best_model_name = best_row["model"]
+        best_fit = fitted_models[best_model_name]
+        
+        final_vol_daily = best_fit.conditional_volatility.iloc[-1] / 100
+        final_vol_annualized = final_vol_daily * np.sqrt(252)
+
+        log_debug(f"Auto GARCH para {symbol} concluído. Melhor Modelo: {best_model_name}")
+        
+        return final_vol_annualized, best_model_name
+
 
     def _mapear_colunas_pynvest(self, df_pynvest: pd.DataFrame) -> dict:
         if df_pynvest.empty: return {}
@@ -619,10 +685,13 @@ class ColetorDadosLive(object):
         garch_vols = {}
         metricas_simples_list = []
         
+        # Obtém o modo GARCH configurado (padrão Garch(1,1))
+        garch_mode = st.session_state.get('garch_mode', 'GARCH(1,1)')
+        
         consecutive_failures = 0
         FAILURE_THRESHOLD = 3 
         global_static_mode = False 
-        log_debug(f"Iniciando ciclo de coleta de preços para {len(simbolos)} ativos. Limite de falhas: {FAILURE_THRESHOLD}.")
+        log_debug(f"Iniciando ciclo de coleta de preços para {len(simbolos)} ativos. Limite de falhas: {FAILURE_THRESHOLD}. Modo GARCH: {garch_mode}")
         
         for simbolo in simbolos:
             df_tecnicos = pd.DataFrame()
@@ -632,6 +701,7 @@ class ColetorDadosLive(object):
             # Inicializando com valores de fallback para evitar NameError
             vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0
             garch_vol = 0.20 # Fallback
+            garch_model_name = "N/A"
 
             if not global_static_mode:
                 
@@ -749,29 +819,36 @@ class ColetorDadosLive(object):
                 
                 # --- INÍCIO DA IMPLEMENTAÇÃO GARCH ---
                 garch_vol = vol_anual # Fallback inicial GARCH = Histórico
+                garch_model_name = "Vol. Histórica"
+                
                 if len(retornos) > 60: 
                     try:
-                        # GARCH é sensível a dados muito longos ou ruído, mantemos a chamada.
-                        # Tenta rodar GARCH. Se falhar, usa vol_anual.
-                        am = arch_model(retornos * 100, mean='Zero', vol='Garch', p=1, q=1)
-                        res = am.fit(disp='off', last_obs=retornos.index[-1]) 
-                        garch_std_daily = res.conditional_volatility.iloc[-1] / 100 
-                        temp_garch_vol = garch_std_daily * np.sqrt(252)
-                        
-                        # Se o resultado do GARCH for NaN, zero, ou absurdo, usa fallback
-                        if np.isnan(temp_garch_vol) or temp_garch_vol == 0 or temp_garch_vol > 1.0: 
-                             raise ValueError("GARCH returned invalid value.")
-                        garch_vol = temp_garch_vol
-                        log_debug(f"Ativo {simbolo}: GARCH concluído. Vol Condicional: {garch_vol*100:.2f}%.")
+                        if garch_mode == 'Auto-Search GARCH (Lento)':
+                            garch_vol, garch_model_name = self._garch_auto_search(retornos, simbolo)
+                        else:
+                            # MODO RÁPIDO: GARCH(1,1) padrão
+                            am = arch_model(retornos * 100, mean='Zero', vol='Garch', p=1, q=1)
+                            res = am.fit(disp='off', last_obs=retornos.index[-1]) 
+                            garch_std_daily = res.conditional_volatility.iloc[-1] / 100 
+                            temp_garch_vol = garch_std_daily * np.sqrt(252)
+
+                            if np.isnan(temp_garch_vol) or temp_garch_vol == 0 or temp_garch_vol > 1.0: 
+                                raise ValueError("GARCH returned invalid value or nan.")
+                            
+                            garch_vol = temp_garch_vol
+                            garch_model_name = "GARCH(1,1) (Rápido)"
+                            log_debug(f"Ativo {simbolo}: GARCH(1,1) concluído. Vol Condicional: {garch_vol*100:.2f}%.")
+                            
                     except Exception as e:
                         garch_vol = vol_anual 
+                        garch_model_name = "Vol. Histórica (GARCH Failed)"
                         log_debug(f"Ativo {simbolo}: GARCH falhou ({str(e)[:20]}). Usando Vol Histórica como Vol Condicional.")
                 # --- FIM DA IMPLEMENTAÇÃO GARCH ---
             
             fund_data.update({
                 'Ticker': simbolo, 'sharpe_ratio': sharpe, 'annual_return': ret_anual,
                 'annual_volatility': vol_anual, 'max_drawdown': max_dd, 'garch_volatility': garch_vol,
-                'static_mode': usando_fallback_estatico
+                'static_mode': usando_fallback_estatico, 'garch_model': garch_model_name
             })
             
             self.dados_por_ativo[simbolo] = df_tecnicos
@@ -814,12 +891,104 @@ class ColetorDadosLive(object):
         log_debug(f"Coleta de dados finalizada com sucesso. {len(self.ativos_sucesso)} ativos processados.")
         return True
 
+    def _mapear_colunas_pynvest(self, df_pynvest: pd.DataFrame) -> dict:
+        if df_pynvest.empty: return {}
+        row = df_pynvest.iloc[0]
+        
+        mapping = {
+            'vlr_ind_p_sobre_l': 'pe_ratio', 
+            'vlr_ind_p_sobre_vp': 'pb_ratio', 
+            'vlr_ind_roe': 'roe',
+            'vlr_ind_roic': 'roic', 
+            'vlr_ind_margem_liq': 'net_margin', 
+            'vlr_ind_div_yield': 'div_yield',
+            'vlr_ind_divida_bruta_sobre_patrim': 'debt_to_equity', 
+            'vlr_liquidez_corr': 'current_ratio',
+            'pct_cresc_rec_liq_ult_5a': 'revenue_growth', 
+            'vlr_ind_ev_sobre_ebitda': 'ev_ebitda',
+            'nome_setor': 'sector', 
+            'nome_subsetor': 'industry', 
+            'vlr_mercado': 'market_cap',
+            'vlr_ind_margem_ebit': 'operating_margin',
+            'vlr_ind_beta': 'beta',
+            'nome_papel': 'nome_papel', 'tipo_papel': 'tipo_papel', 'nome_empresa': 'nome_empresa',
+            'vlr_cot': 'vlr_cot', 'dt_ult_cot': 'dt_ult_cot', 'vlr_min_52_sem': 'vlr_min_52_sem',
+            'vlr_max_52_sem': 'vlr_max_52_sem', 'vol_med_neg_2m': 'vol_med_neg_2m', 'vlr_firma': 'vlr_firma',
+            'num_acoes': 'num_acoes', 'pct_var_dia': 'pct_var_dia', 'pct_var_mes': 'pct_var_mes',
+            'pct_var_30d': 'pct_var_30d', 'pct_var_12m': 'pct_var_12m', 'pct_var_ano_a0': 'pct_var_ano_a0',
+            'pct_var_ano_a1': 'pct_var_ano_a1', 'pct_var_ano_a2': 'pct_var_ano_a2', 'pct_var_ano_a3': 'pct_var_ano_a3',
+            'pct_var_ano_a4': 'pct_var_ano_a4', 'pct_var_ano_a5': 'pct_var_ano_a5', 
+            'vlr_ind_p_sobre_ebit': 'p_ebit', 'vlr_ind_psr': 'psr', 'vlr_ind_p_sobre_ativ': 'p_ativo',
+            'vlr_ind_p_sobre_cap_giro': 'p_cap_giro', 'vlr_ind_p_sobre_ativ_circ_liq': 'p_ativ_circ_liq',
+            'vlr_ind_ev_sobre_ebit': 'ev_ebit', 'vlr_ind_lpa': 'lpa', 'vlr_ind_vpa': 'vpa',
+            'vlr_ind_margem_bruta': 'margem_bruta', 'vlr_ind_ebit_sobre_ativo': 'ebit_ativo',
+            'vlr_ind_giro_ativos': 'giro_ativos', 'vlr_ativo': 'ativo_total', 'vlr_disponibilidades': 'disponibilidades',
+            'vlr_ativ_circulante': 'ativo_circulante', 'vlr_divida_bruta': 'divida_bruta', 'vlr_divida_liq': 'divida_liquida',
+            'vlr_patrim_liq': 'patrimonio_liquido', 'vlr_receita_liq_ult_12m': 'receita_liq_12m',
+            'vlr_ebit_ult_12m': 'ebit_12m', 'vlr_lucro_liq_ult_12m': 'lucro_liq_12m'
+        }
+        dados_formatados = {}
+        for col_orig, col_dest in mapping.items():
+            if col_orig in row:
+                val = row[col_orig]
+                if isinstance(val, str):
+                    # === INÍCIO DA CORREÇÃO DE ERRO PYARROW/EMPTY STRING ===
+                    if val.strip() == '':
+                        val = np.nan  # Converte string vazia para NaN
+                    # === FIM DA CORREÇÃO ===
+
+                    # Se o valor ainda for uma string (ou seja, não era vazia)
+                    if isinstance(val, str):
+                        val = val.replace('.', '').replace(',', '.')
+                        if val.endswith('%'):
+                            val = val.replace('%', '')
+                            try: val = float(val) / 100.0
+                            except (ValueError, TypeError): pass
+                try: 
+                    # Tenta a conversão final, que agora aceita float ou np.nan
+                    dados_formatados[col_dest] = float(val)
+                except (ValueError, TypeError): 
+                    dados_formatados[col_dest] = val
+        return dados_formatados
+
+    def coletar_fundamentos_em_lote(self, simbolos: list) -> pd.DataFrame:
+        if not self.pynvest_ativo: 
+            log_debug("Coleta de fundamentos em lote ignorada (Pynvest inativo).")
+            return pd.DataFrame()
+        lista_fund = []
+        log_debug(f"Iniciando coleta de fundamentos para {len(simbolos)} ativos via Pynvest...")
+        for i, simbolo in enumerate(simbolos):
+            try:
+                ticker_pynvest = simbolo.replace('.SA', '').lower()
+                df_fund_raw = self.pynvest_scrapper.coleta_indicadores_de_ativo(ticker_pynvest)
+                if df_fund_raw is not None and not df_fund_raw.empty:
+                    fund_data = self._mapear_colunas_pynvest(df_fund_raw)
+                    fund_data['Ticker'] = simbolo
+                    if 'sector' not in fund_data or fund_data['sector'] == 'Unknown':
+                        fund_data['sector'] = FALLBACK_SETORES.get(simbolo, 'Outros')
+                    lista_fund.append(fund_data)
+                    log_debug(f"Fundamentos para {simbolo} coletados com sucesso.")
+                else:
+                     log_debug(f"AVISO: Pynvest não retornou dados para {simbolo}.")
+            except Exception as e:
+                log_debug(f"ERRO: Falha ao coletar fundamentos para {simbolo}: {str(e)[:50]}...")
+                pass
+            time.sleep(0.05) 
+        
+        if lista_fund:
+            log_debug(f"Coleta de fundamentos finalizada. {len(lista_fund)} ativos com dados.")
+            return pd.DataFrame(lista_fund).set_index('Ticker')
+        return pd.DataFrame()
+
     def coletar_ativo_unico_gcs(self, ativo_selecionado: str):
         """
         Função para coletar e processar um único ativo para a aba de análise individual,
         incluindo o pipeline LightGBM.
         """
         log_debug(f"Iniciando coleta e análise de ativo único: {ativo_selecionado}")
+        
+        # Define o modo GARCH para a coleta individual (usamos o modo fast como padrão)
+        st.session_state['garch_mode'] = st.session_state.get('ml_model_mode_select', 'fast') # Usa a mesma seleção do construtor
         
         self.coletar_e_processar_dados([ativo_selecionado], check_min_ativos=False)
         
@@ -840,8 +1009,24 @@ class ColetorDadosLive(object):
         
         is_price_data_available = 'Close' in df_tec.columns and not df_tec['Close'].isnull().all() and len(df_tec.dropna(subset=['Close'])) > 60
         
-        if is_price_data_available and lgb is not None:
-            log_debug(f"Análise Individual ML: Iniciando modelo LightGBM para {ativo_selecionado}.")
+        # Assume modo FAST para análise individual se a seleção não foi feita
+        ml_mode_for_individual = st.session_state.get('ml_model_mode_select', 'fast') 
+
+        # Configura o Classificador e Features baseado no modo selecionado
+        if ml_mode_for_individual == 'fast':
+            MODEL_FEATURES = LGBM_FEATURES
+            CLASSIFIER = lgb.LGBMClassifier
+            MODEL_PARAMS = dict(n_estimators=80, learning_rate=0.05, subsample=0.7, colsample_bytree=0.7, n_jobs=-1)
+            MODEL_NAME = 'LightGBM Rápido'
+        else:
+            MODEL_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel", 'rsi_14', 'macd_diff', 'vol_20d'] # Usamos features descorrelacionados
+            CLASSIFIER = RandomForestClassifier
+            MODEL_PARAMS = dict(n_estimators=150, max_depth=7, random_state=42, class_weight='balanced', n_jobs=-1)
+            MODEL_NAME = 'Full Ensemble (RF+XGB)'
+
+
+        if is_price_data_available and CLASSIFIER is not None:
+            log_debug(f"Análise Individual ML: Iniciando modelo {MODEL_NAME} para {ativo_selecionado}.")
             try:
                 df = df_tec.copy()
                 
@@ -858,14 +1043,11 @@ class ColetorDadosLive(object):
                 for d in ML_HORIZONS:
                     df[f"t_{d}"] = (df["Close"].shift(-d) > df["Close"]).astype(int)
 
-                # Combina features técnicos (LGBM) + fundamentais (para a tabela final)
-                all_model_features = LGBM_FEATURES + ALL_FUND_FEATURES
-                
                 # Remove NaNs da parte de treino e predição
-                df_model = df.dropna(subset=LGBM_FEATURES + [f"t_{ML_HORIZONS[-1]}"]) # Usa o maior horizonte para filtrar NaNs
+                df_model = df.dropna(subset=MODEL_FEATURES + [f"t_{ML_HORIZONS[-1]}"]) # Usa o maior horizonte para filtrar NaNs
                 
                 if len(df_model) > 200: # Mínimo de pontos para treino (70% de 200 = 140)
-                    X_full = df_model[LGBM_FEATURES]
+                    X_full = df_model[MODEL_FEATURES]
                     
                     # Split para treino (70%)
                     split_idx = int(len(X_full) * 0.7)
@@ -874,7 +1056,7 @@ class ColetorDadosLive(object):
                     probabilities = []
                     auc_scores = []
                     
-                    # --- TREINAMENTO LIGHTGBM PARA CADA HORIZONTE ---
+                    # --- TREINAMENTO PARA CADA HORIZONTE ---
                     for tgt_d in ML_HORIZONS:
                         tgt = f"t_{tgt_d}"
                         y = df_model[tgt].values
@@ -882,17 +1064,20 @@ class ColetorDadosLive(object):
                         X_test = X_full.iloc[split_idx:]
                         y_test = y[split_idx:] 
                         
-                        # Definição do modelo LightGBM (EXATO CÓDIGO DO USUÁRIO)
-                        model = lgb.LGBMClassifier(
-                            n_estimators=80,
-                            learning_rate=0.05,
-                            subsample=0.7,
-                            colsample_bytree=0.7,
-                            n_jobs=-1
-                        )
+                        model = CLASSIFIER(**MODEL_PARAMS)
+                        
+                        # Fix para classes desbalanceadas ou únicas no treino
+                        if len(np.unique(y_train)) < 2:
+                             log_debug(f"ML Individual: {ativo_selecionado} - Target {tgt} tem apenas uma classe no treino. Pulando.")
+                             continue
                         
                         model.fit(X_train, y_train)
-                        prob_now = model.predict_proba(X_full.iloc[[-1]])[0, 1]
+                        
+                        # --- VERIFICAÇÃO PARA PREDICAO ---
+                        # Garante que o input de predição existe
+                        X_predict = X_full.iloc[[-1]].copy()
+                        
+                        prob_now = model.predict_proba(X_predict)[0, 1]
                         probabilities.append(prob_now)
 
                         # Cálculo de AUC no conjunto de teste (para confiança)
@@ -901,19 +1086,23 @@ class ColetorDadosLive(object):
                              auc_scores.append(roc_auc_score(y_test, prob_test))
                              
                     # Score final ML = Média das 3 probabilidades
-                    ensemble_proba = np.mean(probabilities)
+                    ensemble_proba = np.mean(probabilities) if probabilities else 0.5
                     
                     # Confiança final = Média dos AUCs de teste
                     conf_final = np.mean(auc_scores) if auc_scores else 0.5
                     
-                    log_debug(f"ML Individual: Sucesso LightGBM Ensemble. Prob Média: {ensemble_proba:.2f}, AUC Teste Média: {conf_final:.2f}.")
+                    log_debug(f"ML Individual: Sucesso {MODEL_NAME}. Prob Média: {ensemble_proba:.2f}, AUC Teste Média: {conf_final:.2f}.")
 
                     # Importância das features
-                    importances = pd.DataFrame({
-                        'feature': LGBM_FEATURES,
-                        'importance': model.feature_importances_
-                    }).sort_values('importance', ascending=False)
-                    
+                    try:
+                        importances = pd.DataFrame({
+                            'feature': MODEL_FEATURES,
+                            'importance': model.feature_importances_
+                        }).sort_values('importance', ascending=False)
+                    except:
+                         importances = pd.DataFrame({'feature': MODEL_FEATURES, 'importance': [1/len(MODEL_FEATURES)]*len(MODEL_FEATURES)})
+
+
                     df_tec['ML_Proba'] = ensemble_proba
                     df_tec['ML_Confidence'] = conf_final
                     df_ml_meta = importances
@@ -922,12 +1111,12 @@ class ColetorDadosLive(object):
                     log_debug(f"ML Individual: Dados insuficientes ({len(df_model)}). Pulando modelo supervisionado.")
                     is_price_data_available = False 
             except Exception as e:
-                log_debug(f"ML Individual: ERRO no modelo LightGBM: {str(e)[:50]}. {traceback.format_exc()[:100]}")
+                log_debug(f"ML Individual: ERRO no modelo {MODEL_NAME}: {str(e)[:50]}. {traceback.format_exc()[:100]}")
                 is_price_data_available = False
                 
             
             # 2. Fallback: Se ML não rodou (sem preço, ou falhou, ou dados insuficientes/ERROR)
-            if 'ML_Proba' not in df_tec.columns or not is_price_data_available or lgb is None:
+            if 'ML_Proba' not in df_tec.columns or not is_price_data_available or CLASSIFIER is None:
                 log_debug(f"Análise Individual ML: Recorrendo ao modelo NÃO SUPERVISIONADO (Fallback/Estático).")
                 
                 # Heuristica de "Qualidade" como proxy de ML (MODO FALLBACK)
@@ -972,6 +1161,13 @@ class ConstrutorPortfolioAutoML:
         self.scores_combinados = pd.DataFrame()
         
     def coletar_e_processar_dados(self, simbolos: list) -> bool:
+        # Passa o modo GARCH selecionado para o coletor
+        garch_mode_select = st.session_state.get('ml_model_mode_select', 'fast')
+        garch_mode = 'Auto-Search GARCH (Lento)' if garch_mode_select == 'full' else 'GARCH(1,1)'
+        
+        # Seta o modo GARCH na sessão para ser usado dentro do coletor
+        st.session_state['garch_mode'] = garch_mode
+        
         coletor = ColetorDadosLive(periodo=self.periodo)
         simbolos_filtrados = [s for s in simbolos if s in TODOS_ATIVOS]
         if not simbolos_filtrados: return False
@@ -1136,15 +1332,29 @@ class ConstrutorPortfolioAutoML:
                          # Aqui, vamos garantir que o RF (classificador base) seja usado para AUC/Prob.
                          pass
                     
+                    if len(np.unique(y_train)) < 2:
+                             log_debug(f"ML Pipeline: {ativo} - Target {tgt} tem apenas uma classe no treino. Pulando Target.")
+                             continue
+                             
                     model.fit(X_train, y_train)
-                    prob_now = model.predict_proba(X_full.iloc[[-1]])[0, 1]
-                    probabilities.append(prob_now)
+                    
+                    # --- VERIFICAÇÃO PARA PREDICAO ---
+                    # Garante que o input de predição existe
+                    X_predict = X_full.iloc[[-1]].copy()
+                    
+                    # Garantir que a predição é possível (se o último ponto não for NaN nas features)
+                    if not X_predict.isnull().any().any():
+                        prob_now = model.predict_proba(X_predict)[0, 1]
+                        probabilities.append(prob_now)
 
+                    # Cálculo de AUC no conjunto de teste (para confiança)
                     if len(y_test) > 0 and len(np.unique(y_test)) >= 2:
                          prob_test = model.predict_proba(X_test)[:, 1]
                          auc_scores.append(roc_auc_score(y_test, prob_test))
                              
-                ensemble_proba = np.mean(probabilities)
+                ensemble_proba = np.mean(probabilities) if probabilities else 0.5
+                
+                # Confiança final = Média dos AUCs de teste
                 conf_final = np.mean(auc_scores) if auc_scores else 0.5
                 
                 result_for_ativo = {
@@ -2036,7 +2246,7 @@ def aba_construtor_portfolio():
                             'fast', 
                             'full'
                         ],
-                        format_func=lambda x: "Rápido (~90s, LightGBM)" if x == 'fast' else "Lento (Análise Completa RF/XGB/Optuna-like)",
+                        format_func=lambda x: "Rápido (~90s, LightGBM)" if x == 'fast' else "Lento (Análise Completa RF/XGB/Auto-GARCH)",
                         index=0,
                         key='ml_model_mode_select'
                     )
@@ -2780,7 +2990,7 @@ def aba_analise_individual():
                     col2.metric("MACD Diff", macd_display)
                     col3.metric("Vol. 20d (raw)", vol20_display)
                     
-                    # --- NOVO: Gráfico de Bandas de Bollinger (Reintroduzido) ---
+                    # --- Gráfico de Bandas de Bollinger (Reintroduzido) ---
                     if 'bb_upper' in df_completo.columns:
                         st.markdown('#### Bandas de Bollinger (20, 2)')
                         fig_bb = go.Figure()
@@ -2790,7 +3000,6 @@ def aba_analise_individual():
                         fig_bb.add_trace(go.Scatter(x=df_completo.index, y=df_completo['Close'], name='Close', line=dict(color='#2C3E50')))
                         
                         template = obter_template_grafico()
-                        template['title']['text'] = "Bandas de Bollinger (20, 2)"
                         fig_bb.update_layout(**template)
                         fig_bb.update_layout(height=400)
                         
@@ -2802,7 +3011,6 @@ def aba_analise_individual():
                     fig_rsi.add_hline(y=70, line_dash="dash", line_color="red"); fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
                     
                     template = obter_template_grafico()
-                    template['title']['text'] = "RSI (14)" 
                     fig_rsi.update_layout(**template)
                     fig_rsi.update_layout(height=300)
                     
@@ -2818,7 +3026,6 @@ def aba_analise_individual():
                         fig_macd.add_trace(go.Bar(x=df_completo.index, y=df_completo['macd_diff'], name='Histograma', marker_color='#BDC3C7'))
                     
                         template = obter_template_grafico()
-                        template['title']['text'] = "MACD (12,26,9)"
                         fig_macd.update_layout(**template)
                         fig_macd.update_layout(height=300)
                         
@@ -2853,10 +3060,9 @@ def aba_analise_individual():
                         
                     if df_ml_meta is not None and not df_ml_meta.empty:
                         st.markdown("#### Importância dos Fatores na Decisão")
-                        fig_imp = px.bar(df_ml_meta.head(6), x='importance', y='feature', orientation='h', title='Top Fatores (LightGBM)')
+                        fig_imp = px.bar(df_ml_meta.head(6), x='importance', y='feature', orientation='h', title='Top Fatores')
                         
                         template = obter_template_grafico()
-                        template['title']['text'] = 'Top 6 Fatores de Decisão'
                         fig_imp.update_layout(**template)
                         fig_imp.update_layout(height=300)
                         st.plotly_chart(fig_imp, use_container_width=True)
@@ -2908,7 +3114,6 @@ def aba_analise_individual():
                         )
                         
                         template = obter_template_grafico()
-                        template['title']['text'] = "Mapa de Similaridade 3D (Global) por Cluster"
                         fig_combined.update_layout(
                             title=template['title'],
                             paper_bgcolor=template['paper_bgcolor'],
