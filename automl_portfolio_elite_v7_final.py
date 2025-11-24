@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """
 =============================================================================
-SISTEMA DE PORTFÓLIOS ADAPTATIVOS - OTIMIZAÇÃO QUANTITATIVA
+SISTEMA DE OTIMIZAÇÃO QUANTITATIVA
 =============================================================================
 
-Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
+Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Preços: Estratégia Linear com Fail-Fast (YFinance -> TvDatafeed -> Estático Global). 
 - Fundamentos: Coleta Exaustiva Pynvest (50+ indicadores).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Design (V9.31): ML Soft Fallback (Short History Support).
+- Modelagem (V9.34): Seleção Dinâmica de Modelos ML/GARCH e Tratamento Robusto de Fallback.
 
-Versão: 9.32.34 (Update: ADJUSTED HORIZONS, DYNAMIC ML/GARCH SELECTION, IMPROVED UI LAYOUT & FALLBACK)
+Versão: 9.32.35 (Final Build: Professional UI, Dynamic ML/GARCH, Robust Fallback)
 =============================================================================
 """
 
@@ -106,18 +106,17 @@ PESO_MAX = 0.30
 
 # NOVO: Horizontes ML baseados no lookback adaptativo
 def get_ml_horizons(ml_lookback_days: int):
-    # Adapta os horizontes de predição do modelo LightGBM/RF para o horizonte do investidor
-    # Curto/Medio/Longo
+    """Adapta os horizontes de predição ML com base no lookback do perfil (CP/MP/LP)."""
     
     # 252 dias (Long-Term focus, 12m)
     if ml_lookback_days >= 252:
-        return [80, 160, 240]
+        return [80, 160, 240] # ~4m, ~8m, ~12m
     # 168 dias (Mid-Term focus, 8m)
     elif ml_lookback_days >= 168:
-        return [50, 100, 150]
+        return [50, 100, 150] # ~2.5m, ~5m, ~7.5m
     # 84 dias (Short-Term focus, 4m)
     else:
-        return [20, 40, 60]
+        return [20, 40, 60] # ~1m, ~2m, ~3m
 
 LOOKBACK_ML_DAYS_MAP = {
     'curto_prazo': 84,   # Aprox. 4 meses
@@ -545,738 +544,6 @@ class ColetorDadosLive(object):
         
         vol_types = ["Garch", "EGARCH", "GJR-GARCH", "HARCH", "APARCH"]
         dists = ["normal", "t", "ged"]
-        p_range = range(1, 3)     # Reduzido para 1 e 2 para velocidade no Streamlit
-        q_range = range(1, 3)     # Reduzido para 1 e 2
-        o_range = [0, 1]          # termo assimétrico (GJR/APARCH)
-
-        results = []
-        fitted_models = {}
-        
-        log_debug(f"Iniciando Auto GARCH (Grid Search) para {symbol}. Grid: {len(vol_types) * len(dists) * len(p_range) * len(q_range) * len(o_range)} combinações...")
-
-        for vol in vol_types:
-            for dist in dists:
-                for p in p_range:
-                    for q in q_range:
-                        for o in o_range:
-                            if vol not in ["GJR-GARCH", "APARCH"] and o > 0:
-                                continue 
-                            
-                            if vol in ["HARCH", "APARCH"] and p > 1:
-                                continue # HARCH/APARCH tendem a ser lentos ou redundantes com p>1
-
-                            try:
-                                model = arch_model(
-                                    returns_percent,
-                                    mean="Zero",
-                                    vol=vol,
-                                    p=p,
-                                    q=q,
-                                    o=o,
-                                    dist=dist,
-                                )
-
-                                fit = model.fit(disp="off")
-                                
-                                model_name = f"{vol}(p={p},q={q},o={o}), dist={dist}"
-                                results.append({"model": model_name, "bic": fit.bic, "aic": fit.aic})
-                                fitted_models[model_name] = fit
-
-                            except:
-                                continue
-        
-        results_df = pd.DataFrame(results)
-        if results_df.empty:
-             log_debug(f"AVISO: Auto GARCH falhou em todas as combinações para {symbol}.")
-             return np.nan, "GARCH(1,1) (Fallback: Auto-Search Failed)"
-
-        # Selecionar melhor modelo por BIC
-        best_row = results_df.loc[results_df["bic"].idxmin()]
-        best_model_name = best_row["model"]
-        best_fit = fitted_models[best_model_name]
-        
-        final_vol_daily = best_fit.conditional_volatility.iloc[-1] / 100
-        final_vol_annualized = final_vol_daily * np.sqrt(252)
-
-        log_debug(f"Auto GARCH para {symbol} concluído. Melhor Modelo: {best_model_name}")
-        
-        return final_vol_annualized, best_model_name
-
-
-    def _mapear_colunas_pynvest(self, df_pynvest: pd.DataFrame) -> dict:
-        if df_pynvest.empty: return {}
-        row = df_pynvest.iloc[0]
-        
-        mapping = {
-            'vlr_ind_p_sobre_l': 'pe_ratio', 
-            'vlr_ind_p_sobre_vp': 'pb_ratio', 
-            'vlr_ind_roe': 'roe',
-            'vlr_ind_roic': 'roic', 
-            'vlr_ind_margem_liq': 'net_margin', 
-            'vlr_ind_div_yield': 'div_yield',
-            'vlr_ind_divida_bruta_sobre_patrim': 'debt_to_equity', 
-            'vlr_liquidez_corr': 'current_ratio',
-            'pct_cresc_rec_liq_ult_5a': 'revenue_growth', 
-            'vlr_ind_ev_sobre_ebitda': 'ev_ebitda',
-            'nome_setor': 'sector', 
-            'nome_subsetor': 'industry', 
-            'vlr_mercado': 'market_cap',
-            'vlr_ind_margem_ebit': 'operating_margin',
-            'vlr_ind_beta': 'beta',
-            'nome_papel': 'nome_papel', 'tipo_papel': 'tipo_papel', 'nome_empresa': 'nome_empresa',
-            'vlr_cot': 'vlr_cot', 'dt_ult_cot': 'dt_ult_cot', 'vlr_min_52_sem': 'vlr_min_52_sem',
-            'vlr_max_52_sem': 'vlr_max_52_sem', 'vol_med_neg_2m': 'vol_med_neg_2m', 'vlr_firma': 'vlr_firma',
-            'num_acoes': 'num_acoes', 'pct_var_dia': 'pct_var_dia', 'pct_var_mes': 'pct_var_mes',
-            'pct_var_30d': 'pct_var_30d', 'pct_var_12m': 'pct_var_12m', 'pct_var_ano_a0': 'pct_var_ano_a0',
-            'pct_var_ano_a1': 'pct_var_ano_a1', 'pct_var_ano_a2': 'pct_var_ano_a2', 'pct_var_ano_a3': 'pct_var_ano_a3',
-            'pct_var_ano_a4': 'pct_var_ano_a4', 'pct_var_ano_a5': 'pct_var_ano_a5', 
-            'vlr_ind_p_sobre_ebit': 'p_ebit', 'vlr_ind_psr': 'psr', 'vlr_ind_p_sobre_ativ': 'p_ativo',
-            'vlr_ind_p_sobre_cap_giro': 'p_cap_giro', 'vlr_ind_p_sobre_ativ_circ_liq': 'p_ativ_circ_liq',
-            'vlr_ind_ev_sobre_ebit': 'ev_ebit', 'vlr_ind_lpa': 'lpa', 'vlr_ind_vpa': 'vpa',
-            'vlr_ind_margem_bruta': 'margem_bruta', 'vlr_ind_ebit_sobre_ativo': 'ebit_ativo',
-            'vlr_ind_giro_ativos': 'giro_ativos', 'vlr_ativo': 'ativo_total', 'vlr_disponibilidades': 'disponibilidades',
-            'vlr_ativ_circulante': 'ativo_circulante', 'vlr_divida_bruta': 'divida_bruta', 'vlr_divida_liq': 'divida_liquida',
-            'vlr_patrim_liq': 'patrimonio_liquido', 'vlr_receita_liq_ult_12m': 'receita_liq_12m',
-            'vlr_ebit_ult_12m': 'ebit_12m', 'vlr_lucro_liq_ult_12m': 'lucro_liq_12m'
-        }
-        dados_formatados = {}
-        for col_orig, col_dest in mapping.items():
-            if col_orig in row:
-                val = row[col_orig]
-                if isinstance(val, str):
-                    # === INÍCIO DA CORREÇÃO DE ERRO PYARROW/EMPTY STRING ===
-                    if val.strip() == '':
-                        val = np.nan  # Converte string vazia para NaN
-                    # === FIM DA CORREÇÃO ===
-
-                    # Se o valor ainda for uma string (ou seja, não era vazia)
-                    if isinstance(val, str):
-                        val = val.replace('.', '').replace(',', '.')
-                        if val.endswith('%'):
-                            val = val.replace('%', '')
-                            try: val = float(val) / 100.0
-                            except (ValueError, TypeError): pass
-                try: 
-                    # Tenta a conversão final, que agora aceita float ou np.nan
-                    dados_formatados[col_dest] = float(val)
-                except (ValueError, TypeError): 
-                    dados_formatados[col_dest] = val
-        return dados_formatados
-
-    def coletar_fundamentos_em_lote(self, simbolos: list) -> pd.DataFrame:
-        if not self.pynvest_ativo: 
-            log_debug("Coleta de fundamentos em lote ignorada (Pynvest inativo).")
-            return pd.DataFrame()
-        lista_fund = []
-        log_debug(f"Iniciando coleta de fundamentos para {len(simbolos)} ativos via Pynvest...")
-        for i, simbolo in enumerate(simbolos):
-            try:
-                ticker_pynvest = simbolo.replace('.SA', '').lower()
-                df_fund_raw = self.pynvest_scrapper.coleta_indicadores_de_ativo(ticker_pynvest)
-                if df_fund_raw is not None and not df_fund_raw.empty:
-                    fund_data = self._mapear_colunas_pynvest(df_fund_raw)
-                    fund_data['Ticker'] = simbolo
-                    if 'sector' not in fund_data or fund_data['sector'] == 'Unknown':
-                        fund_data['sector'] = FALLBACK_SETORES.get(simbolo, 'Outros')
-                    lista_fund.append(fund_data)
-                    log_debug(f"Fundamentos para {simbolo} coletados com sucesso.")
-                else:
-                     log_debug(f"AVISO: Pynvest não retornou dados para {simbolo}.")
-            except Exception as e:
-                log_debug(f"ERRO: Falha ao coletar fundamentos para {simbolo}: {str(e)[:50]}...")
-                pass
-            time.sleep(0.05) 
-        
-        if lista_fund:
-            log_debug(f"Coleta de fundamentos finalizada. {len(lista_fund)} ativos com dados.")
-            return pd.DataFrame(lista_fund).set_index('Ticker')
-        return pd.DataFrame()
-
-    def coletar_e_processar_dados(self, simbolos: list, check_min_ativos: bool = True) -> bool:
-        self.ativos_sucesso = []
-        lista_fundamentalistas = []
-        garch_vols = {}
-        metricas_simples_list = []
-        
-        # Obtém o modo GARCH configurado (padrão Garch(1,1))
-        garch_mode = st.session_state.get('garch_mode', 'GARCH(1,1)')
-        
-        consecutive_failures = 0
-        FAILURE_THRESHOLD = 3 
-        global_static_mode = False 
-        log_debug(f"Iniciando ciclo de coleta de preços para {len(simbolos)} ativos. Limite de falhas: {FAILURE_THRESHOLD}. Modo GARCH: {garch_mode}")
-        
-        for simbolo in simbolos:
-            df_tecnicos = pd.DataFrame()
-            usando_fallback_estatico = False 
-            tem_dados = False
-            
-            # Inicializando com valores de fallback para evitar NameError
-            vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0
-            garch_vol = 0.20 # Fallback
-            garch_model_name = "N/A"
-
-            if not global_static_mode:
-                
-                # --- BLOCO PRIMÁRIO: YFINANCE ---
-                try:
-                    log_debug(f"Iniciando Tentativa 1 (YFinance) para {simbolo}...")
-                    session = requests.Session()
-                    session.headers.update({
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                    })
-                    ticker_obj = yf.Ticker(simbolo, session=session)
-                    df_tecnicos = ticker_obj.history(period=self.periodo)
-                except Exception:
-                    pass
-                
-                if df_tecnicos is not None and not df_tecnicos.empty and 'Close' in df_tecnicos.columns:
-                    tem_dados = True
-                    log_debug(f"Tentativa 1 (YFinance): Sucesso. {len(df_tecnicos)} pontos.")
-
-                # --- BLOCO FALLBACK: TVDATAFEED ---
-                if not tem_dados and self.tv_ativo:
-                    log_debug(f"Tentativa 1 falhou. Iniciando Tentativa 2 (TvDatafeed) para {simbolo}...")
-                    simbolo_tv = simbolo.replace('.SA', '')
-                    try:
-                        df_tecnicos = self.tv.get_hist(
-                            symbol=simbolo_tv, 
-                            exchange='BMFBOVESPA', 
-                            interval=Interval.in_daily, 
-                            n_bars=1260
-                        )
-                    except Exception as e:
-                        if "Connection timed out" in str(e):
-                             pass
-                
-                    if df_tecnicos is not None and not df_tecnicos.empty:
-                        tem_dados = True
-                        log_debug(f"Tentativa 2 (TvDatafeed): Sucesso. {len(df_tecnicos)} pontos.")
-                        # --- LOG DETALHADO DO TVDATAFEED ---
-                        log_debug(f"TvDatafeed Head: \n{df_tecnicos.head().to_string()}")
-                        # --- FIM LOG DETALHADO ---
-
-                # --- FIM DA LÓGICA DE SWAP DE COLETA ---
-
-                if not tem_dados:
-                    consecutive_failures += 1
-                    log_debug(f"Coleta de preços para {simbolo} falhou. Falhas consecutivas: {consecutive_failures}")
-                    if consecutive_failures >= FAILURE_THRESHOLD:
-                        global_static_mode = True
-                        log_debug(f"ATIVANDO MODO ESTÁTICO GLOBAL (Limite de {FAILURE_THRESHOLD} falhas atingido).")
-                        st.warning(f"⚠️ Falha na coleta de preços para {consecutive_failures} ativos consecutivos. Ativando MODO FUNDAMENTALISTA GLOBAL (sem histórico de preços) para o restante da lista.")
-                else:
-                    consecutive_failures = 0 
-            
-            if global_static_mode or not tem_dados:
-                usando_fallback_estatico = True
-                log_debug(f"Ativo {simbolo}: Processando em MODO ESTÁTICO (Sem preços históricos).")
-                df_tecnicos = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'rsi_14', 'macd', 'vol_20d'])
-                df_tecnicos.loc[pd.Timestamp.today()] = [np.nan] * len(df_tecnicos.columns)
-            else:
-                log_debug(f"Ativo {simbolo}: Enriquecendo dados técnicos...")
-                rename_map = {
-                    'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
-                }
-                df_tecnicos.rename(columns=rename_map, inplace=True)
-                
-                for col in df_tecnicos.columns:
-                    if ':' in str(col):
-                        base_col = str(col).split(':')[-1]
-                        if base_col in rename_map:
-                            df_tecnicos.rename(columns={col: rename_map[base_col]}, inplace=True)
-
-                if 'Close' in df_tecnicos.columns:
-                    # Não filtramos por NaNs aqui, deixamos o CalculadoraTecnica tratar.
-                    if not df_tecnicos.empty:
-                        df_tecnicos = CalculadoraTecnica.enriquecer_dados_tecnicos(df_tecnicos)
-                    else:
-                       usando_fallback_estatico = True 
-                else:
-                    usando_fallback_estatico = True
-
-            fund_data = {}
-            if self.pynvest_ativo:
-                try:
-                    ticker_pynvest = simbolo.replace('.SA', '').lower()
-                    df_fund_raw = self.pynvest_scrapper.coleta_indicadores_de_ativo(ticker_pynvest)
-                    if df_fund_raw is not None and not df_fund_raw.empty:
-                        fund_data = self._mapear_colunas_pynvest(df_fund_raw)
-                    else:
-                        fund_data = {'sector': 'Unknown', 'industry': 'Unknown'}
-                except Exception:
-                    fund_data = {'sector': 'Unknown', 'industry': 'Unknown'}
-            
-            if 'sector' not in fund_data or fund_data['sector'] == 'Unknown':
-                 fund_data['sector'] = FALLBACK_SETORES.get(simbolo, 'Outros')
-                 log_debug(f"Ativo {simbolo}: Setor definido via FALLBACK_SETORES.")
-
-            if usando_fallback_estatico and (not fund_data or fund_data.get('pe_ratio') is None):
-                log_debug(f"Ativo {simbolo} pulado: Modo estático, mas dados fundamentais críticos ausentes.")
-                continue 
-
-            if not usando_fallback_estatico and 'returns' in df_tecnicos.columns:
-                retornos = df_tecnicos['returns'].dropna()
-                log_debug(f"Ativo {simbolo}: Calculando métricas de performance (Sharpe/DD/GARCH)...")
-                
-                if len(retornos) > 30:
-                    vol_anual = retornos.std() * np.sqrt(252)
-                    ret_anual = retornos.mean() * 252
-                    sharpe = (ret_anual - TAXA_LIVRE_RISCO) / vol_anual if vol_anual > 0 else 0
-                    cum_prod = (1 + retornos).cumprod()
-                    peak = cum_prod.expanding(min_periods=1).max()
-                    dd = (cum_prod - peak) / peak
-                    max_dd = dd.min()
-                else:
-                    vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0 
-                
-                # --- INÍCIO DA IMPLEMENTAÇÃO GARCH ---
-                garch_vol = vol_anual # Fallback inicial GARCH = Histórico
-                garch_model_name = "Vol. Histórica"
-                
-                if len(retornos) > 60: 
-                    try:
-                        if 'Auto-Search GARCH' in garch_mode:
-                            garch_vol, garch_model_name = self._garch_auto_search(retornos, simbolo)
-                        else:
-                            # MODO RÁPIDO: GARCH(1,1) padrão
-                            am = arch_model(retornos * 100, mean='Zero', vol='Garch', p=1, q=1)
-                            res = am.fit(disp='off', last_obs=retornos.index[-1]) 
-                            garch_std_daily = res.conditional_volatility.iloc[-1] / 100 
-                            temp_garch_vol = garch_std_daily * np.sqrt(252)
-
-                            if np.isnan(temp_garch_vol) or temp_garch_vol == 0 or temp_garch_vol > 1.0: 
-                                raise ValueError("GARCH returned invalid value or nan.")
-                            
-                            garch_vol = temp_garch_vol
-                            garch_model_name = "GARCH(1,1) (Rápido)"
-                            log_debug(f"Ativo {simbolo}: GARCH(1,1) concluído. Vol Condicional: {garch_vol*100:.2f}%.")
-                            
-                    except Exception as e:
-                        garch_vol = vol_anual 
-                        garch_model_name = "Vol. Histórica (GARCH Failed)"
-                        log_debug(f"Ativo {simbolo}: GARCH falhou ({str(e)[:20]}). Usando Vol Histórica como Vol Condicional.")
-                # --- FIM DA IMPLEMENTAÇÃO GARCH ---
-            
-            fund_data.update({
-                'Ticker': simbolo, 'sharpe_ratio': sharpe, 'annual_return': ret_anual,
-                'annual_volatility': vol_anual, 'max_drawdown': max_dd, 'garch_volatility': garch_vol,
-                'static_mode': usando_fallback_estatico, 'garch_model': garch_model_name
-            })
-            
-            self.dados_por_ativo[simbolo] = df_tecnicos
-            self.ativos_sucesso.append(simbolo)
-            lista_fundamentalistas.append(fund_data)
-            garch_vols[simbolo] = garch_vol 
-            
-            metricas_simples_list.append({
-                'Ticker': simbolo, 'sharpe': sharpe, 'retorno_anual': ret_anual,
-                'volatilidade_anual': vol_anual, 'max_drawdown': max_dd,
-            })
-            
-            if not global_static_mode:
-                time.sleep(0.1) 
-
-        self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas)
-        if not self.dados_fundamentalistas.empty:
-             self.dados_fundamentalistas = self.dados_fundamentalistas.set_index('Ticker')
-             
-        self.metricas_performance = pd.DataFrame(metricas_simples_list)
-        if not self.metricas_performance.empty:
-             self.metricas_performance = self.metricas_performance.set_index('Ticker')
-             
-        self.volatilidades_garch_raw = garch_vols 
-        
-        for simbolo in self.ativos_sucesso:
-            if simbolo in self.dados_por_ativo:
-                df_local = self.dados_por_ativo[simbolo]
-                if not df_local.empty:
-                    last_idx = df_local.index[-1]
-                    if simbolo in self.dados_fundamentalistas.index:
-                        for k, v in self.dados_fundamentalistas.loc[simbolo].items():
-                            if k not in df_local.columns:
-                                df_local.loc[last_idx, k] = v
-
-        if check_min_ativos and len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO: 
-             log_debug(f"AVISO: Coleta finalizada com {len(self.ativos_sucesso)} ativos, abaixo do mínimo requerido.")
-             return False
-
-        log_debug(f"Coleta de dados finalizada com sucesso. {len(self.ativos_sucesso)} ativos processados.")
-        return True
-
-    def _garch_auto_search(self, returns: pd.Series, symbol: str) -> tuple[float, str]:
-        """Implementa a lógica de grid search massivo (Auto GARCH)."""
-        
-        returns_percent = returns * 100
-        
-        vol_types = ["Garch", "EGARCH", "GJR-GARCH", "HARCH", "APARCH"]
-        dists = ["normal", "t", "ged"]
-        p_range = range(1, 3)     
-        q_range = range(1, 3)     
-        o_range = [0, 1]          
-
-        results = []
-        fitted_models = {}
-        
-        log_debug(f"Iniciando Auto GARCH (Grid Search) para {symbol}. ")
-
-        for vol in vol_types:
-            for dist in dists:
-                for p in p_range:
-                    for q in q_range:
-                        for o in o_range:
-                            if vol not in ["GJR-GARCH", "APARCH"] and o > 0:
-                                continue 
-                            
-                            if vol in ["HARCH", "APARCH"] and p > 1:
-                                continue 
-
-                            try:
-                                model = arch_model(
-                                    returns_percent,
-                                    mean="Zero",
-                                    vol=vol,
-                                    p=p,
-                                    q=q,
-                                    o=o,
-                                    dist=dist,
-                                )
-
-                                fit = model.fit(disp="off")
-                                
-                                model_name = f"{vol}(p={p},q={q},o={o}), dist={dist}"
-                                results.append({"model": model_name, "bic": fit.bic, "aic": fit.aic})
-                                fitted_models[model_name] = fit
-
-                            except:
-                                continue
-        
-        results_df = pd.DataFrame(results)
-        if results_df.empty:
-             log_debug(f"AVISO: Auto GARCH falhou em todas as combinações para {symbol}.")
-             return np.nan, "GARCH(1,1) (Fallback: Auto-Search Failed)"
-
-        # Selecionar melhor modelo por BIC
-        best_row = results_df.loc[results_df["bic"].idxmin()]
-        best_model_name = best_row["model"]
-        best_fit = fitted_models[best_model_name]
-        
-        final_vol_daily = best_fit.conditional_volatility.iloc[-1] / 100
-        final_vol_annualized = final_vol_daily * np.sqrt(252)
-
-        log_debug(f"Auto GARCH para {symbol} concluído. Melhor Modelo: {best_model_name}")
-        
-        return final_vol_annualized, best_model_name
-
-
-    def _mapear_colunas_pynvest(self, df_pynvest: pd.DataFrame) -> dict:
-        if df_pynvest.empty: return {}
-        row = df_pynvest.iloc[0]
-        
-        mapping = {
-            'vlr_ind_p_sobre_l': 'pe_ratio', 
-            'vlr_ind_p_sobre_vp': 'pb_ratio', 
-            'vlr_ind_roe': 'roe',
-            'vlr_ind_roic': 'roic', 
-            'vlr_ind_margem_liq': 'net_margin', 
-            'vlr_ind_div_yield': 'div_yield',
-            'vlr_ind_divida_bruta_sobre_patrim': 'debt_to_equity', 
-            'vlr_liquidez_corr': 'current_ratio',
-            'pct_cresc_rec_liq_ult_5a': 'revenue_growth', 
-            'vlr_ind_ev_sobre_ebitda': 'ev_ebitda',
-            'nome_setor': 'sector', 
-            'nome_subsetor': 'industry', 
-            'vlr_mercado': 'market_cap',
-            'vlr_ind_margem_ebit': 'operating_margin',
-            'vlr_ind_beta': 'beta',
-            'nome_papel': 'nome_papel', 'tipo_papel': 'tipo_papel', 'nome_empresa': 'nome_empresa',
-            'vlr_cot': 'vlr_cot', 'dt_ult_cot': 'dt_ult_cot', 'vlr_min_52_sem': 'vlr_min_52_sem',
-            'vlr_max_52_sem': 'vlr_max_52_sem', 'vol_med_neg_2m': 'vol_med_neg_2m', 'vlr_firma': 'vlr_firma',
-            'num_acoes': 'num_acoes', 'pct_var_dia': 'pct_var_dia', 'pct_var_mes': 'pct_var_mes',
-            'pct_var_30d': 'pct_var_30d', 'pct_var_12m': 'pct_var_12m', 'pct_var_ano_a0': 'pct_var_ano_a0',
-            'pct_var_ano_a1': 'pct_var_ano_a1', 'pct_var_ano_a2': 'pct_var_ano_a2', 'pct_var_ano_a3': 'pct_var_ano_a3',
-            'pct_var_ano_a4': 'pct_var_ano_a4', 'pct_var_ano_a5': 'pct_var_ano_a5', 
-            'vlr_ind_p_sobre_ebit': 'p_ebit', 'vlr_ind_psr': 'psr', 'vlr_ind_p_sobre_ativ': 'p_ativo',
-            'vlr_ind_p_sobre_cap_giro': 'p_cap_giro', 'vlr_ind_p_sobre_ativ_circ_liq': 'p_ativ_circ_liq',
-            'vlr_ind_ev_sobre_ebit': 'ev_ebit', 'vlr_ind_lpa': 'lpa', 'vlr_ind_vpa': 'vpa',
-            'vlr_ind_margem_bruta': 'margem_bruta', 'vlr_ind_ebit_sobre_ativo': 'ebit_ativo',
-            'vlr_ind_giro_ativos': 'giro_ativos', 'vlr_ativo': 'ativo_total', 'vlr_disponibilidades': 'disponibilidades',
-            'vlr_ativ_circulante': 'ativo_circulante', 'vlr_divida_bruta': 'divida_bruta', 'vlr_divida_liq': 'divida_liquida',
-            'vlr_patrim_liq': 'patrimonio_liquido', 'vlr_receita_liq_ult_12m': 'receita_liq_12m',
-            'vlr_ebit_ult_12m': 'ebit_12m', 'vlr_lucro_liq_ult_12m': 'lucro_liq_12m'
-        }
-        dados_formatados = {}
-        for col_orig, col_dest in mapping.items():
-            if col_orig in row:
-                val = row[col_orig]
-                if isinstance(val, str):
-                    # === INÍCIO DA CORREÇÃO DE ERRO PYARROW/EMPTY STRING ===
-                    if val.strip() == '':
-                        val = np.nan  # Converte string vazia para NaN
-                    # === FIM DA CORREÇÃO ===
-
-                    # Se o valor ainda for uma string (ou seja, não era vazia)
-                    if isinstance(val, str):
-                        val = val.replace('.', '').replace(',', '.')
-                        if val.endswith('%'):
-                            val = val.replace('%', '')
-                            try: val = float(val) / 100.0
-                            except (ValueError, TypeError): pass
-                try: 
-                    # Tenta a conversão final, que agora aceita float ou np.nan
-                    dados_formatados[col_dest] = float(val)
-                except (ValueError, TypeError): 
-                    dados_formatados[col_dest] = val
-        return dados_formatados
-
-    def coletar_fundamentos_em_lote(self, simbolos: list) -> pd.DataFrame:
-        if not self.pynvest_ativo: 
-            log_debug("Coleta de fundamentos em lote ignorada (Pynvest inativo).")
-            return pd.DataFrame()
-        lista_fund = []
-        log_debug(f"Iniciando coleta de fundamentos para {len(simbolos)} ativos via Pynvest...")
-        for i, simbolo in enumerate(simbolos):
-            try:
-                ticker_pynvest = simbolo.replace('.SA', '').lower()
-                df_fund_raw = self.pynvest_scrapper.coleta_indicadores_de_ativo(ticker_pynvest)
-                if df_fund_raw is not None and not df_fund_raw.empty:
-                    fund_data = self._mapear_colunas_pynvest(df_fund_raw)
-                    fund_data['Ticker'] = simbolo
-                    if 'sector' not in fund_data or fund_data['sector'] == 'Unknown':
-                        fund_data['sector'] = FALLBACK_SETORES.get(simbolo, 'Outros')
-                    lista_fund.append(fund_data)
-                    log_debug(f"Fundamentos para {simbolo} coletados com sucesso.")
-                else:
-                     log_debug(f"AVISO: Pynvest não retornou dados para {simbolo}.")
-            except Exception as e:
-                log_debug(f"ERRO: Falha ao coletar fundamentos para {simbolo}: {str(e)[:50]}...")
-                pass
-            time.sleep(0.05) 
-        
-        if lista_fund:
-            log_debug(f"Coleta de fundamentos finalizada. {len(lista_fund)} ativos com dados.")
-            return pd.DataFrame(lista_fund).set_index('Ticker')
-        return pd.DataFrame()
-
-    def coletar_e_processar_dados(self, simbolos: list, check_min_ativos: bool = True) -> bool:
-        self.ativos_sucesso = []
-        lista_fundamentalistas = []
-        garch_vols = {}
-        metricas_simples_list = []
-        
-        # Obtém o modo GARCH configurado (padrão Garch(1,1))
-        garch_mode = st.session_state.get('garch_mode', 'GARCH(1,1)')
-        
-        consecutive_failures = 0
-        FAILURE_THRESHOLD = 3 
-        global_static_mode = False 
-        log_debug(f"Iniciando ciclo de coleta de preços para {len(simbolos)} ativos. Limite de falhas: {FAILURE_THRESHOLD}. Modo GARCH: {garch_mode}")
-        
-        for simbolo in simbolos:
-            df_tecnicos = pd.DataFrame()
-            usando_fallback_estatico = False 
-            tem_dados = False
-            
-            # Inicializando com valores de fallback para evitar NameError
-            vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0
-            garch_vol = 0.20 # Fallback
-            garch_model_name = "N/A"
-
-            if not global_static_mode:
-                
-                # --- BLOCO PRIMÁRIO: YFINANCE ---
-                try:
-                    log_debug(f"Iniciando Tentativa 1 (YFinance) para {simbolo}...")
-                    session = requests.Session()
-                    session.headers.update({
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                    })
-                    ticker_obj = yf.Ticker(simbolo, session=session)
-                    df_tecnicos = ticker_obj.history(period=self.periodo)
-                except Exception:
-                    pass
-                
-                if df_tecnicos is not None and not df_tecnicos.empty and 'Close' in df_tecnicos.columns:
-                    tem_dados = True
-                    log_debug(f"Tentativa 1 (YFinance): Sucesso. {len(df_tecnicos)} pontos.")
-
-                # --- BLOCO FALLBACK: TVDATAFEED ---
-                if not tem_dados and self.tv_ativo:
-                    log_debug(f"Tentativa 1 falhou. Iniciando Tentativa 2 (TvDatafeed) para {simbolo}...")
-                    simbolo_tv = simbolo.replace('.SA', '')
-                    try:
-                        df_tecnicos = self.tv.get_hist(
-                            symbol=simbolo_tv, 
-                            exchange='BMFBOVESPA', 
-                            interval=Interval.in_daily, 
-                            n_bars=1260
-                        )
-                    except Exception as e:
-                        if "Connection timed out" in str(e):
-                             pass
-                
-                    if df_tecnicos is not None and not df_tecnicos.empty:
-                        tem_dados = True
-                        log_debug(f"Tentativa 2 (TvDatafeed): Sucesso. {len(df_tecnicos)} pontos.")
-                        # --- LOG DETALHADO DO TVDATAFEED ---
-                        log_debug(f"TvDatafeed Head: \n{df_tecnicos.head().to_string()}")
-                        # --- FIM LOG DETALHADO ---
-
-                # --- FIM DA LÓGICA DE SWAP DE COLETA ---
-
-                if not tem_dados:
-                    consecutive_failures += 1
-                    log_debug(f"Coleta de preços para {simbolo} falhou. Falhas consecutivas: {consecutive_failures}")
-                    if consecutive_failures >= FAILURE_THRESHOLD:
-                        global_static_mode = True
-                        log_debug(f"ATIVANDO MODO ESTÁTICO GLOBAL (Limite de {FAILURE_THRESHOLD} falhas atingido).")
-                        st.warning(f"⚠️ Falha na coleta de preços para {consecutive_failures} ativos consecutivos. Ativando MODO FUNDAMENTALISTA GLOBAL (sem histórico de preços) para o restante da lista.")
-                else:
-                    consecutive_failures = 0 
-            
-            if global_static_mode or not tem_dados:
-                usando_fallback_estatico = True
-                log_debug(f"Ativo {simbolo}: Processando em MODO ESTÁTICO (Sem preços históricos).")
-                df_tecnicos = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'rsi_14', 'macd', 'vol_20d'])
-                df_tecnicos.loc[pd.Timestamp.today()] = [np.nan] * len(df_tecnicos.columns)
-            else:
-                log_debug(f"Ativo {simbolo}: Enriquecendo dados técnicos...")
-                rename_map = {
-                    'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'
-                }
-                df_tecnicos.rename(columns=rename_map, inplace=True)
-                
-                for col in df_tecnicos.columns:
-                    if ':' in str(col):
-                        base_col = str(col).split(':')[-1]
-                        if base_col in rename_map:
-                            df_tecnicos.rename(columns={col: rename_map[base_col]}, inplace=True)
-
-                if 'Close' in df_tecnicos.columns:
-                    # Não filtramos por NaNs aqui, deixamos o CalculadoraTecnica tratar.
-                    if not df_tecnicos.empty:
-                        df_tecnicos = CalculadoraTecnica.enriquecer_dados_tecnicos(df_tecnicos)
-                    else:
-                       usando_fallback_estatico = True 
-                else:
-                    usando_fallback_estatico = True
-
-            fund_data = {}
-            if self.pynvest_ativo:
-                try:
-                    ticker_pynvest = simbolo.replace('.SA', '').lower()
-                    df_fund_raw = self.pynvest_scrapper.coleta_indicadores_de_ativo(ticker_pynvest)
-                    if df_fund_raw is not None and not df_fund_raw.empty:
-                        fund_data = self._mapear_colunas_pynvest(df_fund_raw)
-                    else:
-                        fund_data = {'sector': 'Unknown', 'industry': 'Unknown'}
-                except Exception:
-                    fund_data = {'sector': 'Unknown', 'industry': 'Unknown'}
-            
-            if 'sector' not in fund_data or fund_data['sector'] == 'Unknown':
-                 fund_data['sector'] = FALLBACK_SETORES.get(simbolo, 'Outros')
-                 log_debug(f"Ativo {simbolo}: Setor definido via FALLBACK_SETORES.")
-
-            if usando_fallback_estatico and (not fund_data or fund_data.get('pe_ratio') is None):
-                log_debug(f"Ativo {simbolo} pulado: Modo estático, mas dados fundamentais críticos ausentes.")
-                continue 
-
-            if not usando_fallback_estatico and 'returns' in df_tecnicos.columns:
-                retornos = df_tecnicos['returns'].dropna()
-                log_debug(f"Ativo {simbolo}: Calculando métricas de performance (Sharpe/DD/GARCH)...")
-                
-                if len(retornos) > 30:
-                    vol_anual = retornos.std() * np.sqrt(252)
-                    ret_anual = retornos.mean() * 252
-                    sharpe = (ret_anual - TAXA_LIVRE_RISCO) / vol_anual if vol_anual > 0 else 0
-                    cum_prod = (1 + retornos).cumprod()
-                    peak = cum_prod.expanding(min_periods=1).max()
-                    dd = (cum_prod - peak) / peak
-                    max_dd = dd.min()
-                else:
-                    vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0 
-                
-                # --- INÍCIO DA IMPLEMENTAÇÃO GARCH ---
-                garch_vol = vol_anual # Fallback inicial GARCH = Histórico
-                garch_model_name = "Vol. Histórica"
-                
-                if len(retornos) > 60: 
-                    try:
-                        if 'Auto-Search GARCH' in garch_mode:
-                            garch_vol, garch_model_name = self._garch_auto_search(retornos, simbolo)
-                        else:
-                            # MODO RÁPIDO: GARCH(1,1) padrão
-                            am = arch_model(retornos * 100, mean='Zero', vol='Garch', p=1, q=1)
-                            res = am.fit(disp='off', last_obs=retornos.index[-1]) 
-                            garch_std_daily = res.conditional_volatility.iloc[-1] / 100 
-                            temp_garch_vol = garch_std_daily * np.sqrt(252)
-
-                            if np.isnan(temp_garch_vol) or temp_garch_vol == 0 or temp_garch_vol > 1.0: 
-                                raise ValueError("GARCH returned invalid value or nan.")
-                            
-                            garch_vol = temp_garch_vol
-                            garch_model_name = "GARCH(1,1) (Rápido)"
-                            log_debug(f"Ativo {simbolo}: GARCH(1,1) concluído. Vol Condicional: {garch_vol*100:.2f}%.")
-                            
-                    except Exception as e:
-                        garch_vol = vol_anual 
-                        garch_model_name = "Vol. Histórica (GARCH Failed)"
-                        log_debug(f"Ativo {simbolo}: GARCH falhou ({str(e)[:20]}). Usando Vol Histórica como Vol Condicional.")
-                # --- FIM DA IMPLEMENTAÇÃO GARCH ---
-            
-            fund_data.update({
-                'Ticker': simbolo, 'sharpe_ratio': sharpe, 'annual_return': ret_anual,
-                'annual_volatility': vol_anual, 'max_drawdown': max_dd, 'garch_volatility': garch_vol,
-                'static_mode': usando_fallback_estatico, 'garch_model': garch_model_name
-            })
-            
-            self.dados_por_ativo[simbolo] = df_tecnicos
-            self.ativos_sucesso.append(simbolo)
-            lista_fundamentalistas.append(fund_data)
-            garch_vols[simbolo] = garch_vol 
-            
-            metricas_simples_list.append({
-                'Ticker': simbolo, 'sharpe': sharpe, 'retorno_anual': ret_anual,
-                'volatilidade_anual': vol_anual, 'max_drawdown': max_dd,
-            })
-            
-            if not global_static_mode:
-                time.sleep(0.1) 
-
-        self.dados_fundamentalistas = pd.DataFrame(lista_fundamentalistas)
-        if not self.dados_fundamentalistas.empty:
-             self.dados_fundamentalistas = self.dados_fundamentalistas.set_index('Ticker')
-             
-        self.metricas_performance = pd.DataFrame(metricas_simples_list)
-        if not self.metricas_performance.empty:
-             self.metricas_performance = self.metricas_performance.set_index('Ticker')
-             
-        self.volatilidades_garch_raw = garch_vols 
-        
-        for simbolo in self.ativos_sucesso:
-            if simbolo in self.dados_por_ativo:
-                df_local = self.dados_por_ativo[simbolo]
-                if not df_local.empty:
-                    last_idx = df_local.index[-1]
-                    if simbolo in self.dados_fundamentalistas.index:
-                        for k, v in self.dados_fundamentalistas.loc[simbolo].items():
-                            if k not in df_local.columns:
-                                df_local.loc[last_idx, k] = v
-
-        if check_min_ativos and len(self.ativos_sucesso) < NUM_ATIVOS_PORTFOLIO: 
-             log_debug(f"AVISO: Coleta finalizada com {len(self.ativos_sucesso)} ativos, abaixo do mínimo requerido.")
-             return False
-
-        log_debug(f"Coleta de dados finalizada com sucesso. {len(self.ativos_sucesso)} ativos processados.")
-        return True
-
-    def _garch_auto_search(self, returns: pd.Series, symbol: str) -> tuple[float, str]:
-        """Implementa a lógica de grid search massivo (Auto GARCH)."""
-        
-        returns_percent = returns * 100
-        
-        vol_types = ["Garch", "EGARCH", "GJR-GARCH", "HARCH", "APARCH"]
-        dists = ["normal", "t", "ged"]
         p_range = range(1, 3)     
         q_range = range(1, 3)     
         o_range = [0, 1]          
@@ -1680,14 +947,23 @@ class ColetorDadosLive(object):
             MODEL_PARAMS = dict(n_estimators=150, max_depth=7, random_state=42, class_weight='balanced', n_jobs=-1)
             MODEL_NAME = 'Full Ensemble (RF+XGB)'
 
-
+        # CORREÇÃO CRÍTICA: Inicializa is_ml_trained antes do bloco try/except
+        is_ml_trained = False
+        
         if is_price_data_available and CLASSIFIER is not None:
             log_debug(f"Análise Individual ML: Iniciando modelo {MODEL_NAME} para {ativo_selecionado}.")
             try:
                 df = df_tec.copy()
                 
                 # Obtendo os Horizons adaptativos (embora o lookback do perfil não seja fornecido aqui, usamos um padrão)
-                ml_lookback_days = st.session_state.profile.get('ml_lookback_days', 252) # Tenta pegar do perfil, senão 252
+                # Tenta usar a seleção da UI, senão usa o padrão do perfil (252)
+                if st.session_state.get('individual_horizon_selection') == 'Curto (CP)':
+                     ml_lookback_days = 84
+                elif st.session_state.get('individual_horizon_selection') == 'Médio (MP)':
+                     ml_lookback_days = 168
+                else: # Longo (LP) ou Fallback
+                     ml_lookback_days = st.session_state.profile.get('ml_lookback_days', 252) 
+                     
                 ML_HORIZONS_IND = get_ml_horizons(ml_lookback_days)
                 
                 # REFORÇANDO: Garante que os features fundamentais estão na última linha (para a predição)
@@ -1766,32 +1042,31 @@ class ColetorDadosLive(object):
                     df_tec['ML_Proba'] = ensemble_proba
                     df_tec['ML_Confidence'] = conf_final
                     df_ml_meta = importances
+                    is_ml_trained = True # SUCESSO NO TREINAMENTO
                     
                 else:
                     log_debug(f"ML Individual: Dados insuficientes ({len(df_model)}). Pulando modelo supervisionado.")
-                    is_ml_trained = False # Força o Fallback de exibição
-
+                    
             except Exception as e:
                 log_debug(f"ML Individual: ERRO no modelo {MODEL_NAME}: {str(e)[:50]}. {traceback.format_exc()[:100]}")
-                is_ml_trained = False # Força o Fallback de exibição
                 
             
-            # 2. Fallback: Se ML falhou no cálculo ou não foi treinado
-            if not is_ml_trained:
-                log_debug("ML Individual: Modelo supervisionado não foi treinado. Excluindo ML_Proba/Confidence.")
-                
-                # NOVO: Apenas remove as colunas se existirem para que o Fallback de exibição funcione.
-                if 'ML_Proba' in df_tec.columns:
-                    df_tec.drop(columns=['ML_Proba', 'ML_Confidence'], errors='ignore', inplace=True)
-                
-                # Gera uma tabela de importância de fallback se a original não foi gerada
-                if df_ml_meta.empty:
-                    df_ml_meta = pd.DataFrame({
-                        'feature': ['Qualidade (ROE/PL)', 'Estabilidade'],
-                        'importance': [0.8, 0.2]
-                    })
-                
-            return df_tec, fund_row, df_ml_meta
+        # 2. Fallback: Se ML falhou no cálculo ou não foi treinado
+        if not is_ml_trained:
+            log_debug("ML Individual: Modelo supervisionado não foi treinado. Excluindo ML_Proba/Confidence.")
+            
+            # NOVO: Apenas remove as colunas se existirem para que o Fallback de exibição funcione.
+            if 'ML_Proba' in df_tec.columns:
+                df_tec.drop(columns=['ML_Proba', 'ML_Confidence'], errors='ignore', inplace=True)
+            
+            # Gera uma tabela de importância de fallback se a original não foi gerada
+            if df_ml_meta.empty:
+                df_ml_meta = pd.DataFrame({
+                    'feature': ['Qualidade (ROE/PL)', 'Estabilidade'],
+                    'importance': [0.8, 0.2]
+                })
+            
+        return df_tec, fund_row, df_ml_meta
         return None, None, None
 
 # =============================================================================
@@ -1895,7 +1170,7 @@ class ConstrutorPortfolioAutoML:
             MODEL_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel", 'rsi_14', 'macd_diff', 'vol_20d'] # Features descorrelacionados
             CLASSIFIER = RandomForestClassifier
             MODEL_PARAMS = dict(n_estimators=150, max_depth=7, random_state=42, class_weight='balanced', n_jobs=-1)
-            MODEL_NAME = 'Full Ensemble (RF+XGB)'
+            MODEL_NAME = 'Full Ensemble (RF/XGB)'
             
         
         # --- Clusterização Inicial (Fundamentos) ---
@@ -2144,8 +1419,8 @@ class ConstrutorPortfolioAutoML:
         s_prob = EngenheiroFeatures._normalize_score(ml_probs, True)
         
         # Filtra a confiança: Se a confiança for 0.5 (neutro/fallback total) OU 0.0 (falha total), o peso ML é 0.
-        ml_weight_factor = (ml_conf - 0.5).clip(lower=0) * 2 
-        
+        ml_weight_factor = (ml_conf - 0.0).clip(lower=0) * 2 # Manteve-se a lógica de ponderação, agora com base no AUC
+
         scores['ml_score_weighted'] = s_prob * (W_ML_GLOBAL_BASE * ml_weight_factor.fillna(0))
         
         scores['total_score'] = scores.sum(axis=1)
@@ -2320,6 +1595,9 @@ class ConstrutorPortfolioAutoML:
         for simbolo in self.ativos_selecionados:
             justification = []
             
+            # Buscando scores individuais
+            score_row = self.scores_combinados.loc[simbolo] if simbolo in self.scores_combinados.index else {}
+            
             ml_data = self.predicoes_ml.get(simbolo, {})
             # ML Fallback: Verifica se o AUC é 0.0 (falha total)
             is_ml_failed = ml_data.get('auc_roc_score', 0.0) == 0.0
@@ -2331,25 +1609,26 @@ class ConstrutorPortfolioAutoML:
             if is_static:
                 justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
             
+            # Adiciona os scores de cada vertente
+            
+            justification.append(f"Score Fund: {score_row.get('fundamental_score', 0.0):.3f}")
+            justification.append(f"Score Téc: {score_row.get('technical_score', 0.0):.3f}")
+            justification.append(f"Score Perf: {score_row.get('performance_score', 0.0):.3f}")
+            
             if is_ml_failed:
-                # Prioriza a justificativa de fundamentos/ausência de ML quando o modelo falhou
+                justification.append("Score ML: N/A (Falha de Treinamento)")
                 justification.append("✅ Selecionado por Fundamentos (ML não disponível)")
             else:
-                perf = self.metricas_performance.loc[simbolo] if simbolo in self.metricas_performance.index else pd.Series({})
-                justification.append(f"Perf: Sharpe {perf.get('sharpe', np.nan):.2f}, Ret {perf.get('retorno_anual', np.nan)*100:.1f}%")
-                
                 ml_prob = ml_data.get('predicted_proba_up', np.nan)
                 ml_auc = ml_data.get('auc_roc_score', np.nan)
-                justification.append(f"ML: Prob {ml_prob*100:.1f}% (Conf {ml_auc:.2f})")
+                justification.append(f"Score ML: {score_row.get('ml_score_weighted', 0.0):.3f} (Prob {ml_prob*100:.1f}%, Conf {ml_auc:.2f})")
             
-            if simbolo in self.scores_combinados.index:
-                cluster = self.scores_combinados.loc[simbolo, 'Final_Cluster']
-                total_score = self.scores_combinados.loc[simbolo, 'total_score']
-                justification.append(f"Perfil (Cluster): {cluster}")
-                justification.append(f"Score Total: {total_score:.3f}")
-            else:
-                 justification.append("Perfil: N/A (Score base Fallback)")
-
+            # Adiciona Cluster e Setor
+            cluster = score_row.get('Final_Cluster', 'N/A')
+            sector = self.dados_fundamentalistas.loc[simbolo, 'sector'] if simbolo in self.dados_fundamentalistas.index else 'N/A'
+            justification.append(f"Cluster: {cluster}")
+            justification.append(f"Setor: {sector}")
+            
             self.justificativas_selecao[simbolo] = " | ".join(justification)
         return self.justificativas_selecao
         
@@ -2494,7 +1773,7 @@ def safe_format(value):
 # =============================================================================
 
 def configurar_pagina():
-    st.set_page_config(page_title="Sistema de Portfólios Adaptativos", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title="Sistema de Otimização Quantitativa", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
     st.markdown("""
         <style>
         :root { --primary-color: #000000; --secondary-color: #6c757d; --background-light: #f8f9fa; --background-dark: #ffffff; --text-color: #212529; --text-color-light: #ffffff; --border-color: #dee2e6; }
@@ -2515,7 +1794,7 @@ def configurar_pagina():
         
         /* Cards */
         .info-box { 
-            background-color: #f8f9fa; 
+            background-color: #ffffff; 
             border: 1px solid #e0e0e0; 
             padding: 20px; 
             border-radius: 12px; 
@@ -2612,87 +1891,60 @@ def configurar_pagina():
 def aba_introducao():
     """Aba 1: Introdução Metodológica Didática e Exaustiva (Estilo Manual Completo)"""
     
-    st.markdown("## 📚 Manual Completo e Metodologia do Sistema")
+    st.markdown("## 📚 Visão Geral do Sistema de Otimização Quantitativa")
     
     st.markdown("""
     <div class="info-box" style="text-align: center;">
-    <h3>🎯 O Que é este Sistema?</h3>
-    <p>Este é um <b>Robo-Advisor Quantitativo Híbrido</b> projetado para o mercado brasileiro (B3). Ele utiliza uma abordagem sistemática para eliminar o viés emocional da seleção de ativos.</p>
-    <p><b>Objetivo Principal:</b> Construir uma carteira de investimentos otimizada (geralmente 5 ativos) que busque a melhor relação risco-retorno, adaptando-se dinamicamente ao perfil do investidor e às condições de mercado em tempo real.</p>
+    <h3>📈 Modelo de Alocação de Ativos Adaptativo</h3>
+    <p>Este sistema utiliza uma metodologia quantitativa e híbrida para construir portfólios otimizados para o mercado brasileiro (B3). O objetivo é maximizar o retorno ajustado ao risco (Sharpe Ratio) e garantir a diversificação estatística, baseando-se no perfil de risco e horizonte de tempo do investidor.</p>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("---")
-    st.subheader("1. O 'Cérebro' do Sistema (Motor de Decisão)")
-    st.write("O sistema utiliza uma abordagem de **Decisão Multicritério**. Ele avalia cada ativo sob 4 pilares fundamentais simultaneamente. Dependendo da disponibilidade de dados em tempo real, ele alterna automaticamente entre dois modos de operação para garantir robustez:")
+    st.subheader("1. Arquitetura do Motor de Decisão Multicritério")
+    st.write("A avaliação de cada ativo é realizada sob quatro pilares independentes. A ponderação de cada pilar é ajustada dinamicamente com base nas respostas do questionário de perfil (Ex: Curto Prazo prioriza Fatores Técnicos e ML; Longo Prazo prioriza Fundamentos).")
 
-    with st.expander("🧠 MODO A: Tradicional (Análise Completa Híbrida) - O Ideal"):
+    col_p1, col_p2, col_p3 = st.columns(3)
+    
+    with col_p1:
+        st.markdown("#### Fatores de Decisão")
         st.markdown("""
-        Este é o modo padrão ativado quando o sistema consegue acessar **todos** os dados necessários (Preços Históricos + Balanços das Empresas).
-        
-        A nota final (Score) de cada ativo é composta por:
-
-        | Pilar | Peso | O que é analisado? | Racional Econômico |
-        | :--- | :--- | :--- | :--- |
-        | **1. Performance** | **20% (Fixo)** | **Índice Sharpe** e **Retorno Anual**. | Identifica ativos que historicamente entregaram retorno excedente ajustado ao risco. |
-        | **2. Machine Learning** | **20% (Fixo)** | **Probabilidade Estatística**. | Um modelo *LightGBM* (Gradient Boosting) processa padrões não-lineares para estimar a probabilidade de alta futura. |
-        | **3. Fundamentos** | **Varia (30% dos 60% restantes)** | **Saúde Financeira** (P/L, ROE, Margens). | Avalia a qualidade intrínseca do negócio. |
-        | **4. Técnicos** | **Varia (30% dos 60% restantes)** | **Momentum** (RSI, MACD, Volatilidade). | Avalia o timing e a tendência de curto prazo. |
-        
-        *Os pesos dos pilares Fundamentalista e Técnico variam sobre os 60% restantes da pontuação, ajustados dinamicamente com base no horizonte de investimento selecionado pelo usuário.*
+        | Pilar | Peso Base | Foco Principal |
+        | :--- | :--- | :--- |
+        | **Performance** | **20%** | Sharpe Ratio e Retorno Histórico. |
+        | **Machine Learning** | **20%** | Probabilidade de Movimento Direcional Futuro. |
+        | **Fundamentos** | **Varia** | Qualidade e Saúde Financeira (P/L, ROE, Dívida). |
+        | **Técnicos** | **Varia** | Momentum e Tendência (RSI, MACD, Volatilidade). |
         """)
 
-    with st.expander("🛡️ MODO B: Fallback (Segurança Fundamentalista) - Alta Resiliência"):
+    with col_p2:
+        st.markdown("#### 🧠 Lógica de Ponderação (Exemplo)")
+        st.markdown("A alocação final combina a otimização de portfólio (Markowitz) com a pontuação multicritério, garantindo que o portfólio seja eficiente e alinhado ao risco.")
+        st.dataframe(pd.DataFrame({
+            "Pilar": ["Fundamentalista", "Técnico", "Peso Total"],
+            "CP (4 Meses)": ["30% do remanescente", "70% do remanescente", "100%"],
+            "LP (12 Meses)": ["70% do remanescente", "30% do remanescente", "100%"]
+        }).set_index('Pilar'), use_container_width=True)
+        
+    with col_p3:
+        st.markdown("#### 🛡️ Gestão de Risco e Modelagem")
+        st.markdown("O sistema oferece diferentes níveis de sofisticação para estimar o risco (Volatilidade Condicional) e a previsão:")
         st.markdown("""
-        A coleta de dados financeiros em tempo real via APIs públicas pode apresentar instabilidades momentâneas.
-        
-        **Mecanismo de Fail-Fast:** Se o sistema detectar falhas consecutivas na obtenção de preços, ele ativa automaticamente o **Modo de Segurança**.
-        
-        Neste modo:
-        1.  **Exclusão de Métricas de Preço:** Gráficos, volatilidade e modelos de ML (que dependem de séries temporais) são desativados para evitar dados corrompidos.
-        2.  **Foco em Qualidade (Quality Investing):** O Score do ativo passa a ser **100% derivado dos Fundamentos** (Balanço Patrimonial, DRE, Fluxo de Caixa), obtidos de fontes alternativas.
-        3.  **ML Não-Supervisionado:** Utilizamos algoritmos de Clusterização e Detecção de Anomalias (Isolation Forest) para identificar ativos "fora da curva" (Outliers positivos) sem depender de previsão de preço.
-        
-        *Este mecanismo garante que o usuário sempre receba uma recomendação de investimento válida baseada em dados concretos, mesmo em cenários de falha de API.*
+        * **Volatilidade:** Utiliza **GARCH(1,1)** para cálculo rápido ou **Auto-Search GARCH** (Grid Search) para modelos de risco mais precisos e complexos.
+        * **Previsão (ML):** Escolha entre modelos **Rápidos (LightGBM)**, otimizados para velocidade, ou modelos **Lentos (Ensemble RF/XGB)**, que buscam a máxima precisão por meio de validação robusta.
         """)
+
 
     st.markdown("---")
-    st.subheader("2. O Processo de Seleção (Funil de Investimento)")
+    st.subheader("2. Mecanismo de Robustez e Fallback")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
+    with st.expander("✅ Funcionamento do Fallback de Dados"):
         st.markdown("""
-        <div class="info-box" style="text-align: center;">
-        <h4>1️⃣ Coleta de Dados</h4>
-        <p style="font-size: 0.9rem;">Mineração em tempo real de ~90 ativos do Ibovespa.</p>
-        </div>
-        """, unsafe_allow_html=True)
-    with col2:
-        st.markdown("""
-        <div class="info-box" style="text-align: center;">
-        <h4>2️⃣ Scoring & Filtro</h4>
-        <p style="font-size: 0.9rem;">Cálculo de indicadores e eliminação de ativos fracos.</p>
-        </div>
-        """, unsafe_allow_html=True)
-    with col3:
-        st.markdown("""
-        <div class="info-box" style="text-align: center;">
-        <h4>3️⃣ Otimização Final</h4>
-        <p style="font-size: 0.9rem;">Combinação matemática para diversificação eficiente.</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-    with st.expander("🔍 Detalhe Técnico: A Clusterização (K-Means)"):
-        st.write("""
-        Para garantir uma diversificação real, o sistema não seleciona apenas os "Top 5" melhores Scores. Isso poderia resultar em uma carteira concentrada (ex: 5 bancos).
+        O sistema é resiliente a falhas de API de preço ou dados insuficientes:
         
-        **O Método:**
-        Utilizamos um algoritmo de aprendizado não-supervisionado (**K-Means Clustering**) aplicado sobre os componentes principais (**PCA**) dos indicadores das empresas.
-        
-        1.  O algoritmo agrupa as empresas em "Clusters" (famílias) com comportamento estatístico e fundamentalista semelhante.
-        2.  Na seleção final, o sistema é forçado a escolher o melhor ativo de **clusters diferentes**.
-        
-        **Resultado:** Uma carteira estatisticamente descorrelacionada, reduzindo o risco sistêmico setorial.
+        * **Modo Estático Global:** Ativado se a coleta de preços falhar consecutivamente para múltiplos ativos, impedindo que dados incompletos corrompam a análise de risco.
+        * **Fallback ML (Treinamento):** Se um ativo não tiver dados históricos de preço suficientes para treinar o modelo de Machine Learning, sua predição de ML é descartada (AUC=0). **No entanto, o ativo não é excluído da análise**, permitindo que ele seja classificado e selecionado apenas por seus fortes Fundamentos, Performance Histórica e Clusterização.
+        * **Clusterização e Fundamentos:** Os processos de Clusterização (K-Means + PCA) e a leitura dos Fundamentos são independentes do histórico de preços, garantindo que uma avaliação de **Qualidade** sempre esteja disponível.
         """)
 
 def aba_selecao_ativos():
@@ -2721,7 +1973,7 @@ def aba_selecao_ativos():
     
     if "Índice de Referência" in modo_selecao:
         ativos_selecionados = TODOS_ATIVOS.copy()
-        st.success(f"✓ **{len(ativos_selecionados)} ativos** (Ibovespa completo) definidos para análise.")
+        st.success(f"✔️ **{len(ativos_selecionados)} ativos** (Ibovespa completo) definidos para análise.")
         
         with st.expander("📋 Visualizar Tickers"):
             st.write(", ".join([a.replace('.SA', '') for a in ativos_selecionados]))
@@ -2802,7 +2054,7 @@ def aba_selecao_ativos():
         col2.metric("Para Ranqueamento", len(ativos_selecionados))
         col3.metric("Carteira Final", NUM_ATIVOS_PORTFOLIO)
         
-        st.success("✓ Definição concluída. Prossiga para a aba **'Construtor de Portfólio'**.")
+        st.success("✔️ Definição concluída. Prossiga para a aba **'Construtor de Portfólio'**.")
     else:
         st.warning("⚠️ O universo de análise está vazio.")
 
@@ -2822,7 +2074,7 @@ def aba_construtor_portfolio():
     if not st.session_state.builder_complete:
         st.markdown('## 📋 Calibração do Perfil de Risco')
         
-        st.info(f"✓ **{len(st.session_state.ativos_para_analise)} ativos** prontos. Responda o questionário para calibrar a otimização.")
+        st.info(f"✔️ **{len(st.session_state.ativos_para_analise)} ativos** prontos. Responda o questionário para calibrar a otimização.")
         
         col_question1, col_question2 = st.columns(2)
         
@@ -2898,7 +2150,7 @@ def aba_construtor_portfolio():
                             'fast', 
                             'full'
                         ],
-                        format_func=lambda x: "Rápido (~90s, LightGBM)" if x == 'fast' else "Lento (Análise Completa RF/XGB/Auto-GARCH)",
+                        format_func=lambda x: "Rápido (LightGBM)" if x == 'fast' else "Lento (Análise Completa RF/XGB/Auto-GARCH)",
                         index=0,
                         key='ml_model_mode_select'
                     )
@@ -3282,6 +2534,7 @@ def aba_construtor_portfolio():
                             perf = builder.metricas_performance.loc[ativo]
                             vol_hist = perf.get('volatilidade_anual', np.nan)
                             vol_garch = builder.volatilidades_garch.get(ativo)
+                            garch_model_name = builder.dados_fundamentalistas.loc[ativo].get('garch_model', 'N/A')
                             
                             if vol_garch is not None and not np.isnan(vol_garch):
                                 status = '✓ GARCH Ajustado (Previsão de Risco)'
@@ -3297,6 +2550,7 @@ def aba_construtor_portfolio():
                                 'Ticker': ativo.replace('.SA', ''),
                                 'Vol. Histórica (%)': vol_hist * 100 if not np.isnan(vol_hist) else 'N/A',
                                 'Vol. Condicional (%)': vol_display * 100 if vol_display is not None and not np.isnan(vol_display) else 'N/A',
+                                'Modelo GARCH': garch_model_name,
                                 'Status de Cálculo': status
                             })
                     
@@ -3445,7 +2699,7 @@ def aba_construtor_portfolio():
                         </div>
                         """, unsafe_allow_html=True)
             
-            # Botão Recalibrar Centralizado no Final
+            # Botão Recalibrar Perfil Centralizado no Final
             st.markdown("---")
             col_space1, col_btn, col_space2 = st.columns([1, 1, 1])
             with col_btn:
@@ -3482,25 +2736,51 @@ def aba_analise_individual():
     
     st.write("") # Spacer
     
-    # NOVO: Seleção de Modos de GARCH e ML para a Análise Individual
+    # --- NOVO: Seleção de Horizonte ML para Análise Individual ---
+    st.markdown("#### Prazos de Predição (Dias Úteis Futuros)")
+    
+    col_h_cp, col_h_mp, col_h_lp = st.columns(3)
+    
+    # Mapeia as opções para os lookback days (que serão usados por get_ml_horizons)
+    horizon_map_individual = {
+        'Curto Prazo (CP)': 84,
+        'Médio Prazo (MP)': 168,
+        'Longo Prazo (LP)': 252
+    }
+    
+    # Botões de seleção de horizonte (usando st.radio em colunas para simular quadrados)
+    with col_h_cp:
+        if st.button("Curto Prazo (CP)", key='btn_h_cp', use_container_width=True):
+            st.session_state['individual_horizon_selection'] = 'Curto Prazo (CP)'
+    with col_h_mp:
+        if st.button("Médio Prazo (MP)", key='btn_h_mp', use_container_width=True):
+            st.session_state['individual_horizon_selection'] = 'Médio Prazo (MP)'
+    with col_h_lp:
+        if st.button("Longo Prazo (LP)", key='btn_h_lp', use_container_width=True):
+            st.session_state['individual_horizon_selection'] = 'Longo Prazo (LP)'
+            
+    st.session_state.profile['ml_lookback_days'] = horizon_map_individual.get(st.session_state.get('individual_horizon_selection', 'Longo Prazo (LP)'), 252)
+
+
+    st.write("") # Spacer
+    
+    # NOVO: Seleção de Modos de GARCH e ML para a Análise Individual (ocupando a lateralidade)
     col_modes = st.columns(3)
     with col_modes[0]:
         garch_mode_select = st.selectbox(
-            "Modo Volatilidade (GARCH):",
+            "Volatilidade:",
             ['GARCH(1,1)', 'Auto-Search GARCH'],
             key='individual_garch_mode',
             index=0 if st.session_state.get('individual_garch_mode', 'GARCH(1,1)') == 'GARCH(1,1)' else 1
         )
     with col_modes[1]:
         ml_mode_select = st.selectbox(
-            "Modo ML:",
+            "Modelo ML:",
             ['fast', 'full'],
             key='individual_ml_mode',
             format_func=lambda x: "ML Rápido (LGBM)" if x == 'fast' else "ML Lento (RF/XGB)",
             index=0 if st.session_state.get('individual_ml_mode', 'fast') == 'fast' else 1
         )
-    
-    st.write("") # Spacer
     
     # NOVO: Botões Centralizados (Executar Análise e Limpar Análise)
     col_btn_start, col_btn_center, col_btn_end = st.columns([1, 2, 1])
@@ -3515,7 +2795,7 @@ def aba_analise_individual():
                  st.rerun()
     
     if 'analisar_ativo_triggered' not in st.session_state or not st.session_state.analisar_ativo_triggered:
-        st.info("👆 Selecione um ticker e os modos de modelagem e clique em 'Gerar Resultados'.")
+        st.info("👆 Selecione um ticker, defina o Horizonte e os modelos para gerar os resultados.")
         return
     
     with st.spinner(f"Analisando {ativo_selecionado} (Coleta em Tempo Real)..."):
@@ -3957,7 +3237,7 @@ def main():
         st.session_state.debug_logs = []
     # REMOVIDO: A chamada mostrar_debug_panel() foi removida conforme solicitado.
 
-    st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">Sistema de Otimização Quantitativa</h1>', unsafe_allow_html=True)
     
     # Esta linha foi simplificada no código de produção para uso das abas
     tabs_list = ["📚 Metodologia", "🎯 Seleção de Ativos", "🏗️ Construtor de Portfólio", "🔍 Análise Individual", "📖 Referências"]
