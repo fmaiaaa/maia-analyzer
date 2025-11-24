@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.27 (Update: WIDE SELECTION METRICS, DETAILED RANKING, CLUSTER VISUALIZATION UNIFIED)
+Versão: 9.32.29 (Update: ENSEMBLE ML (RF+XGB), ENHANCED TECHNICAL FEATURES, ML/GARCH ROBUSTNESS)
 =============================================================================
 """
 
@@ -69,6 +69,15 @@ from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer 
+# NOVO: Adicionando XGBoost para Ensemble
+try:
+    import xgboost as xgb
+except ImportError:
+    xgb = None 
+try:
+    import ta
+except ImportError:
+    ta = None # Biblioteca de análise técnica para features avançadas
 try:
     import hdbscan
 except ImportError:
@@ -93,9 +102,9 @@ PESO_MIN = 0.10
 PESO_MAX = 0.30
 
 LOOKBACK_ML_DAYS_MAP = {
-    'curto_prazo': 84,   # ALTERADO: 84 dias (Aprox. 4 meses)
-    'medio_prazo': 168,  # ALTERADO: 168 dias (Aprox. 8 meses)
-    'longo_prazo': 252   # ALTERADO: 252 dias (Aprox. 1 ano)
+    'curto_prazo': 84,   # Aprox. 4 meses
+    'medio_prazo': 168,  # Aprox. 8 meses
+    'longo_prazo': 252   # Aprox. 1 ano
 }
 
 # =============================================================================
@@ -276,38 +285,73 @@ class CalculadoraTecnica:
     def enriquecer_dados_tecnicos(df_ativo: pd.DataFrame) -> pd.DataFrame:
         if df_ativo.empty: return df_ativo
         df = df_ativo.sort_index().copy()
-        df['returns'] = df['Close'].pct_change()
         
-        # RSI
-        delta = df['Close'].diff()
+        # Renomeia colunas para o padrão da biblioteca TA, se necessário
+        df.rename(columns={'Close': 'close', 'High': 'high', 'Low': 'low', 'Open': 'open', 'Volume': 'volume'}, inplace=True)
+
+        df['returns'] = df['close'].pct_change()
+        
+        # --- FEATURES ANTERIORES ---
+        delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        # Evita divisão por zero
         rs = gain / loss.replace(0, np.nan)
         df['rsi_14'] = 100 - (100 / (1 + rs))
         
-        # MACD
-        ema_12 = df['Close'].ewm(span=12, adjust=False).mean()
-        ema_26 = df['Close'].ewm(span=26, adjust=False).mean()
+        ema_12 = df['close'].ewm(span=12, adjust=False).mean()
+        ema_26 = df['close'].ewm(span=26, adjust=False).mean()
         df['macd'] = ema_12 - ema_26
         df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean()
         df['macd_diff'] = df['macd'] - df['macd_signal']
         
-        # Volatilidade e Momentum
         df['vol_20d'] = df['returns'].rolling(window=20).std() * np.sqrt(252)
-        df['momentum_10'] = df['Close'] / df['Close'].shift(10) - 1
-        df['sma_50'] = df['Close'].rolling(window=50).mean()
-        df['momentum_60'] = df['Close'].pct_change(60)
+        df['momentum_10'] = df['close'] / df['close'].shift(10) - 1
+        df['sma_50'] = df['close'].rolling(window=50).mean()
+        df['momentum_60'] = df['close'].pct_change(60)
         
-        # Bollinger Bands Width
-        rolling_mean = df['Close'].rolling(window=20).mean()
-        rolling_std = df['Close'].rolling(window=20).std()
+        rolling_mean = df['close'].rolling(window=20).mean()
+        rolling_std = df['close'].rolling(window=20).std()
         upper = rolling_mean + (rolling_std * 2)
         lower = rolling_mean - (rolling_std * 2)
-        # Evita divisão por zero/NaN
         df['bb_width'] = (upper - lower) / rolling_mean.replace(0, np.nan)
         
-        return df
+        # --- NOVOS FEATURES BASEADOS NO CÓDIGO DO COLAB (Usando biblioteca TA, se disponível) ---
+        if ta is not None:
+             try:
+                 df["ret"] = np.log(df["close"] / df["close"].shift(1))
+                 df["vol_21_raw"] = df["ret"].rolling(21).std() * np.sqrt(252)
+                 df["ma21"] = df["close"].rolling(21).mean()
+                 df["price_ma21"] = (df["close"] - df["ma21"]) / (df["ma21"] + 1e-9)
+
+                 # RSI (Mantido o cálculo anterior para compatibilidade, mas incluímos o do Colab como 'rsi_ta')
+                 df["rsi_ta"] = ta.momentum.RSI(df["close"], window=14).rsi()
+
+                 # MACD (Mantido o cálculo anterior, mas incluímos o diff do Colab como 'macd_diff_ta')
+                 macd_ta = ta.trend.MACD(df["close"])
+                 df["macd_diff_ta"] = macd_ta.macd_diff()
+
+                 df["atr_14"] = ta.volatility.AverageTrueRange(df["high"], df["low"], df["close"], window=14).average_true_range()
+
+                 df["vol_z_score"] = (df["volume"] - df["volume"].rolling(21).mean()) / (
+                     df["volume"].rolling(21).std() + 1e-9
+                 )
+             except Exception as e:
+                 log_debug(f"AVISO: Falha ao gerar features avançados com TA: {e}")
+                 pass
+
+        # Renomeia de volta para o padrão Streamlit
+        df.rename(columns={'close': 'Close', 'high': 'High', 'low': 'Low', 'open': 'Open', 'volume': 'Volume'}, inplace=True)
+        
+        # Remove colunas duplicadas ou temporárias para manter o dataframe limpo
+        cols_to_drop = ['ret', 'ma21', 'rsi_ta', 'macd_diff_ta', 'vol_21_raw', 'atr_14', 'vol_z_score']
+        for col in cols_to_drop:
+            if col in df.columns:
+                 # Se a coluna de destino já existe e não é a original, remove a nova
+                 if col not in ['returns', 'rsi_14', 'macd_diff', 'vol_20d', 'bb_width']:
+                    df.rename(columns={col: col.replace('_raw', '').replace('_ta', '')}, inplace=True)
+        
+        # Final cleanup and return
+        return df.dropna(subset=['Close']).fillna(0) # Preenche NaNs restantes com 0 para evitar problemas no ML
 
 # =============================================================================
 # 6. CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR
@@ -373,26 +417,35 @@ class OtimizadorPortfolioAvancado:
     def __init__(self, returns_df: pd.DataFrame, garch_vols: dict = None):
         self.returns = returns_df
         self.mean_returns = returns_df.mean() * 252
-        if garch_vols is not None and garch_vols:
+        
+        # NOVO: Filtra garch_vols garantindo que apenas valores válidos (não zero/NaN) sejam usados
+        valid_garch_vols = {k: v for k, v in garch_vols.items() if not np.isnan(v) and v > 0} if garch_vols else {}
+
+        if valid_garch_vols:
             try:
-                self.cov_matrix = self._construir_matriz_cov_garch(returns_df, garch_vols)
-            except:
-                self.cov_matrix = returns_df.cov() * 252 # Fallback se GARCH falhar na matriz
+                self.cov_matrix = self._construir_matriz_cov_garch(returns_df, valid_garch_vols)
+            except Exception:
+                # Fallback total para matriz de covariância histórica
+                self.cov_matrix = returns_df.cov() * 252 
         else:
             self.cov_matrix = returns_df.cov() * 252
+            
         self.num_ativos = len(returns_df.columns)
 
     def _construir_matriz_cov_garch(self, returns_df: pd.DataFrame, garch_vols: dict) -> pd.DataFrame:
+        # A matriz de correlação é baseada em retornos históricos
         corr_matrix = returns_df.corr()
-        # Verifica se GARCH Vols estão validas, senão usa histórica
+        
         vol_array = []
         for ativo in returns_df.columns:
+            # Usa GARCH vol se disponível e válida, senão cai para vol histórica
             vol = garch_vols.get(ativo)
-            if pd.isna(vol) or vol == 0:
+            if pd.isna(vol) or vol <= 0:
                 vol = returns_df[ativo].std() * np.sqrt(252) # Fallback histórico
             vol_array.append(vol)
             
         vol_array = np.array(vol_array)
+        # Reconstroi a matriz de covariância usando correlação histórica e volatilidade condicional/histórica
         cov_matrix = corr_matrix.values * np.outer(vol_array, vol_array)
         return pd.DataFrame(cov_matrix, index=returns_df.columns, columns=returns_df.columns)
     
@@ -689,11 +742,16 @@ class ColetorDadosLive(object):
                 if len(retornos) > 60: 
                     try:
                         # GARCH é sensível a dados muito longos ou ruído, mantemos a chamada.
+                        # Tenta rodar GARCH. Se falhar, usa vol_anual.
                         am = arch_model(retornos * 100, mean='Zero', vol='Garch', p=1, q=1)
                         res = am.fit(disp='off', last_obs=retornos.index[-1]) 
                         garch_std_daily = res.conditional_volatility.iloc[-1] / 100 
-                        garch_vol = garch_std_daily * np.sqrt(252)
-                        if np.isnan(garch_vol) or garch_vol == 0: raise ValueError("GARCH returned NaN or zero.")
+                        temp_garch_vol = garch_std_daily * np.sqrt(252)
+                        
+                        # Se o resultado do GARCH for NaN, zero, ou absurdo, usa fallback
+                        if np.isnan(temp_garch_vol) or temp_garch_vol == 0 or temp_garch_vol > 1.0: 
+                             raise ValueError("GARCH returned invalid value.")
+                        garch_vol = temp_garch_vol
                         log_debug(f"Ativo {simbolo}: GARCH concluído. Vol Condicional: {garch_vol*100:.2f}%.")
                     except Exception as e:
                         garch_vol = vol_anual 
@@ -771,45 +829,72 @@ class ColetorDadosLive(object):
         is_price_data_available = 'Close' in df_tec.columns and not df_tec['Close'].isnull().all() and len(df_tec.dropna(subset=['Close'])) > 60
         
         # --- NOVO: Feature Pool Completo para ML e GARCH ---
-        ALL_TECH_FEATURES = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'momentum_60', 'bb_width']
+        ALL_TECH_FEATURES = [c for c in df_tec.columns if c not in ['Close', 'High', 'Low', 'Open', 'Volume', 'returns', 'returns_raw']]
         ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
         
         if is_price_data_available:
             log_debug(f"Análise Individual ML: Iniciando modelo supervisionado para {ativo_selecionado}.")
             try:
                 df = df_tec.copy()
-                # O enrichment já foi feito no coletor, mas garantimos que as colunas existem
                 
+                # REFORÇANDO: Garante que os features fundamentais estão na última linha
+                last_idx = df.index[-1] if not df.empty else None
+                if last_idx:
+                    for f_col in ALL_FUND_FEATURES:
+                        if f_col in fund_row and f_col not in df.columns:
+                            df.loc[last_idx, f_col] = fund_row[f_col]
+                        elif f_col not in df.columns:
+                            df[f_col] = np.nan
+                            
+                # Target: Direção Futura
                 df['Future_Direction'] = np.where(df['Close'].pct_change(5).shift(-5) > 0, 1, 0)
                 
-                # Identifica features válidas para este ativo
                 available_features = [f for f in (ALL_TECH_FEATURES + ALL_FUND_FEATURES) if f in df.columns]
-                
-                # Remove NaNs apenas para as features de interesse
                 df_model = df.dropna(subset=available_features + ['Future_Direction'])
 
                 if len(df_model) > 50:
-                    log_debug(f"ML Individual: {len(df_model)} pontos válidos para treino. Treinando RF...")
+                    log_debug(f"ML Individual: {len(df_model)} pontos válidos para treino. Treinando Ensemble (RF+XGB)...")
 
                     X = df_model[available_features].iloc[:-5]
                     y = df_model['Future_Direction'].iloc[:-5]
                     
-                    # Filtra features que ainda são todas NaN após o dropna (impossível se dropna for bem sucedido, mas seguro)
                     final_features = [col for col in X.columns if not X[col].isnull().all()]
                     X = X[final_features]
 
+                    # --- PIPELINE DE ENSEMBLE (RF + XGB) ---
+                    if 'Cluster' in X.columns: X['Cluster'] = X['Cluster'].astype(str)
+                    
+                    categorical_cols = ['Cluster'] if 'Cluster' in X.columns else []
+                    numeric_cols = [c for c in X.columns if c not in categorical_cols]
+                    
+                    preprocessor = ColumnTransformer(transformers=[
+                            ('num', StandardScaler(), numeric_cols),
+                            ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_cols)
+                        ], remainder='passthrough')
+                    
+                    # 1. Random Forest (RF)
+                    rf_model = Pipeline(steps=[('preprocessor', preprocessor), 
+                                               ('classifier', RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced', n_jobs=-1))])
+                    
+                    # 2. XGBoost (XGB)
+                    if xgb is not None:
+                        xgb_model = Pipeline(steps=[('preprocessor', preprocessor), 
+                                                    ('classifier', xgb.XGBClassifier(n_estimators=100, max_depth=3, learning_rate=0.1, use_label_encoder=False, eval_metric='logloss', random_state=42, n_jobs=-1))])
+                    
+                    # Treinamento e Predição
+                    rf_model.fit(X, y)
+                    rf_proba = rf_model.predict_proba(df[final_features].iloc[[-1]].copy().fillna(0))[0][1]
+                    
+                    ensemble_proba = rf_proba
+                    if xgb is not None:
+                         xgb_model.fit(X, y)
+                         xgb_proba = xgb_model.predict_proba(df[final_features].iloc[[-1]].copy().fillna(0))[0][1]
+                         ensemble_proba = (rf_proba + xgb_proba) / 2.0 # Média simples do ensemble
 
-                    model = RandomForestClassifier(n_estimators=50, max_depth=5, random_state=42)
-                    model.fit(X, y)
-                    
-                    last_features = df[final_features].iloc[[-1]].copy().fillna(0) # Garantir que o input de predição não tem NaN
-                    proba = model.predict_proba(last_features)[0][1]
-                    
-                    # --- CÁLCULO DE AUC PARA CONFIANÇA ---
+                    # Avaliação (Usando o modelo RF para simplicidade na AUC)
                     if len(np.unique(y)) >= 2:
-                        from sklearn.metrics import roc_auc_score
                         cv = TimeSeriesSplit(n_splits=3)
-                        auc_scores = cross_val_score(model, X, y, cv=cv, scoring='roc_auc')
+                        auc_scores = cross_val_score(rf_model, X, y, cv=cv, scoring='roc_auc')
                         avg_auc = auc_scores.mean()
                     else:
                         avg_auc = 0.5
@@ -818,7 +903,6 @@ class ColetorDadosLive(object):
                     is_neutral_result = (avg_auc <= 0.55) or (len(np.unique(y)) < 2) 
 
                     if is_neutral_result:
-                        # Heuristica de proxy para o MODO SUPERVISIONADO NEUTRO
                         roe = fund_row.get('roe', 0); pe = fund_row.get('pe_ratio', 15)
                         if pe <= 0: pe = 20
                         score_fund_proxy = min(0.9, max(0.05, (roe * 100) / pe * 0.5 + 0.4))
@@ -827,13 +911,15 @@ class ColetorDadosLive(object):
                         conf_final = 0.60
                         log_debug(f"ML Individual: Neutro (AUC={avg_auc:.2f}). Usando Proxy Fund. Score: {proba_final:.2f}.")
                     else:
-                        proba_final = proba
+                        proba_final = ensemble_proba
                         conf_final = avg_auc
-                        log_debug(f"ML Individual: Sucesso. Prob: {proba_final:.2f}, AUC: {conf_final:.2f}.")
+                        log_debug(f"ML Individual: Sucesso. Ensemble Prob: {proba_final:.2f}, RF AUC: {conf_final:.2f}.")
 
+                    # Importância das features (usando RF como proxy do ensemble)
+                    feature_names = rf_model.named_steps['preprocessor'].get_feature_names_out()
                     importances = pd.DataFrame({
-                        'feature': final_features,
-                        'importance': model.feature_importances_
+                        'feature': feature_names,
+                        'importance': rf_model.named_steps['classifier'].feature_importances_
                     }).sort_values('importance', ascending=False)
                     
                     df_tec['ML_Proba'] = proba_final
@@ -842,30 +928,24 @@ class ColetorDadosLive(object):
                     
                 else:
                     log_debug(f"ML Individual: Dados insuficientes ({len(df_model)}). Pulando modelo supervisionado.")
-                    is_price_data_available = False # Força fallback não supervisionado no próximo if
+                    is_price_data_available = False
             except Exception as e:
-                log_debug(f"ML Individual: ERRO no modelo supervisionado: {str(e)[:50]}.")
+                log_debug(f"ML Individual: ERRO no modelo supervisionado: {str(e)[:50]}. {traceback.format_exc()[:100]}")
                 is_price_data_available = False
                 
             
-            # 2. Se ML não rodou (sem preço, ou falhou, ou dados insuficientes), roda UNSUPERVISED ANOMALY DETECTION
+            # 2. Fallback: Se ML não rodou (sem preço, ou falhou, ou dados insuficientes)
             if 'ML_Proba' not in df_tec.columns or not is_price_data_available:
                 log_debug(f"Análise Individual ML: Recorrendo ao modelo NÃO SUPERVISIONADO (Fallback/Estático).")
                 try:
-                    # Simulação de Anomalia (Isolation Forest)
-                    cols_fund = ['pe_ratio', 'pb_ratio', 'roe', 'net_margin', 'div_yield']
-                    row_data = {k: float(fund_row.get(k, 0)) for k in cols_fund}
-                    roe = row_data['roe']
-                    pe = row_data['pe_ratio']
-                    if pe <= 0: pe = 20
-                    
                     # Heuristica de "Qualidade" como proxy de ML
+                    roe = fund_row.get('roe', 0); pe = fund_row.get('pe_ratio', 15)
+                    if pe <= 0: pe = 20
                     quality_score = min(0.95, max(0.05, (roe * 100) / pe * 0.5 + 0.4))
                     
                     df_tec['ML_Proba'] = quality_score
-                    df_tec['ML_Confidence'] = 0.50 # Confiança média para fallback
+                    df_tec['ML_Confidence'] = 0.50 
                     
-                    # Metadados explicativos
                     df_ml_meta = pd.DataFrame({
                         'feature': ['Qualidade (ROE/PL)', 'Estabilidade'],
                         'importance': [0.8, 0.2]
@@ -905,8 +985,17 @@ class ConstrutorPortfolioAutoML:
         coletor = ColetorDadosLive(periodo=self.periodo)
         simbolos_filtrados = [s for s in simbolos if s in TODOS_ATIVOS]
         if not simbolos_filtrados: return False
-        if not coletor.coletar_e_processar_dados(simbolos_filtrados): return False
         
+        # Inicia a coleta
+        if not coletor.coletar_e_processar_dados(simbolos_filtrados):
+            # Mesmo se falhar, preenche com o que foi coletado (pode ser útil para debug ou fallback)
+            self.dados_por_ativo = coletor.dados_por_ativo
+            self.dados_fundamentalistas = coletor.dados_fundamentalistas
+            self.ativos_sucesso = coletor.ativos_sucesso
+            self.metricas_performance = coletor.metricas_performance
+            self.volatilidades_garch = coletor.volatilidades_garch_raw
+            return False
+            
         self.dados_por_ativo = coletor.dados_por_ativo
         self.dados_fundamentalistas = coletor.dados_fundamentalistas
         self.ativos_sucesso = coletor.ativos_sucesso
@@ -925,9 +1014,15 @@ class ConstrutorPortfolioAutoML:
              if col in df_fund.columns:
                  df_fund[col] = pd.to_numeric(df_fund[col], errors='coerce')
 
+        # Substitui a média setorial por 1.0 se a média for zero ou NaN para evitar divisão por zero
         sector_means = df_fund.groupby('sector')[['pe_ratio', 'pb_ratio']].transform('mean')
-        df_fund['pe_rel_sector'] = df_fund['pe_ratio'] / sector_means['pe_ratio']
-        df_fund['pb_rel_sector'] = df_fund['pb_ratio'] / sector_means['pb_ratio']
+        
+        valid_pe_mean = sector_means['pe_ratio'].replace(0, np.nan).fillna(1.0)
+        valid_pb_mean = sector_means['pb_ratio'].replace(0, np.nan).fillna(1.0)
+
+        df_fund['pe_rel_sector'] = df_fund['pe_ratio'] / valid_pe_mean
+        df_fund['pb_rel_sector'] = df_fund['pb_ratio'] / valid_pb_mean
+        
         df_fund = df_fund.replace([np.inf, -np.inf], np.nan).fillna(1.0)
         self.dados_fundamentalistas = df_fund
         log_debug("Features cross-sectional concluídas.")
@@ -945,8 +1040,8 @@ class ConstrutorPortfolioAutoML:
         ativos_com_dados = [s for s in self.ativos_sucesso if s in self.dados_por_ativo]
         log_debug("Iniciando Pipeline de Treinamento ML/Clusterização.")
         
-        # --- Feature Pool Completo ---
-        ALL_TECH_FEATURES = ['rsi_14', 'macd_diff', 'vol_20d', 'momentum_10', 'sma_50', 'momentum_60', 'bb_width']
+        # --- Feature Pool Completo (dinamicamente baseado no que foi criado em CalculadoraTecnica) ---
+        
         ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
 
 
@@ -956,15 +1051,12 @@ class ConstrutorPortfolioAutoML:
         
         if len(available_fund_cols) >= 4 and len(self.dados_fundamentalistas) >= 5:
             log_debug("Executando Clusterização inicial (KMeans + PCA) nos fundamentos.")
-            # Executa a clusterização normalmente
             clustering_df = self.dados_fundamentalistas[available_fund_cols].join(
                 self.metricas_performance[['sharpe', 'volatilidade_anual']], how='inner',
                 lsuffix='_fund', rsuffix='_perf' 
             ).fillna(0)
             
-            # Garante que clustering_df não está vazio após o join
             if len(clustering_df) >= 5:
-                # Lógica original de Clusterização (KMeans + PCA)
                 scaler = StandardScaler()
                 data_scaled = scaler.fit_transform(clustering_df)
                 pca = PCA(n_components=min(data_scaled.shape[1], 3))
@@ -978,7 +1070,6 @@ class ConstrutorPortfolioAutoML:
                 log_debug("AVISO: Dados insuficientes após o JOIN. Clusterização inicial ignorada.")
         
         else:
-            # FALLBACK: Se as colunas fundamentais não existirem (Pynvest falhou)
             self.dados_fundamentalistas['Cluster'] = 0
             log_debug("AVISO: Falha na coleta de dados fundamentais (P/L, ROE, etc.). Usando Cluster = 0.")
         
@@ -993,10 +1084,13 @@ class ConstrutorPortfolioAutoML:
                 else:
                     fund_data = {} 
 
+                # Target: Direção Futura (usando o lookback do perfil)
+                if 'Close' in df.columns and len(df) > 5:
+                    df['Future_Direction'] = np.where(df['Close'].pct_change(dias_lookback_ml).shift(-dias_lookback_ml) > 0, 1, 0)
+
                 # Fallback de ML (Modo Estático / Sem Preço)
-                if df.empty or len(df) < 60 or 'Close' not in df.columns or df['Close'].isnull().all():
+                if 'Future_Direction' not in df.columns or df['Future_Direction'].isnull().all() or len(df) < 60:
                     try:
-                         # Heuristica de proxy para o MODO ESTÁTICO
                          roe = fund_data.get('roe', 0); pe = fund_data.get('pe_ratio', 15)
                          if pe <= 0: pe = 20
                          score_fund = min(0.9, max(0.05, (roe * 100) / pe * 0.5 + 0.4))
@@ -1007,40 +1101,33 @@ class ConstrutorPortfolioAutoML:
                          log_debug(f"ML (Fallback): Ativo {ativo} falhou no Proxy Fundamentalista. Score Neutro.")
                     continue
 
-                df['Future_Direction'] = np.where(df['Close'].pct_change(dias_lookback_ml).shift(-dias_lookback_ml) > 0, 1, 0)
+                # --- Construção do Dataset com TODAS as features ---
                 
-                # Juntando dados técnicos e fundamentais no DF
+                # Coleta todas as features criadas em CalculadoraTecnica (exceto preço/volume/etc)
+                ALL_TECH_FEATURES = [c for c in df.columns if c not in ['Close', 'High', 'Low', 'Open', 'Volume', 'returns', 'returns_raw', 'Future_Direction']]
                 current_features_raw = ALL_TECH_FEATURES + ALL_FUND_FEATURES
                 
-                # Cria um DF de modelo preenchendo as features fundamentais disponíveis na última linha
                 last_idx = df.index[-1] if not df.empty else None
                 if last_idx:
                     for f_col in ALL_FUND_FEATURES:
                         if f_col in fund_data and f_col not in df.columns:
-                            # Adiciona a feature fundamental como uma nova coluna
                             df.loc[last_idx, f_col] = fund_data[f_col]
                         elif f_col not in df.columns:
-                             # Adiciona NaN se a feature fundamental não existir
-                            df[f_col] = np.nan
+                             df[f_col] = np.nan
                 
-                # Garante que as colunas existem antes de tentar o dropna
                 available_features = [f for f in current_features_raw if f in df.columns]
-                
-                # Remove NaNs apenas para as features de interesse e a coluna alvo
                 df_model = df.dropna(subset=available_features + ['Future_Direction'])
 
-                if len(df_model) < 30:
+                if len(df_model) < dias_lookback_ml * 1.5:
                     self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.5, 'model_name': 'Dados Insuficientes'}
-                    log_debug(f"ML (Ignorado): Ativo {ativo} pulado. Apenas {len(df_model)} pontos de dados válidos para treino. Mínimo é 30.")
+                    log_debug(f"ML (Ignorado): Ativo {ativo} pulado. Apenas {len(df_model)} pontos de dados válidos para treino. Mínimo é {dias_lookback_ml * 1.5:.0f}.")
                     continue
                 
-                log_debug(f"ML (Supervisionado): Ativo {ativo} tem {len(df_model)} pontos válidos para treino (Mín. 30).")
+                log_debug(f"ML (Supervisionado): Ativo {ativo} tem {len(df_model)} pontos válidos para treino.")
 
-                # Selecionando dados de treino/teste
                 X = df_model[available_features].iloc[:-dias_lookback_ml]
                 y = df_model['Future_Direction'].iloc[:-dias_lookback_ml]
                 
-                # Filtra features que são completamente NaN no subconjunto de treino (embora o dropna devesse prevenir isso)
                 final_features = [col for col in X.columns if not X[col].isnull().all()]
                 X = X[final_features]
                 
@@ -1054,24 +1141,34 @@ class ConstrutorPortfolioAutoML:
                         ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_cols)
                     ], remainder='passthrough')
                 
-                model = Pipeline(steps=[('preprocessor', preprocessor), ('classifier', RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced'))])
+                # --- ENSEMBLE: RF + XGB ---
                 
+                # 1. Random Forest (RF)
+                rf_model = Pipeline(steps=[('preprocessor', preprocessor), 
+                                           ('classifier', RandomForestClassifier(n_estimators=150, max_depth=7, random_state=42, class_weight='balanced', n_jobs=-1))])
+                rf_model.fit(X, y)
+                rf_proba = rf_model.predict_proba(df[final_features].iloc[[-1]].copy().fillna(0))[0][1]
+                
+                ensemble_proba = rf_proba # Inicia com RF
+                
+                # 2. XGBoost (XGB)
+                if xgb is not None:
+                     try:
+                         xgb_model = Pipeline(steps=[('preprocessor', preprocessor), 
+                                                     ('classifier', xgb.XGBClassifier(n_estimators=100, max_depth=3, learning_rate=0.1, use_label_encoder=False, eval_metric='logloss', random_state=42, n_jobs=-1))])
+                         xgb_model.fit(X, y)
+                         xgb_proba = xgb_model.predict_proba(df[final_features].iloc[[-1]].copy().fillna(0))[0][1]
+                         ensemble_proba = (rf_proba * 0.5 + xgb_proba * 0.5) # Média ponderada simples
+                     except Exception as e:
+                         log_debug(f"AVISO: Falha no treinamento XGBoost para {ativo}. Usando apenas RF. Erro: {str(e)[:20]}")
+
+                # Avaliação de confiança (usando RF para estabilidade)
                 if len(np.unique(y)) < 2: avg_auc = 0.5
                 else:
-                    scores = cross_val_score(model, X, y, cv=TimeSeriesSplit(n_splits=3), scoring='roc_auc')
+                    scores = cross_val_score(rf_model, X, y, cv=TimeSeriesSplit(n_splits=3), scoring='roc_auc')
                     avg_auc = scores.mean()
                 
-                model.fit(X, y)
-                
-                # Preparando dados de predição (última linha)
-                last_features_raw = df[available_features].iloc[[-1]].copy()
-                last_features = last_features_raw[final_features].fillna(0) # Deve ter colunas finais
-                
-                if 'Cluster' in last_features.columns: last_features['Cluster'] = last_features['Cluster'].astype(str)
-                
-                proba = model.predict_proba(last_features)[0][1]
-
-                # --- MODO SUPERVISIONADO: Fallback para Proxy se o modelo for Neutro ---
+                # Finalização
                 is_neutral_result = (avg_auc <= 0.55) or (len(np.unique(y)) < 2) 
                 
                 if is_neutral_result:
@@ -1081,17 +1178,17 @@ class ConstrutorPortfolioAutoML:
                     
                     self.predicoes_ml[ativo] = {
                         'predicted_proba_up': score_fund_proxy, 
-                        'auc_roc_score': 0.60, # Força uma confiança mínima para que o score seja ponderado
+                        'auc_roc_score': 0.60,
                         'model_name': 'Supervised Neutral (FORCING FUNDAMENTAL PROXY)'
                     }
                     log_debug(f"ML (Supervisionado): Ativo {ativo} resultou neutro (AUC={avg_auc:.2f}). Forçando Proxy Fundamentalista (Score: {score_fund_proxy:.2f}).")
                 else:
                     self.predicoes_ml[ativo] = {
-                        'predicted_proba_up': proba, 
+                        'predicted_proba_up': ensemble_proba, 
                         'auc_roc_score': avg_auc, 
-                        'model_name': 'Pipeline RF+Cluster'
+                        'model_name': 'Ensemble RF+XGB Pipeline'
                     }
-                    log_debug(f"ML (Supervisionado): Ativo {ativo} treinado com sucesso. Prob. Alta: {proba*100:.1f}%, AUC: {avg_auc:.2f}.")
+                    log_debug(f"ML (Supervisionado): Ativo {ativo} treinado com sucesso. Ensemble Prob. Alta: {ensemble_proba*100:.1f}%, RF AUC: {avg_auc:.2f}.")
 
                 last_idx = self.dados_por_ativo[ativo].index[-1]
                 self.dados_por_ativo[ativo].loc[last_idx, 'ML_Proba'] = self.predicoes_ml[ativo]['predicted_proba_up']
@@ -1137,10 +1234,18 @@ class ConstrutorPortfolioAutoML:
         for symbol in combined.index:
             if symbol in self.dados_por_ativo:
                 df = self.dados_por_ativo[symbol]
+                # Coletando todos os features técnicos disponíveis, inclusive os novos
+                tech_cols = [c for c in df.columns if c in ['rsi_14', 'macd_diff', 'vol_20d', 'vol_21', 'price_ma21', 'atr_14', 'vol_z_score', 'momentum_10', 'sma_50']]
+                
                 if not df.empty and 'rsi_14' in df.columns:
+                    # Usamos 'rsi_current', 'macd_current', 'vol_current' para o scoring
                     combined.loc[symbol, 'rsi_current'] = df['rsi_14'].iloc[-1]
-                    combined.loc[symbol, 'macd_current'] = df['macd'].iloc[-1]
+                    combined.loc[symbol, 'macd_current'] = df['macd_diff'].iloc[-1] # Usa macd_diff para o score
                     combined.loc[symbol, 'vol_current'] = df['vol_20d'].iloc[-1]
+                    
+                    # Adiciona todas as features técnicas disponíveis para a tabela de ranqueamento
+                    for col in tech_cols:
+                         combined.loc[symbol, col] = df[col].iloc[-1]
                 else:
                     # Fallback para valores neutros se estiver em modo estático
                     combined.loc[symbol, 'rsi_current'] = 50
@@ -1175,6 +1280,7 @@ class ConstrutorPortfolioAutoML:
         scores['ml_score_weighted'] = s_prob * (W_ML_GLOBAL_BASE * ml_weight_factor.fillna(0))
         
         scores['total_score'] = scores.sum(axis=1)
+        # Junta os scores com todos os dados fundamentais e métricas técnicas
         self.scores_combinados = scores.join(combined).sort_values('total_score', ascending=False)
         
         log_debug(f"Calculando Scores Ponderados. Horizonte: {horizonte_tempo}. Pesos Finais: Fund={w_fund_final:.2f}, Tec={w_tech_final:.2f}, ML={W_ML_GLOBAL_BASE:.2f}.")
@@ -1183,12 +1289,9 @@ class ConstrutorPortfolioAutoML:
         # 1. CRITÉRIO DE INCLUSÃO: FILTRO DE SCORE MÍNIMO
         # -------------------------------------------------------------
         if len(self.scores_combinados) > NUM_ATIVOS_PORTFOLIO:
-            # Pega o score do 15º ativo (ou o último, se a lista for menor que 15)
-            # Para definir um score de corte que exclui os piores 15% (ou mais)
             cutoff_index = min(15, len(self.scores_combinados) - 1)
             base_score = self.scores_combinados['total_score'].iloc[cutoff_index]
             
-            # Define o score mínimo como 85% do score base (um filtro de qualidade)
             min_score = base_score * SCORE_PERCENTILE_THRESHOLD
             
             ativos_filtrados = self.scores_combinados[self.scores_combinados['total_score'] >= min_score]
@@ -1208,18 +1311,14 @@ class ConstrutorPortfolioAutoML:
         if not self.scores_combinados.empty and 'Final_Cluster' in self.scores_combinados.columns:
             clusters_present = self.scores_combinados['Final_Cluster'].unique()
             for c in clusters_present:
-                # Pega o melhor ativo de cada cluster (o de maior 'total_score')
                 best = self.scores_combinados[self.scores_combinados['Final_Cluster'] == c].head(1).index[0]
                 final_selection.append(best)
         
-        # Adiciona os restantes, se o número de clusters for menor que o portfólio
         if len(final_selection) < NUM_ATIVOS_PORTFOLIO:
             others = [x for x in self.scores_combinados.index if x not in final_selection]
-            # Prioriza os melhores scores dos que sobraram
             remaining_to_add = NUM_ATIVOS_PORTFOLIO - len(final_selection)
             
             if remaining_to_add > 0:
-                 # Garante que 'others' é ordenado por score
                  others_df = self.scores_combinados.loc[others].sort_values('total_score', ascending=False)
                  final_selection.extend(others_df.index[:remaining_to_add].tolist())
 
@@ -1243,22 +1342,27 @@ class ConstrutorPortfolioAutoML:
         
         final_returns_df = pd.DataFrame(available_assets_returns).dropna()
         
-        # Se houver ativos sem dados de preço (Modo Estático) ou poucos dados, usa heurística
         if final_returns_df.shape[0] < 50 or len(ativos_sem_dados) > 0:
             log_debug("Otimização de Markowitz ignorada. Recorrendo à PONDERAÇÃO POR SCORE (Modo Estático/Poucos Dados).")
 
             if len(ativos_sem_dados) > 0:
                 st.warning(f"⚠️ Alguns ativos ({', '.join(ativos_sem_dados)}) não possuem histórico de preços. A otimização de variância (Markowitz) será substituída por alocação baseada em Score/Pesos Iguais.")
             
-            scores = self.scores_combinados.loc[self.ativos_selecionados, 'total_score']
-            total_score = scores.sum()
-            if total_score > 0:
-                weights = (scores / total_score).to_dict()
-                self.metodo_alocacao_atual = 'PONDERAÇÃO POR SCORE (Modo Estático)'
+            valid_selection = [a for a in self.ativos_selecionados if a in self.scores_combinados.index]
+            
+            if valid_selection:
+                 scores = self.scores_combinados.loc[valid_selection, 'total_score']
+                 total_score = scores.sum()
+                 if total_score > 0:
+                     weights = (scores / total_score).to_dict()
+                     self.metodo_alocacao_atual = 'PONDERAÇÃO POR SCORE (Modo Estático)'
+                 else:
+                     weights = {asset: 1.0 / len(valid_selection) for asset in valid_selection}
+                     self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
             else:
-                weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
-                self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
-                
+                 weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
+                 self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
+                 
             return self._formatar_alocacao(weights)
 
         garch_vols_filtered = {asset: self.volatilidades_garch.get(asset, final_returns_df[asset].std() * np.sqrt(252)) for asset in final_returns_df.columns}
@@ -1282,12 +1386,20 @@ class ConstrutorPortfolioAutoML:
         return self._formatar_alocacao(weights)
         
     def _formatar_alocacao(self, weights: dict) -> dict:
-        if not weights or sum(weights.values()) == 0: return {}
+        if not weights or sum(weights.values()) == 0: 
+            return {s: {'weight': 0.0, 'amount': 0.0} for s in self.ativos_selecionados} # Retorna estrutura vazia segura
+
         total_weight = sum(weights.values())
+        # Filtra e normaliza os pesos, garantindo que a saída seja um dicionário com todos os ativos
         return {s: {'weight': w / total_weight, 'amount': self.valor_investimento * (w / total_weight)} for s, w in weights.items() if s in self.ativos_selecionados}
     
     def calcular_metricas_portfolio(self):
-        if not self.alocacao_portfolio: return {}
+        if not self.alocacao_portfolio: 
+             self.metricas_portfolio = {
+                'annual_return': 0, 'annual_volatility': 0, 'sharpe_ratio': 0, 'max_drawdown': 0, 'total_investment': self.valor_investimento
+            }
+             return self.metricas_portfolio
+
         weights_dict = {s: data['weight'] for s, data in self.alocacao_portfolio.items()}
         available_returns = {s: self.dados_por_ativo[s]['returns'] for s in weights_dict.keys() if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s] and not self.dados_por_ativo[s]['returns'].dropna().empty}
         
@@ -1298,10 +1410,16 @@ class ConstrutorPortfolioAutoML:
              return self.metricas_portfolio
 
         returns_df = pd.DataFrame(available_returns).dropna()
-        if returns_df.empty: return {}
+        if returns_df.empty: 
+             self.metricas_portfolio = {
+                'annual_return': 0, 'annual_volatility': 0, 'sharpe_ratio': 0, 'max_drawdown': 0, 'total_investment': self.valor_investimento
+            }
+             return self.metricas_portfolio
         
         valid_assets = returns_df.columns
         valid_weights = np.array([weights_dict[s] for s in valid_assets])
+        
+        # Re-normaliza se houver ativos filtrados por NaN/dados insuficientes
         if valid_weights.sum() > 0:
             valid_weights = valid_weights / valid_weights.sum()
             portfolio_returns = (returns_df * valid_weights).sum(axis=1)
@@ -1320,6 +1438,13 @@ class ConstrutorPortfolioAutoML:
 
     def gerar_justificativas(self):
         self.justificativas_selecao = {}
+        
+        # NOVO: Garante que self.ativos_selecionados é usado como base, mesmo que scores_combinados esteja vazio
+        if self.scores_combinados.empty:
+             for simbolo in self.ativos_selecionados:
+                 self.justificativas_selecao[simbolo] = "Dados de ranqueamento indisponíveis. Usando Fallback (Pesos Iguais/Score)."
+             return self.justificativas_selecao
+
         for simbolo in self.ativos_selecionados:
             justification = []
             
@@ -1336,8 +1461,15 @@ class ConstrutorPortfolioAutoML:
             ml_prob = self.predicoes_ml.get(simbolo, {}).get('predicted_proba_up', 0.5)
             ml_auc = self.predicoes_ml.get(simbolo, {}).get('auc_roc_score', 0.5)
             justification.append(f"ML: Prob {ml_prob*100:.1f}% (Conf {ml_auc:.2f})")
-            cluster = self.scores_combinados.loc[simbolo, 'Final_Cluster'] if simbolo in self.scores_combinados.index else 'N/A'
-            justification.append(f"Perfil (Cluster): {cluster}")
+            
+            if simbolo in self.scores_combinados.index:
+                cluster = self.scores_combinados.loc[simbolo, 'Final_Cluster']
+                total_score = self.scores_combinados.loc[simbolo, 'total_score']
+                justification.append(f"Perfil (Cluster): {cluster}")
+                justification.append(f"Score Total: {total_score:.3f}")
+            else:
+                 justification.append("Perfil: N/A (Score base Fallback)")
+
             self.justificativas_selecao[simbolo] = " | ".join(justification)
         return self.justificativas_selecao
         
@@ -1345,7 +1477,14 @@ class ConstrutorPortfolioAutoML:
         self.perfil_dashboard = perfil_inputs
         try:
             if progress_bar: progress_bar.progress(10, text="Coletando dados LIVE (YFinance + Pynvest)...")
-            if not self.coletar_e_processar_dados(simbolos_customizados): return False
+            
+            if not self.coletar_e_processar_dados(simbolos_customizados):
+                log_debug("AVISO: Coleta inicial falhou parcialmente/totalmente. Prosseguindo com os dados de fallback disponíveis.")
+            
+            if not self.ativos_sucesso: 
+                 st.error("Falha na aquisição: Nenhum ativo pôde ser processado.")
+                 return False
+
             if progress_bar: progress_bar.progress(30, text="Calculando métricas setoriais e volatilidade...")
             self.calculate_cross_sectional_features(); self.calcular_volatilidades_garch()
             if progress_bar: progress_bar.progress(50, text="Executando Pipeline ML (Cluster + Random Forest)...")
@@ -1705,15 +1844,11 @@ def aba_selecao_ativos():
             
             # NOVO: Centraliza e expande as métricas abaixo do multiselect (lateralidade total)
             st.markdown("#### Setores e Ativos Selecionados")
-            col_metrics_s = st.columns(len(setores_selecionados) if len(setores_selecionados) > 0 else 2) # Cria colunas dinâmicas para expandir
-            
-            # Garante que temos pelo menos duas colunas para Tickers e Setores
-            num_cols = 2 if len(setores_selecionados) == 0 else 2
-            col_metrics_s = st.columns(num_cols)
+            col_metrics_s = st.columns(3) # Fixado em 3 para TICKERS, SETORES, TOTAL DE ATIVOS
             
             with col_metrics_s[0]:
                 st.metric("Setores Selecionados", len(setores_selecionados))
-            with col_metrics_s[-1]:
+            with col_metrics_s[1]:
                 st.metric("Total de Ativos", len(ativos_selecionados))
             
             with st.expander("📋 Visualizar Ativos por Setor"):
@@ -1744,7 +1879,7 @@ def aba_selecao_ativos():
         
         # NOVO: Centraliza e expande a métrica abaixo do multiselect (lateralidade total)
         st.markdown("#### Tickers Selecionados")
-        col_metrics_i1, col_metrics_i2, col_metrics_i3 = st.columns([1, 2, 1]) # Usamos 1, 2, 1 para centralizar e expandir
+        col_metrics_i1, col_metrics_i2, col_metrics_i3 = st.columns(3)
         with col_metrics_i2:
             st.metric("Tickers Selecionados", len(ativos_selecionados))
 
@@ -1887,8 +2022,10 @@ def aba_construtor_portfolio():
                 progress_widget.empty() # Limpa após o sucesso
                     
                 if not success:
-                    st.error("Falha na aquisição ou processamento dos dados.")
-                    st.session_state.builder = None; st.session_state.profile = {}; return
+                    st.error("Falha na aquisição ou processamento dos dados. Resultados baseados em Fallback.")
+                    st.session_state.builder_complete = True # Mantém True para mostrar a aba, mesmo com falha
+                    # st.session_state.builder = None; st.session_state.profile = {}; Removido reset para manter dados de Fallback
+                    st.rerun() 
                 
                 st.session_state.builder_complete = True
                 st.rerun()
@@ -2341,7 +2478,9 @@ def aba_construtor_portfolio():
                     st.warning("Nenhuma justificativa gerada.")
                 else:
                     for asset, justification in builder.justificativas_selecao.items():
+                        # NOVO: Garante que o peso seja acessível para exibição (mesmo que 0 no fallback)
                         weight = builder.alocacao_portfolio.get(asset, {}).get('weight', 0)
+                        
                         st.markdown(f"""
                         <div class="info-box">
                         <h4>{asset.replace('.SA', '')} ({weight*100:.2f}%)</h4>
@@ -2537,9 +2676,15 @@ def aba_analise_individual():
                 # LÓGICA DE EXIBIÇÃO: SÓ MOSTRA SE NÃO ESTIVER EM MODO ESTÁTICO
                 if not static_mode:
                     st.markdown("### Indicadores Técnicos"); col1, col2, col3 = st.columns(3)
-                    col1.metric("RSI (14)", f"{df_completo['rsi_14'].iloc[-1]:.2f}" if 'rsi_14' in df_completo else "N/A")
-                    col2.metric("MACD Diff", f"{df_completo['macd_diff'].iloc[-1]:.4f}" if 'macd_diff' in df_completo else "N/A")
-                    col3.metric("BB Width", f"{df_completo['bb_width'].iloc[-1]:.2f}" if 'bb_width' in df_completo else "N/A")
+                    
+                    # Usa os novos features se existirem, senão usa os antigos/NA
+                    rsi_display = f"{df_completo['rsi_14'].iloc[-1]:.2f}" if 'rsi_14' in df_completo else "N/A"
+                    macd_display = f"{df_completo['macd_diff'].iloc[-1]:.4f}" if 'macd_diff' in df_completo else "N/A"
+                    bb_display = f"{df_completo['bb_width'].iloc[-1]:.2f}" if 'bb_width' in df_completo else "N/A"
+
+                    col1.metric("RSI (14)", rsi_display)
+                    col2.metric("MACD Diff", macd_display)
+                    col3.metric("BB Width", bb_display)
                     
                     # Gráfico RSI
                     fig_rsi = go.Figure(go.Scatter(x=df_completo.index, y=df_completo['rsi_14'], name='RSI', line=dict(color='#8E44AD')))
@@ -2605,7 +2750,7 @@ def aba_analise_individual():
                          st.info("ℹ️ **Modelo Supervisionado Neutro:** A confiança do modelo é baixa (AUC ≤ 0.55). O score de probabilidade exibido foi ajustado para um **Proxy Fundamentalista** para garantir relevância na classificação.")
                     else:
                         col2.metric("Confiança do Modelo (AUC)", f"{ml_conf:.2f}")
-                        st.info("ℹ️ **Modelo Supervisionado Ativo:** O score reflete a probabilidade de alta do ativo nos próximos 5 dias, conforme previsto pelo modelo Random Forest treinado com indicadores técnicos e fundamentais.")
+                        st.info("ℹ️ **Modelo Supervisionado Ativo:** O score reflete a probabilidade de alta do ativo nos próximos 5 dias, conforme previsto pelo modelo Ensemble RF+XGB treinado com indicadores técnicos e fundamentais.")
                         
                     if df_ml_meta is not None and not df_ml_meta.empty:
                         st.markdown("#### Importância dos Fatores na Decisão")
@@ -2628,7 +2773,7 @@ def aba_analise_individual():
                 if resultado_cluster is not None:
                     st.success(f"Identificados {n_clusters} grupos (clusters) de qualidade fundamentalista.")
                     
-                    # --- NOVO: Gráfico ÚNICO (PCA 2D com Formato/Cor Condicional) ---
+                    # --- NOVO: Gráfico 3D (Com formatação de cor/símbolo) ---
                     df_plot = resultado_cluster.copy().reset_index().rename(columns={'index': 'Ticker'})
                     
                     # 1. Determina a cor: Ticker Selecionado (preto) ou Cluster
@@ -2646,33 +2791,67 @@ def aba_analise_individual():
                     # Mapeamento de formato
                     symbol_map = {'Normal': 'circle', 'Anomalia': 'diamond'}
                     
-                    # Garante que PC1 e PC2 existem
-                    if 'PC1' in df_plot.columns and 'PC2' in df_plot.columns:
+                    # Garante que PC1, PC2 e PC3 existem
+                    if 'PC3' in df_plot.columns: # Verifica se PCA 3D é possível
                         
-                        fig_combined = px.scatter(
+                        fig_combined = px.scatter_3d(
                             df_plot, 
                             x='PC1', 
-                            y='PC2',
+                            y='PC2', 
+                            z='PC3',
                             color='Cor',
                             symbol='Formato',
                             hover_name=df_plot['Ticker'].str.replace('.SA', ''), 
                             color_discrete_map=color_map,
                             symbol_map=symbol_map,
-                            title="Mapa de Similaridade Fundamentalista (PCA 2D: Cluster e Anomalia)"
+                            opacity=0.8,
+                            title="Mapa de Similaridade Fundamentalista (PCA 3D: Cluster e Anomalia)"
                         )
                         
                         template = obter_template_grafico()
-                        fig_combined.update_layout(**template)
-                        fig_combined.update_layout(height=600)
-                        
-                        # Aumenta o tamanho do ponto do ativo selecionado
+                        template['title']['text'] = "Mapa de Similaridade 3D (Global) por Cluster"
+                        fig_combined.update_layout(
+                            title=template['title'],
+                            paper_bgcolor=template['paper_bgcolor'],
+                            plot_bgcolor=template['plot_bgcolor'],
+                            font=template['font'],
+                            scene=dict(xaxis_title='PCA 1', yaxis_title='PCA 2', zaxis_title='PCA 3'),
+                            margin=dict(l=0, r=0, b=0, t=40),
+                            height=600
+                        )
+
+                        # Aplica o formato e tamanho para todos os pontos
                         fig_combined.update_traces(marker=dict(size=10, line=dict(width=1, color='DarkSlateGrey')))
-                        fig_combined.update_traces(selector=dict(name='Ativo Selecionado'), marker=dict(size=14, line=dict(width=2)))
+                        
+                        # Aplica o formato específico para o ativo selecionado (cor preta forçada)
+                        fig_combined.update_traces(selector=dict(name='Ativo Selecionado'), 
+                                                   marker=dict(size=14, line=dict(width=2), 
+                                                               color='black', symbol='circle'))
                         
                         st.plotly_chart(fig_combined, use_container_width=True)
                         
                     else:
-                        st.warning("Dados PCA insuficientes para gerar o gráfico 2D.")
+                        st.warning("Dados PCA insuficientes (menos de 3 componentes) para gerar o gráfico 3D. Exibindo 2D.")
+                        # Se 3D falhar, mostra o 2D (fallback)
+                        if 'PC2' in df_plot.columns:
+                            st.markdown('#### Detecção de Anomalias (Visualização 2D - Fallback)')
+                            fig_anomaly_2d = px.scatter(
+                                df_plot, x='PC1', y='PC2',
+                                color='Cor',
+                                symbol='Formato',
+                                hover_name=df_plot['Ticker'].str.replace('.SA', ''), 
+                                color_discrete_map=color_map,
+                                symbol_map=symbol_map,
+                                title="Detecção de Anomalias (Isolation Forest) no Espaço PCA 2D"
+                            )
+                            template = obter_template_grafico()
+                            fig_anomaly_2d.update_layout(**template)
+                            fig_anomaly_2d.update_layout(height=500)
+                            fig_anomaly_2d.update_traces(marker=dict(size=10))
+                            fig_anomaly_2d.update_traces(selector=dict(name='Ativo Selecionado'), marker=dict(size=14))
+                            st.plotly_chart(fig_anomaly_2d, use_container_width=True)
+                        else:
+                             st.warning("Dados PCA insuficientes (menos de 2 componentes) para qualquer gráfico de dispersão.")
 
                     
                     # Tabela de Anomalia
