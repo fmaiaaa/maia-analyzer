@@ -906,7 +906,7 @@ class ColetorDadosLive(object):
                     # Confiança final = Média dos AUCs de teste
                     conf_final = np.mean(auc_scores) if auc_scores else 0.5
                     
-                    log_debug(f"ML Individual: Sucesso LightGBM Ensemble. Prob Média: {proba_final:.2f}, AUC Teste Média: {conf_final:.2f}.")
+                    log_debug(f"ML Individual: Sucesso LightGBM Ensemble. Prob Média: {ensemble_proba:.2f}, AUC Teste Média: {conf_final:.2f}.")
 
                     # Importância das features
                     importances = pd.DataFrame({
@@ -1039,7 +1039,7 @@ class ConstrutorPortfolioAutoML:
             MODEL_PARAMS = dict(n_estimators=80, learning_rate=0.05, subsample=0.7, colsample_bytree=0.7, n_jobs=-1)
             MODEL_NAME = 'LightGBM Rápido'
         else: # ml_mode == 'full' (RF/XGB Ensemble)
-            MODEL_FEATURES = FULL_ML_FEATURES 
+            MODEL_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel", 'rsi_14', 'macd_diff', 'vol_20d'] # Usamos features descorrelacionados
             CLASSIFIER = RandomForestClassifier
             MODEL_PARAMS = dict(n_estimators=150, max_depth=7, random_state=42, class_weight='balanced', n_jobs=-1)
             MODEL_NAME = 'Full Ensemble (RF+XGB)'
@@ -1354,7 +1354,7 @@ class ConstrutorPortfolioAutoML:
         
         final_returns_df = pd.DataFrame(available_assets_returns).dropna()
         
-        if final_returns_df.shape[0] < 50 or len(ativos_sem_dados) > 0:
+        if final_returns_df.shape[0] < 50 or len(ativos_sem_dados) > 0 or 'PESOS_IGUAIS' in nivel_risco:
             log_debug("Otimização de Markowitz ignorada. Recorrendo à PONDERAÇÃO POR SCORE (Modo Estático/Poucos Dados).")
 
             if len(ativos_sem_dados) > 0:
@@ -1498,7 +1498,7 @@ class ConstrutorPortfolioAutoML:
     def executar_pipeline(self, simbolos_customizados: list, perfil_inputs: dict, ml_mode: str, pipeline_mode: str, progress_bar=None) -> bool:
         self.perfil_dashboard = perfil_inputs
         
-        if pipeline_mode == 'fundamental':
+        if pipeline_mode == 'fundamentalista':
              log_debug("Modo de Pipeline: FUNDAMENTALISTA (ML e Markowitz ignorados).")
              # Força ML confidence baixa para desativar o score ML ponderado
              ml_mode = 'fallback' 
@@ -1896,7 +1896,8 @@ def aba_selecao_ativos():
             
             with st.expander("📋 Visualizar Ativos por Setor"):
                 for setor in setores_selecionados:
-                    ativos_do_setor = ATIVOS_POR_POR_SETOR.get(setor, [])
+                    # CORREÇÃO DO ERRO: ATIVOS_POR_POR_SETOR -> ATIVOS_POR_SETOR
+                    ativos_do_setor = ATIVOS_POR_SETOR.get(setor, []) 
                     st.markdown(f"**{setor}** ({len(ativos_do_setor)} ativos)")
                     st.write(", ".join([a.replace('.SA', '') for a in ativos_do_setor]))
         else:
@@ -2022,7 +2023,7 @@ def aba_construtor_portfolio():
 
                 pipeline_mode = st.radio(
                     "**1. Modo de Construção:**",
-                    ["Modo Geral (ML + Otimização Markowitz)", "Modo Fundamentalista (Apenas Fundamentos/Cluster)"],
+                    ["Modo Geral (ML + Otimização Markowitz)", "Modo Fundamentalista (Cluster/Anomalias)"],
                     index=0,
                     key='pipeline_mode_radio'
                 )
@@ -2083,7 +2084,7 @@ def aba_construtor_portfolio():
                     simbolos_customizados=st.session_state.ativos_para_analise,
                     perfil_inputs=st.session_state.profile,
                     ml_mode=ml_mode,
-                    pipeline_mode=pipeline_mode.split(' ')[1].lower(), # Extrai 'geral' ou 'fundamentalista'
+                    pipeline_mode=pipeline_mode.split('(')[1].lower().split('/')[0].strip().replace('+', ' ').replace(' ', '_'), # Extrai 'ml' ou 'fundamentalista'
                     progress_bar=progress_widget
                 )
                 
