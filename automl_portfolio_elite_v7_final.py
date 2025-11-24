@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.26 (Update: CENTRALIZATION FIXES, MERGED CLUSTER TABS, INDIVIDUAL ANALYSIS FIX)
+Versão: 9.32.27 (Update: WIDE SELECTION METRICS, DETAILED RANKING, CLUSTER VISUALIZATION UNIFIED)
 =============================================================================
 """
 
@@ -1703,12 +1703,17 @@ def aba_selecao_ativos():
             for setor in setores_selecionados: ativos_selecionados.extend(ATIVOS_POR_SETOR[setor])
             ativos_selecionados = list(set(ativos_selecionados))
             
-            # NOVO: Centraliza as métricas abaixo do multiselect
+            # NOVO: Centraliza e expande as métricas abaixo do multiselect (lateralidade total)
             st.markdown("#### Setores e Ativos Selecionados")
-            col_metrics_s1, col_metrics_s2, col_metrics_s3 = st.columns([1, 1, 1])
-            with col_metrics_s1:
-                st.metric("Setores", len(setores_selecionados))
-            with col_metrics_s3:
+            col_metrics_s = st.columns(len(setores_selecionados) if len(setores_selecionados) > 0 else 2) # Cria colunas dinâmicas para expandir
+            
+            # Garante que temos pelo menos duas colunas para Tickers e Setores
+            num_cols = 2 if len(setores_selecionados) == 0 else 2
+            col_metrics_s = st.columns(num_cols)
+            
+            with col_metrics_s[0]:
+                st.metric("Setores Selecionados", len(setores_selecionados))
+            with col_metrics_s[-1]:
                 st.metric("Total de Ativos", len(ativos_selecionados))
             
             with st.expander("📋 Visualizar Ativos por Setor"):
@@ -1737,9 +1742,9 @@ def aba_selecao_ativos():
             key='ativos_individuais_multiselect_v8'
         )
         
-        # NOVO: Centraliza a métrica abaixo do multiselect
+        # NOVO: Centraliza e expande a métrica abaixo do multiselect (lateralidade total)
         st.markdown("#### Tickers Selecionados")
-        col_metrics_i1, col_metrics_i2, col_metrics_i3 = st.columns([1, 1, 1])
+        col_metrics_i1, col_metrics_i2, col_metrics_i3 = st.columns([1, 2, 1]) # Usamos 1, 2, 1 para centralizar e expandir
         with col_metrics_i2:
             st.metric("Tickers Selecionados", len(ativos_selecionados))
 
@@ -1750,6 +1755,7 @@ def aba_selecao_ativos():
         st.session_state.ativos_para_analise = ativos_selecionados
         st.markdown("---")
         
+        # Quadrados de resumo (Mantidos para a próxima tela)
         col1, col2, col3 = st.columns(3)
         col1.metric("Tickers Definidos", len(ativos_selecionados))
         col2.metric("Para Ranqueamento", len(ativos_selecionados))
@@ -1838,7 +1844,8 @@ def aba_construtor_portfolio():
             col_btn_start, col_btn_center, col_btn_end = st.columns([1, 2, 1])
             with col_btn_center:
                 submitted = st.form_submit_button("🚀 Gerar Alocação Otimizada", type="primary", use_container_width=True)
-            st.markdown("---") # Separador para o loading
+            
+            progress_bar_placeholder = st.empty() # Placeholder para o loading
             
             if submitted:
                 log_debug("Questionário de perfil submetido.")
@@ -1869,7 +1876,7 @@ def aba_construtor_portfolio():
                     return
 
                 # NOVO: Barra de progresso visível logo após o submit
-                progress_widget = st.progress(0, text=f"Iniciando pipeline para PERFIL {risk_level}...")
+                progress_widget = progress_bar_placeholder.progress(0, text=f"Iniciando pipeline para PERFIL {risk_level}...")
                 
                 success = builder_local.executar_pipeline(
                     simbolos_customizados=st.session_state.ativos_para_analise,
@@ -2257,36 +2264,72 @@ def aba_construtor_portfolio():
                     'fundamental_score': 'Score Fund.', 
                     'technical_score': 'Score Téc.', 
                     'ml_score_weighted': 'Score ML', 
-                    'sharpe_ratio': 'Sharpe', 
+                    'sharpe': 'Sharpe',                 # USAR SHARPE CRU DA performance_metrics
+                    'retorno_anual': 'Retorno Anual (%)', # USAR RETORNO CRU DA performance_metrics
+                    'annual_volatility': 'Vol. Hist. (%)', # USAR VOLATILIDADE CRUA DA performance_metrics
                     'pe_ratio': 'P/L', 
-                    'roe': 'ROE', 
+                    'pb_ratio': 'P/VP',
+                    'div_yield': 'Div. Yield (%)',
+                    'roe': 'ROE (%)', 
+                    'roic': 'ROIC (%)',
+                    'net_margin': 'Margem Líq. (%)',
                     'rsi_14': 'RSI 14', 
                     'macd_diff': 'MACD Hist.', 
                     'ML_Proba': 'Prob. Alta ML'
                 }
                 
                 if not builder.scores_combinados.empty:
-                    # Select only existing columns to avoid KeyError
-                    cols_existentes = [col for col in rename_map.keys() if col in builder.scores_combinados.columns]
-                    df_scores_display = builder.scores_combinados[cols_existentes].copy()
+                    # Adicionando colunas de ML/RSI/MACD se existirem no DataFrame completo dos ativos analisados
+                    df_full_data = builder.scores_combinados.copy()
+                    
+                    # Tenta extrair a última linha de dados técnicos e ML para juntar
+                    data_at_last_idx = {}
+                    for ticker in df_full_data.index:
+                        df_tec = builder.dados_por_ativo.get(ticker)
+                        if df_tec is not None and not df_tec.empty:
+                            last_row = df_tec.iloc[-1]
+                            data_at_last_idx[ticker] = {
+                                'rsi_14': last_row.get('rsi_14'),
+                                'macd_diff': last_row.get('macd_diff'),
+                                'ML_Proba': last_row.get('ML_Proba'),
+                            }
+                    df_last_data = pd.DataFrame.from_dict(data_at_last_idx, orient='index')
+                    
+                    df_scores_display = df_full_data.join(df_last_data, how='left')
+
+                    # Adicionando/Renomeando colunas
+                    cols_to_display = list(rename_map.keys())
+                    cols_to_display = [col for col in cols_to_display if col in df_scores_display.columns]
+
+                    df_scores_display = df_scores_display[cols_to_display].copy()
                     df_scores_display.rename(columns=rename_map, inplace=True)
                     
-                    if 'ROE' in df_scores_display.columns:
-                         df_scores_display['ROE'] = df_scores_display['ROE'] * 100
+                    # Multiplicando por 100 para percentual (apenas colunas que existem)
+                    if 'ROE (%)' in df_scores_display.columns: df_scores_display['ROE (%)'] = df_scores_display['ROE (%)'] * 100
+                    if 'Retorno Anual (%)' in df_scores_display.columns: df_scores_display['Retorno Anual (%)'] = df_scores_display['Retorno Anual (%)'] * 100
+                    if 'Vol. Hist. (%)' in df_scores_display.columns: df_scores_display['Vol. Hist. (%)'] = df_scores_display['Vol. Hist. (%)'] * 100
+                    if 'Div. Yield (%)' in df_scores_display.columns: df_scores_display['Div. Yield (%)'] = df_scores_display['Div. Yield (%)'] * 100
+                    if 'ROIC (%)' in df_scores_display.columns: df_scores_display['ROIC (%)'] = df_scores_display['ROIC (%)'] * 100
+                    if 'Margem Líq. (%)' in df_scores_display.columns: df_scores_display['Margem Líq. (%)'] = df_scores_display['Margem Líq. (%)'] * 100
                          
-                    df_scores_display = df_scores_display.iloc[:15] 
+                    df_scores_display = df_scores_display.iloc[:20] # Exibe um top 20, para ser mais útil
+
                     
-                    st.markdown("##### Ranqueamento Ponderado Multi-Fatorial (Top 15 Tickers do Universo Analisado)")
+                    st.markdown("##### Ranqueamento Ponderado Multi-Fatorial (Top 20 Tickers do Universo Analisado)")
                     
-                    # Formatação condicional
-                    format_dict = {
-                        'Score Total': '{:.3f}', 'Score Perf.': '{:.3f}', 'Score Fund.': '{:.3f}', 'Score Téc.': '{:.3f}', 'Score ML': '{:.3f}',
-                        'Sharpe': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}%', 'RSI 14': '{:.2f}', 'MACD Hist.': '{:.4f}', 'Prob. Alta ML': '{:.2f}'
-                    }
-                    final_format_dict = {k: v for k, v in format_dict.items() if k in df_scores_display.columns}
-                    
+                    # Definindo o dicionário de formatação de forma robusta
+                    format_dict = {}
+                    for col in df_scores_display.columns:
+                        if 'Score' in col: format_dict[col] = '{:.3f}'
+                        elif 'Sharpe' in col: format_dict[col] = '{:.3f}'
+                        elif any(pct in col for pct in ['%']): format_dict[col] = '{:.2f}%'
+                        elif 'P/L' in col or 'P/VP' in col or 'MACD' in col: format_dict[col] = '{:.2f}'
+                        elif 'RSI' in col: format_dict[col] = '{:.2f}'
+                        elif 'Prob' in col: format_dict[col] = '{:.2f}'
+                        else: format_dict[col] = '{}'
+                        
                     st.dataframe(df_scores_display.style.format(
-                        final_format_dict
+                        format_dict
                     ).background_gradient(cmap='Greys', subset=['Score Total'] if 'Score Total' in df_scores_display.columns else None), use_container_width=True)
                 else:
                     st.warning("Tabela de scores indisponível (falha no processamento de dados).")
@@ -2585,43 +2628,52 @@ def aba_analise_individual():
                 if resultado_cluster is not None:
                     st.success(f"Identificados {n_clusters} grupos (clusters) de qualidade fundamentalista.")
                     
-                    # --- NOVO: Gráfico 3D Primeiro ---
-                    if 'PC3' in resultado_cluster.columns:
-                        fig_pca_3d = px.scatter_3d(
-                            resultado_cluster, x='PC1', y='PC2', z='PC3',
-                            color=resultado_cluster['Cluster'].astype(str),
-                            hover_name=resultado_cluster.index.str.replace('.SA', ''), 
-                            color_discrete_sequence=obter_template_grafico()['colorway'],
-                            opacity=0.8,
-                            labels={'Cluster': 'Grupo'}
+                    # --- NOVO: Gráfico ÚNICO (PCA 2D com Formato/Cor Condicional) ---
+                    df_plot = resultado_cluster.copy().reset_index().rename(columns={'index': 'Ticker'})
+                    
+                    # 1. Determina a cor: Ticker Selecionado (preto) ou Cluster
+                    df_plot['Cor'] = df_plot['Cluster'].astype(str)
+                    df_plot.loc[df_plot['Ticker'] == ativo_selecionado, 'Cor'] = 'Ativo Selecionado'
+                    
+                    # 2. Determina o formato: Anomalia (Losango) ou Normal (Círculo)
+                    df_plot['Formato'] = df_plot['Anomalia'].astype(str).replace({'1': 'Normal', '-1': 'Anomalia'})
+                    
+                    # Mapeamento de cores para manter consistência, com o ativo selecionado em preto
+                    cluster_colors = obter_template_grafico()['colorway']
+                    color_map = {str(i): cluster_colors[i % len(cluster_colors)] for i in range(n_clusters)}
+                    color_map['Ativo Selecionado'] = 'black'
+                    
+                    # Mapeamento de formato
+                    symbol_map = {'Normal': 'circle', 'Anomalia': 'diamond'}
+                    
+                    # Garante que PC1 e PC2 existem
+                    if 'PC1' in df_plot.columns and 'PC2' in df_plot.columns:
+                        
+                        fig_combined = px.scatter(
+                            df_plot, 
+                            x='PC1', 
+                            y='PC2',
+                            color='Cor',
+                            symbol='Formato',
+                            hover_name=df_plot['Ticker'].str.replace('.SA', ''), 
+                            color_discrete_map=color_map,
+                            symbol_map=symbol_map,
+                            title="Mapa de Similaridade Fundamentalista (PCA 2D: Cluster e Anomalia)"
                         )
                         
                         template = obter_template_grafico()
-                        template['title']['text'] = "Mapa de Similaridade 3D (Global) por Cluster"
-                        fig_pca_3d.update_layout(
-                            title=template['title'],
-                            paper_bgcolor=template['paper_bgcolor'],
-                            plot_bgcolor=template['plot_bgcolor'],
-                            font=template['font'],
-                            scene=dict(xaxis_title='PCA 1', yaxis_title='PCA 2', zaxis_title='PCA 3'),
-                            margin=dict(l=0, r=0, b=0, t=40),
-                            height=600
-                        )
-                        st.plotly_chart(fig_pca_3d, use_container_width=True)
-                    
-                    # Gráfico 2D da Detecção de Anomalia
-                    st.markdown('#### Detecção de Anomalias (Isolation Forest)')
-                    fig_anomaly = px.scatter(
-                        resultado_cluster, x='PC1', y='PC2',
-                        color=resultado_cluster['Anomalia'].astype(str).replace({'1': 'Normal', '-1': 'Outlier/Anomalia'}),
-                        hover_name=resultado_cluster.index.str.replace('.SA', ''), 
-                        color_discrete_map={'Normal': '#27AE60', 'Outlier/Anomalia': '#C0392B'},
-                        title="Detecção de Anomalias (Isolation Forest) no Espaço PCA 2D"
-                    )
-                    template = obter_template_grafico()
-                    fig_anomaly.update_layout(**template)
-                    fig_anomaly.update_layout(height=500)
-                    st.plotly_chart(fig_anomaly, use_container_width=True)
+                        fig_combined.update_layout(**template)
+                        fig_combined.update_layout(height=600)
+                        
+                        # Aumenta o tamanho do ponto do ativo selecionado
+                        fig_combined.update_traces(marker=dict(size=10, line=dict(width=1, color='DarkSlateGrey')))
+                        fig_combined.update_traces(selector=dict(name='Ativo Selecionado'), marker=dict(size=14, line=dict(width=2)))
+                        
+                        st.plotly_chart(fig_combined, use_container_width=True)
+                        
+                    else:
+                        st.warning("Dados PCA insuficientes para gerar o gráfico 2D.")
+
                     
                     # Tabela de Anomalia
                     st.markdown('##### Tabela de Scores de Anomalia (Quanto maior, menos anômalo)')
