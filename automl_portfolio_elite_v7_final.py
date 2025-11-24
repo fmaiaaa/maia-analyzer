@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Modelagem (V9.34): Seleção Dinâmica de Modelos ML/GARCH e Tratamento Robusto de Fallback.
 
-Versão: 9.32.38 (Final Build: Professional UI, Dynamic ML/GARCH, Robust Fallback)
+Versão: 9.32.37 (Final Build: Professional UI, Dynamic ML/GARCH, Robust Fallback)
 =============================================================================
 """
 
@@ -593,7 +593,7 @@ class ColetorDadosLive(object):
         results_df = pd.DataFrame(results)
         if results_df.empty:
              log_debug(f"AVISO: Auto GARCH falhou em todas as combinações para {symbol}.")
-             return np.nan, "EGARCH(1,1) (Fallback: Auto-Search Failed)"
+             return np.nan, "GARCH(1,1) (Fallback: Auto-Search Failed)"
 
         # Selecionar melhor modelo por BIC
         best_row = results_df.loc[results_df["bic"].idxmin()]
@@ -703,7 +703,7 @@ class ColetorDadosLive(object):
         garch_vols = {}
         metricas_simples_list = []
         
-        # Obtém o modo GARCH configurado (padrão GARCH(1,1))
+        # Obtém o modo GARCH configurado (padrão Garch(1,1))
         garch_mode = st.session_state.get('garch_mode', 'GARCH(1,1)')
         
         consecutive_failures = 0
@@ -844,19 +844,18 @@ class ColetorDadosLive(object):
                         if 'Auto-Search GARCH' in garch_mode:
                             garch_vol, garch_model_name = self._garch_auto_search(retornos, simbolo)
                         else:
-                            # MODO RÁPIDO/EGARCH(1,1): 
-                            # O EGARCH é mais adequado para o modo rápido que o GARCH puro
-                            am = arch_model(retornos * 100, mean='Zero', vol='EGARCH', p=1, q=1)
+                            # MODO RÁPIDO: GARCH(1,1) padrão
+                            am = arch_model(retornos * 100, mean='Zero', vol='Garch', p=1, q=1)
                             res = am.fit(disp='off', last_obs=retornos.index[-1]) 
                             garch_std_daily = res.conditional_volatility.iloc[-1] / 100 
                             temp_garch_vol = garch_std_daily * np.sqrt(252)
 
                             if np.isnan(temp_garch_vol) or temp_garch_vol == 0 or temp_garch_vol > 1.0: 
-                                raise ValueError("EGARCH returned invalid value or nan.")
+                                raise ValueError("GARCH returned invalid value or nan.")
                             
                             garch_vol = temp_garch_vol
-                            garch_model_name = "EGARCH(1,1) (Rápido)"
-                            log_debug(f"Ativo {simbolo}: EGARCH(1,1) concluído. Vol Condicional: {garch_vol*100:.2f}%.")
+                            garch_model_name = "GARCH(1,1) (Rápido)"
+                            log_debug(f"Ativo {simbolo}: GARCH(1,1) concluído. Vol Condicional: {garch_vol*100:.2f}%.")
                             
                     except Exception as e:
                         garch_vol = vol_anual 
@@ -918,7 +917,7 @@ class ColetorDadosLive(object):
         log_debug(f"Iniciando coleta e análise de ativo único: {ativo_selecionado}")
         
         # Define o modo GARCH para a coleta individual (usamos o modo fast como padrão)
-        st.session_state['garch_mode'] = st.session_state.get('individual_garch_mode', 'EGARCH(1,1)')
+        st.session_state['garch_mode'] = st.session_state.get('individual_garch_mode', 'GARCH(1,1)')
         
         self.coletar_e_processar_dados([ativo_selecionado], check_min_ativos=False)
         
@@ -1119,8 +1118,8 @@ class ConstrutorPortfolioAutoML:
     def coletar_e_processar_dados(self, simbolos: list) -> bool:
         # Passa o modo GARCH selecionado para o coletor
         garch_mode_select = st.session_state.get('ml_model_mode_select', 'fast')
-        # Determina o modo GARCH para o construtor: EGARCH(1,1) para fast, Auto-Search para full
-        garch_mode = 'Auto-Search GARCH' if garch_mode_select == 'full' else 'EGARCH(1,1)'
+        # Determina o modo GARCH para o construtor: GARCH(1,1) para fast, Auto-Search para full
+        garch_mode = 'Auto-Search GARCH' if garch_mode_select == 'full' else 'GARCH(1,1)'
         
         # Seta o modo GARCH na sessão para ser usado dentro do coletor
         st.session_state['garch_mode'] = garch_mode
@@ -1850,14 +1849,9 @@ def configurar_pagina():
         }
 
         /* Metrics (centralizados) */
-        /* CORREÇÃO: Força métricas a terem a mesma altura/tamanho usando flexbox */
         [data-testid="stMetric"] {
             text-align: center;
             margin: auto;
-            min-height: 80px; 
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
         }
         [data-testid="stMetricLabel"] {
             justify-content: center;
@@ -2000,7 +1994,7 @@ def aba_introducao():
         st.markdown("#### 🛡️ Gestão de Risco e Modelagem")
         st.markdown("O sistema oferece diferentes níveis de sofisticação para estimar o risco (Volatilidade Condicional) e a previsão:")
         st.markdown("""
-        * **Volatilidade:** Utiliza **EGARCH(1,1)** para cálculo rápido ou **Auto-Search GARCH** (Grid Search) para modelos de risco mais precisos e complexos.
+        * **Volatilidade:** Utiliza **GARCH(1,1)** para cálculo rápido ou **Auto-Search GARCH** (Grid Search) para modelos de risco mais precisos e complexos.
         * **Previsão (ML):** Escolha entre modelos **Rápidos (LogReg)**, otimizados para velocidade, ou modelos **Lentos (Ensemble RF/XGB)**, que buscam a máxima precisão por meio de validação robusta.
         """)
 
@@ -2235,19 +2229,19 @@ def aba_construtor_portfolio():
                 st.markdown("---")
                 st.markdown("#### Modo de Execução do Pipeline")
 
-                # REVERTIDO: Voltando para selectbox com label claro
-                pipeline_mode_option = st.selectbox(
+                pipeline_mode_radio = st.radio(
                     "**1. Modo de Construção:**",
                     ['Modo Geral (ML + Otimização Markowitz)', 'Modo Fundamentalista (Cluster/Anomalias)'],
-                    key='pipeline_mode_radio_construtor',
+                    key='pipeline_mode_radio_construtor', # Chave diferente para evitar conflito com a aba de seleção
                     index=0,
-                    format_func=lambda x: x.split('(')[0].strip()
+                    format_func=lambda x: x.split('(')[0].strip(),
+                    label_visibility="collapsed"
                 )
                 
-                ml_mode_option = 'fast'
+                ml_mode = 'fast'
                 
-                if 'Geral' in pipeline_mode_option:
-                    ml_mode_option = st.selectbox(
+                if 'Geral' in pipeline_mode_radio:
+                    ml_mode = st.radio(
                         "**2. Seleção de Modelo ML:**",
                         [
                             'fast', 
@@ -2255,7 +2249,8 @@ def aba_construtor_portfolio():
                         ],
                         format_func=lambda x: "Rápido (LogReg)" if x == 'fast' else "Lento (Análise Completa RF/XGB/Auto-GARCH)",
                         index=0,
-                        key='ml_model_mode_select'
+                        key='ml_model_mode_select',
+                        label_visibility="collapsed"
                     )
             
             # NOVO: Centralização do botão e barra de loading
@@ -2297,13 +2292,11 @@ def aba_construtor_portfolio():
                 # NOVO: Barra de progresso visível logo após o submit
                 progress_widget = progress_bar_placeholder.progress(0, text=f"Iniciando pipeline para PERFIL {risk_level}...")
                 
-                pipeline_mode = pipeline_mode_option.split('(')[1].lower().split('/')[0].strip().replace('+', ' ').replace(' ', '_')
-                
                 success = builder_local.executar_pipeline(
                     simbolos_customizados=st.session_state.ativos_para_analise,
                     perfil_inputs=st.session_state.profile,
-                    ml_mode=ml_mode_option,
-                    pipeline_mode=pipeline_mode,
+                    ml_mode=ml_mode,
+                    pipeline_mode=pipeline_mode_radio.split('(')[1].lower().split('/')[0].strip().replace('+', ' ').replace(' ', '_'), # Extrai 'ml' ou 'fundamentalista'
                     progress_bar=progress_widget
                 )
                 
@@ -2907,10 +2900,10 @@ def aba_analise_individual():
         # Usando st.radio para manter o estado do botão
         garch_mode_select = st.radio(
             "Selecione o Modelo de Risco:",
-            ['EGARCH(1,1)', 'Auto-Search GARCH'],
+            ['GARCH(1,1)', 'Auto-Search GARCH'],
             key='individual_garch_mode_radio',
-            index=0 if st.session_state.get('individual_garch_mode', 'EGARCH(1,1)') == 'EGARCH(1,1)' else 1,
-            format_func=lambda x: x.split('(')[0].strip() if '(' in x else x,
+            index=0 if st.session_state.get('individual_garch_mode', 'GARCH(1,1)') == 'GARCH(1,1)' else 1,
+            format_func=lambda x: x,
             label_visibility="collapsed"
         )
         st.session_state['individual_garch_mode'] = garch_mode_select
@@ -3066,7 +3059,7 @@ def aba_analise_individual():
                 
                 # NOVO: Mapeamento de Fallback para Dívida Bruta e Beta
                 # Se Dívida Bruta / PL for NaN, tenta Dívida Líquida
-                db_pl_label, db_pl_val = get_valid_metric(features_fund, 'debt_to_equity', 'Dívida Bruta/PL', 'divida_liquida', 'Dívida Líquida/EBITDA')
+                db_pl_label, db_pl_val = get_valid_metric(features_fund, 'debt_to_equity', 'Dívida Bruta/PL', 'divida_liquida', 'Dívida Líquida')
                 
                 # Se Beta for NaN, tenta Yahoo Finance (já incluso na função get_valid_metric)
                 beta_label, beta_val = get_valid_metric(features_fund, 'beta', 'Beta (Pynvest)', 'beta_yf', 'Beta (YF)')
