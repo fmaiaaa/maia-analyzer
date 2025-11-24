@@ -10,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.26 (Update: CENTRALIZED UI & FIXES)
+Versão: 9.32.27 (Update: FIX PRICE HISTORY & CENTRALIZED TICKET METRIC)
 =============================================================================
 """
 
@@ -594,7 +594,7 @@ class ColetorDadosLive(object):
                     df_tecnicos_yf = ticker_obj.history(period=self.periodo)
                     
                     # Normaliza colunas do YFinance para maiúsculas (Open, Close, etc.)
-                    if df_tecnicos_yf is not None and not df_tecnicos_yf.empty:
+                    if df_tecnicos_yf is not None and not df_tecnicos_yf.empty and 'Close' in df_tecnicos_yf.columns:
                         df_tecnicos = df_tecnicos_yf
                         tem_dados = True
                         log_debug(f"Tentativa 1 (YFinance): Sucesso. {len(df_tecnicos)} pontos.")
@@ -622,9 +622,6 @@ class ColetorDadosLive(object):
                         df_tecnicos = df_tecnicos_tv
                         tem_dados = True
                         log_debug(f"Tentativa 2 (TvDatafeed): Sucesso. {len(df_tecnicos)} pontos.")
-                        # --- LOG DETALHADO DO TVDATAFEED ---
-                        log_debug(f"TvDatafeed Head: \n{df_tecnicos.head().to_string()}")
-                        # --- FIM LOG DETALHADO ---
 
                 # --- FIM DA LÓGICA DE SWAP DE COLETA ---
 
@@ -646,12 +643,12 @@ class ColetorDadosLive(object):
                 log_debug(f"Ativo {simbolo}: Processando em MODO ESTÁTICO (Sem preços históricos).")
                 df_tecnicos = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'rsi_14', 'macd', 'vol_20d'])
                 df_tecnicos.loc[pd.Timestamp.today()] = [np.nan] * len(df_tecnicos.columns)
-            elif not df_tecnicos.empty and ('Close' in df_tecnicos.columns or 'close' in df_tecnicos.columns):
+            elif not df_tecnicos.empty:
                 # Se tem dados, enriquece (e a calculadora técnica faz a normalização de colunas)
                 log_debug(f"Ativo {simbolo}: Enriquecendo dados técnicos...")
                 df_tecnicos = CalculadoraTecnica.enriquecer_dados_tecnicos(df_tecnicos)
-                if 'Close' not in df_tecnicos.columns:
-                     usando_fallback_estatico = True # Falha no enriquecimento
+                if 'Close' not in df_tecnicos.columns or df_tecnicos['Close'].isnull().all():
+                     usando_fallback_estatico = True # Falha no enriquecimento/dados vazios
                 
             else:
                  usando_fallback_estatico = True
@@ -699,7 +696,8 @@ class ColetorDadosLive(object):
                     try:
                         # Multiplicamos por 100 para evitar problemas de otimização em valores muito pequenos (comum em arch)
                         am = arch_model(retornos * 100, mean='Zero', vol='Garch', p=1, q=1)
-                        res = am.fit(disp='off', last_obs=retornos.index[-1]) 
+                        # Aumentamos o número de iterações e a tolerância para ajudar na convergência do GARCH
+                        res = am.fit(disp='off', last_obs=retornos.index[-1], options={'maxiter': 1000, 'ftol': 1e-6}) 
                         garch_std_daily = res.conditional_volatility.iloc[-1] / 100 # Dividimos por 100 de volta
                         garch_vol = garch_std_daily * np.sqrt(252)
                         if np.isnan(garch_vol) or garch_vol == 0: raise ValueError("GARCH returned NaN or zero.")
@@ -982,7 +980,7 @@ class ConstrutorPortfolioAutoML:
                 data_scaled = scaler.fit_transform(clustering_df)
                 pca = PCA(n_components=min(data_scaled.shape[1], 3))
                 data_pca = pca.fit_transform(data_scaled)
-                kmeans = KMeans(n_clusters=min(len(data_pca), 5), random_state=42, n_init=10)
+                kmeans = KMeans(n_clusters=min(len(data_pca), 5), random_state=42, n_init='auto')
                 clusters = kmeans.fit_predict(data_pca)
                 self.dados_fundamentalistas['Cluster'] = pd.Series(clusters, index=clustering_df.index).fillna(-1).astype(int)
                 log_debug(f"Clusterização inicial concluída. {self.dados_fundamentalistas['Cluster'].nunique()} clusters formados.")
@@ -1792,9 +1790,9 @@ def aba_selecao_ativos():
             key='ativos_individuais_multiselect_v8'
         )
         
-        # NOVO: Métrica movida para baixo da seleção individual
-        col1, col2 = st.columns(2)
-        with col1:
+        # NOVO: Métrica movida para baixo da seleção individual E CENTRALIZADA
+        col_space_l, col_metric, col_space_r = st.columns([1, 2, 1])
+        with col_metric:
             st.metric("Tickers Selecionados", len(ativos_selecionados))
         
         if not ativos_selecionados:
@@ -2800,11 +2798,6 @@ def main():
         st.session_state.analisar_ativo_triggered = False
         
     configurar_pagina()
-    
-    # NÃO EXIBE o painel de debug
-    # if 'debug_logs' not in st.session_state:
-    #     st.session_state.debug_logs = []
-    # mostrar_debug_panel() 
     
     # Inicializa debug_logs para a função log_debug não falhar
     if 'debug_logs' not in st.session_state:
