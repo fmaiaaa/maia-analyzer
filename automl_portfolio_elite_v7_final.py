@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Modelagem (V9.34): Seleção Dinâmica de Modelos ML/GARCH e Tratamento Robusto de Fallback.
 
-Versão: 9.32.36 (Final Build: Professional UI, Dynamic ML/GARCH, Robust Fallback)
+Versão: 9.32.37 (Final Build: Professional UI, Dynamic ML/GARCH, Robust Fallback)
 =============================================================================
 """
 
@@ -28,6 +28,7 @@ import time
 from datetime import datetime, timedelta
 import json
 import traceback
+import math # Adicionado para cálculo de quantidade de ações
 
 # --- 2. SCIENTIFIC / STATISTICAL TOOLS ---
 from scipy.optimize import minimize
@@ -1893,6 +1894,31 @@ def configurar_pagina():
             /* Garante que o container da tabela se estique */
         }
         
+        /* Estilo para manter o estado do botão (Modo GARCH/ML/Horizonte) */
+        .stRadio [data-baseweb="radio"] {
+            width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 5px;
+            background-color: #fff;
+            transition: all 0.2s;
+        }
+        .stRadio [data-baseweb="radio"]:hover {
+            border-color: #000;
+        }
+        .stRadio [data-baseweb="radio"][aria-checked="true"] {
+            border-color: #111;
+            background-color: #f0f0f0; /* Cor para estado selecionado */
+        }
+
+        /* Ajuste para que radio buttons ocupem a largura total dentro da coluna */
+        div[data-testid="stVerticalBlock"] > div[data-testid="stRadio"] {
+            width: 100% !important;
+        }
+
+
+        
         /* Outros estilos básicos */
         .stMetric { 
             background-color: #ffffff; 
@@ -1975,9 +2001,14 @@ def aba_introducao():
 
     st.markdown("---")
     with st.expander("2. Detalhamento Técnico e Gráficos de Exemplo"):
-        st.subheader("2.1. Exemplos de Componentes de Score")
-        st.write("A pontuação de um ativo é a agregação de diversos indicadores. Por exemplo, o Score Técnico considera a posição do ativo em relação à média móvel (Z-Score), o momentum (RSI/MACD) e a volatilidade (Vol20).")
-
+        st.subheader("2.1. Conceito de Diversificação")
+        st.markdown("""
+        A diversificação do portfólio (além da mera distribuição setorial) baseia-se na **Correlação Histórica dos Retornos** (Matriz de Covariância). 
+        
+        * **Objetivo:** Minimizar a volatilidade total do portfólio explorando o fato de que ativos descorrelacionados (movimento oposto) se compensam em momentos de estresse.
+        * **Correção:** O sistema utiliza a **Otimização de Markowitz** para encontrar o balanço de pesos que minimiza o risco total para um dado nível de retorno (ou maximiza o Sharpe Ratio). **O baixo percentual de 'Diversificação' que você mencionou (13%) é geralmente uma métrica interna calculada sobre a volatilidade, não sobre a contagem de setores.** O sistema visa otimizar o *peso* alocado para reduzir o risco não-sistemático.
+        """)
+        
         # Exemplo de Gráfico de Contribuição de Score (Simulado)
         fig_score_sim = go.Figure(data=[
             go.Bar(name='Fatores', x=['Fundamental', 'Técnico', 'Performance', 'ML'], y=[25, 35, 20, 20], marker_color=['#27AE60', '#3498DB', '#9B59B6', '#E67E22'])
@@ -2005,15 +2036,32 @@ def aba_selecao_ativos():
     </div>
     """, unsafe_allow_html=True)
     
+    # NOVO: Transformando o Modo de Construção em st.radio com botões
+    st.markdown("#### 1. Modo de Construção")
+    
+    modo_construcao = st.radio(
+        "Selecione o modo de construção:",
+        ['Modo Geral (ML + Otimização Markowitz)', 'Modo Fundamentalista (Cluster/Anomalias)'],
+        key='pipeline_mode_radio_selection',
+        index=0,
+        format_func=lambda x: x.split('(')[0].strip(),
+        label_visibility="collapsed"
+    )
+    st.session_state['pipeline_mode_radio'] = modo_construcao # Atualiza a variável de sessão usada no construtor
+    
+    st.markdown("---")
+    st.markdown("#### 2. Seleção de Ativos")
+
     modo_selecao = st.radio(
-        "**Modo de Seleção:**",
+        "Selecione o universo inicial:",
         [
             "📊 Índice de Referência (Todos do Ibovespa)",
             "🏢 Seleção Setorial",
             "✍️ Seleção Individual"
         ],
         index=0,
-        key='selection_mode_radio_v8'
+        key='selection_mode_radio_v8',
+        format_func=lambda x: x.split('(')[0].strip() # Formata o texto para ser mais limpo no botão
     )
     
     ativos_selecionados = []
@@ -2051,7 +2099,6 @@ def aba_selecao_ativos():
             with col_metrics_s[1]:
                 st.metric("Total de Ativos", len(ativos_selecionados))
             with col_metrics_s[2]:
-                 # Placeholder para manter o layout lateralizado (pode ser ajustado se houver mais métricas)
                  st.metric("Tickers/Setor (Visual)", "OK") 
             
             with st.expander("📋 Visualizar Ativos por Setor"):
@@ -2182,16 +2229,19 @@ def aba_construtor_portfolio():
                 st.markdown("---")
                 st.markdown("#### Modo de Execução do Pipeline")
 
-                pipeline_mode = st.radio(
+                pipeline_mode_radio = st.radio(
                     "**1. Modo de Construção:**",
-                    ["Modo Geral (ML + Otimização Markowitz)", "Modo Fundamentalista (Cluster/Anomalias)"],
+                    ['Modo Geral (ML + Otimização Markowitz)', 'Modo Fundamentalista (Cluster/Anomalias)'],
+                    key='pipeline_mode_radio_construtor', # Chave diferente para evitar conflito com a aba de seleção
                     index=0,
-                    key='pipeline_mode_radio'
+                    format_func=lambda x: x.split('(')[0].strip(),
+                    label_visibility="collapsed"
                 )
-
+                
                 ml_mode = 'fast'
-                if pipeline_mode == 'Modo Geral (ML + Otimização Markowitz)':
-                    ml_mode = st.selectbox(
+                
+                if 'Geral' in pipeline_mode_radio:
+                    ml_mode = st.radio(
                         "**2. Seleção de Modelo ML:**",
                         [
                             'fast', 
@@ -2199,7 +2249,8 @@ def aba_construtor_portfolio():
                         ],
                         format_func=lambda x: "Rápido (LogReg)" if x == 'fast' else "Lento (Análise Completa RF/XGB/Auto-GARCH)",
                         index=0,
-                        key='ml_model_mode_select'
+                        key='ml_model_mode_select',
+                        label_visibility="collapsed"
                     )
             
             # NOVO: Centralização do botão e barra de loading
@@ -2245,7 +2296,7 @@ def aba_construtor_portfolio():
                     simbolos_customizados=st.session_state.ativos_para_analise,
                     perfil_inputs=st.session_state.profile,
                     ml_mode=ml_mode,
-                    pipeline_mode=pipeline_mode.split('(')[1].lower().split('/')[0].strip().replace('+', ' ').replace(' ', '_'), # Extrai 'ml' ou 'fundamentalista'
+                    pipeline_mode=pipeline_mode_radio.split('(')[1].lower().split('/')[0].strip().replace('+', ' ').replace(' ', '_'), # Extrai 'ml' ou 'fundamentalista'
                     progress_bar=progress_widget
                 )
                 
@@ -2347,6 +2398,9 @@ def aba_construtor_portfolio():
             st.markdown('#### Distribuição do Capital')
             col_alloc, col_table = st.columns([1, 2])
             
+            total_investimento = builder.valor_investimento
+            total_investido_real = 0
+            
             with col_alloc:
                 # Garante que não existem NaNs nos pesos antes de plotar
                 weights_clean = {k: v['weight'] for k, v in allocation.items() if not pd.isna(v['weight'])}
@@ -2371,31 +2425,54 @@ def aba_construtor_portfolio():
                 
                 alloc_table = []
                 for asset in assets:
-                    if asset in allocation and allocation[asset]['weight'] > 0:
-                        weight = allocation[asset]['weight']
-                        amount = allocation[asset]['amount']
+                    weight = allocation.get(asset, {}).get('weight', 0)
+                    amount_target = allocation.get(asset, {}).get('amount', 0)
+                    
+                    price = builder.dados_por_ativo.get(asset, {}).get('Close', pd.Series([np.nan])).iloc[-1]
+                    
+                    shares = 0
+                    amount_actual = 0
+                    
+                    if price > 0 and amount_target > 0:
+                        shares = math.floor(amount_target / price)
+                        amount_actual = shares * price
+                        total_investido_real += amount_actual
                         
-                        score_row = builder.scores_combinados.loc[asset] if asset in builder.scores_combinados.index else {}
-                        total_score = score_row.get('total_score', np.nan)
-                        cluster_id = score_row.get('Final_Cluster', 'N/A')
-                        
-                        # Safe Sector Access
-                        try:
-                             sector = builder.dados_fundamentalistas.loc[asset, 'sector']
-                        except:
-                             sector = "Unknown"
-                             
-                        alloc_table.append({
-                            'Ticker': asset.replace('.SA', ''), 
-                            'Peso (%)': f"{weight * 100:.2f}",
-                            'Valor (R$)': f"R$ {amount:,.2f}",
-                            'Score Total': f"{total_score:.3f}" if not np.isnan(total_score) else 'N/A', # Adicionado
-                            'Setor': sector,                                                           # Adicionado
-                            'Cluster': str(cluster_id),                                                # Adicionado
-                        })
+                    score_row = builder.scores_combinados.loc[asset] if asset in builder.scores_combinados.index else {}
+                    total_score = score_row.get('total_score', np.nan)
+                    cluster_id = score_row.get('Final_Cluster', 'N/A')
+                    
+                    # Safe Sector Access
+                    try:
+                         sector = builder.dados_fundamentalistas.loc[asset, 'sector']
+                    except:
+                         sector = "Unknown"
+                         
+                    alloc_table.append({
+                        'Ticker': asset.replace('.SA', ''), 
+                        'Peso Alvo (%)': f"{weight * 100:.2f}",
+                        'Valor Alvo (R$)': f"R$ {amount_target:,.2f}",
+                        'Preço Atual': f"R$ {price:,.2f}" if not np.isnan(price) else 'N/A',
+                        'Qtd. Ações (Mínima)': shares,
+                        'Valor Real (R$)': f"R$ {amount_actual:,.2f}",
+                        'Score Total': f"{total_score:.3f}" if not np.isnan(total_score) else 'N/A', 
+                        'Setor': sector,                                                           
+                        'Cluster': str(cluster_id),                                                
+                    })
                 
                 df_alloc = pd.DataFrame(alloc_table)
                 st.dataframe(df_alloc, use_container_width=True)
+                
+                troco = total_investimento - total_investido_real
+                st.markdown(f"""
+                    <div style='background-color: #f0f8ff; padding: 10px; border-radius: 8px; border: 1px solid #ddd; margin-top: 15px;'>
+                        <p style='margin: 0; font-size: 1.1rem;'><strong>Capital Inserido:</strong> R$ {total_investimento:,.2f}</p>
+                        <p style='margin: 0; font-size: 1.1rem;'><strong>Capital Investido (Real):</strong> R$ {total_investido_real:,.2f}</p>
+                        <p style='margin: 0; font-size: 1.2rem; font-weight: bold; color: {'#C0392B' if troco > 0 else '#27AE60'};'>
+                            Troco Restante: R$ {troco:,.2f}
+                        </p>
+                    </div>
+                """, unsafe_allow_html=True)
         
         with tab2:
             st.markdown('#### Métricas Chave do Portfólio (Histórico Recente)')
@@ -2439,10 +2516,12 @@ def aba_construtor_portfolio():
             # --- PARTE 1: FATOR ML/FUNDAMENTOS (Conteúdo da Antiga tab3) ---
             
             # Condição para mostrar resultados ML: Se o score ML ponderado for > 0 ou se o modo geral foi forçado
-            if has_price_data and st.session_state.get('pipeline_mode_radio', '').startswith('Modo Geral'):
+            if has_price_data and st.session_state.get('pipeline_mode_radio_construtor', '').startswith('Modo Geral'):
                  
-                 # Recalcula a flag de ML treinado (já que o proxy não é mais salvo no df_tec)
-                 is_ml_actually_trained = builder.predicoes_ml.get(assets[0], {}).get('auc_roc_score', 0.0) > 0.0
+                 # CORREÇÃO CRÍTICA DO IndexError: Verifica se a lista assets não está vazia antes de tentar acessar assets[0]
+                 is_ml_actually_trained = False
+                 if assets:
+                     is_ml_actually_trained = builder.predicoes_ml.get(assets[0], {}).get('auc_roc_score', 0.0) > 0.0
 
                  if is_ml_actually_trained:
                      st.markdown(f"##### 🤖 Predição de Movimento Direcional ({builder.predicoes_ml.get(assets[0], {}).get('model_name', 'Modelo ML')})")
@@ -2501,7 +2580,7 @@ def aba_construtor_portfolio():
             st.markdown("---")
             st.markdown('##### 🔬 Análise de Qualidade Fundamentalista (Unsupervised Learning)')
             
-            if st.session_state.get('pipeline_mode_radio', '') == 'Modo Fundamentalista (Cluster/Anomalias)':
+            if st.session_state.get('pipeline_mode_radio_construtor', '').endswith('Fundamentalista (Cluster/Anomalias)'):
                  st.info("ℹ️ **Modo Fundamentalista Ativo:** A classificação se baseia EXCLUSIVAMENTE nos fatores Fundamentais e Clusterização.")
                  
             st.markdown("###### Score Fundamentalista e Cluster por Ativo")
@@ -2787,8 +2866,6 @@ def aba_analise_individual():
     # --- NOVO: Seleção de Horizonte ML para Análise Individual ---
     st.markdown("#### Prazos de Predição (Dias Úteis Futuros)")
     
-    col_h_cp, col_h_mp, col_h_lp = st.columns(3)
-    
     # Mapeia as opções para os lookback days (que serão usados por get_ml_horizons)
     horizon_map_individual = {
         'Curto Prazo (CP)': 84,
@@ -2796,17 +2873,19 @@ def aba_analise_individual():
         'Longo Prazo (LP)': 252
     }
     
-    # Botões de seleção de horizonte (usando st.radio em colunas para simular quadrados)
-    with col_h_cp:
-        if st.button("Curto Prazo (CP)", key='btn_h_cp', use_container_width=True):
-            st.session_state['individual_horizon_selection'] = 'Curto Prazo (CP)'
-    with col_h_mp:
-        if st.button("Médio Prazo (MP)", key='btn_h_mp', use_container_width=True):
-            st.session_state['individual_horizon_selection'] = 'Médio Prazo (MP)'
-    with col_h_lp:
-        if st.button("Longo Prazo (LP)", key='btn_h_lp', use_container_width=True):
-            st.session_state['individual_horizon_selection'] = 'Longo Prazo (LP)'
-            
+    # NOVO: Usando st.radio em 3 colunas para simular os botões de seleção de horizonte
+    col_h_modes = st.columns(3)
+    
+    with col_h_modes[0]:
+         st.markdown("##### Curto (4m)")
+         st.radio("Curto Prazo (CP)", ['Curto Prazo (CP)'], key='btn_h_cp_radio', index=0 if st.session_state.get('individual_horizon_selection', 'Longo Prazo (LP)') == 'Curto Prazo (CP)' else None, label_visibility="collapsed", on_change=lambda: st.session_state.__setitem__('individual_horizon_selection', 'Curto Prazo (CP)'))
+    with col_h_modes[1]:
+         st.markdown("##### Médio (8m)")
+         st.radio("Médio Prazo (MP)", ['Médio Prazo (MP)'], key='btn_h_mp_radio', index=0 if st.session_state.get('individual_horizon_selection', 'Longo Prazo (LP)') == 'Médio Prazo (MP)' else None, label_visibility="collapsed", on_change=lambda: st.session_state.__setitem__('individual_horizon_selection', 'Médio Prazo (MP)'))
+    with col_h_modes[2]:
+         st.markdown("##### Longo (12m)")
+         st.radio("Longo Prazo (LP)", ['Longo Prazo (LP)'], key='btn_h_lp_radio', index=0 if st.session_state.get('individual_horizon_selection', 'Longo Prazo (LP)') == 'Longo Prazo (LP)' else None, label_visibility="collapsed", on_change=lambda: st.session_state.__setitem__('individual_horizon_selection', 'Longo Prazo (LP)'))
+        
     st.session_state.profile['ml_lookback_days'] = horizon_map_individual.get(st.session_state.get('individual_horizon_selection', 'Longo Prazo (LP)'), 252)
 
 
@@ -2814,7 +2893,7 @@ def aba_analise_individual():
     
     # NOVO: Seleção de Modos de GARCH e ML para a Análise Individual (ocupando a lateralidade)
     st.markdown("#### Seleção de Modelos Quantitativos")
-    col_modes = st.columns(2) # Reduzido para 2 colunas para ML e GARCH
+    col_modes = st.columns(2) 
     
     with col_modes[0]:
         st.markdown("##### Volatilidade (GARCH):")
@@ -2823,7 +2902,7 @@ def aba_analise_individual():
             "Selecione o Modelo de Risco:",
             ['GARCH(1,1)', 'Auto-Search GARCH'],
             key='individual_garch_mode_radio',
-            index=0,
+            index=0 if st.session_state.get('individual_garch_mode', 'GARCH(1,1)') == 'GARCH(1,1)' else 1,
             format_func=lambda x: x,
             label_visibility="collapsed"
         )
@@ -2836,7 +2915,7 @@ def aba_analise_individual():
             "Selecione o Modelo de Predição:",
             ['fast', 'full'],
             key='individual_ml_mode_radio',
-            index=0,
+            index=0 if st.session_state.get('individual_ml_mode', 'fast') == 'fast' else 1,
             format_func=lambda x: "Rápido (LogReg)" if x == 'fast' else "Lento (RF/XGB)",
             label_visibility="collapsed"
         )
@@ -2901,7 +2980,10 @@ def aba_analise_individual():
             # Abas 1-4: Lógica Padrão de Exibição (igual à versão anterior)
             with tab1:
                 st.markdown(f"### {ativo_selecionado.replace('.SA', '')} - Resumo de Mercado")
-                col1, col2, col3, col4, col5 = st.columns(5)
+                
+                # NOVO: Layout 5 colunas e remoção do delta do preço
+                col_m1, col_m2, col_m3, col_m4, col_m5 = st.columns(5)
+                
                 if not static_mode and 'Close' in df_completo.columns:
                     preco_atual = df_completo['Close'].iloc[-1]
                     variacao_dia = df_completo['returns'].iloc[-1] * 100 if 'returns' in df_completo.columns else 0.0
@@ -2910,30 +2992,40 @@ def aba_analise_individual():
                     garch_vol = features_fund.get('garch_volatility', np.nan) * 100
                     garch_model_name = features_fund.get('garch_model', "N/A")
                     
-                    col1.metric("Preço", f"R$ {preco_atual:.2f}", f"{variacao_dia:+.2f}%")
-                    col2.metric("Volume Médio", f"{volume_medio:,.0f}")
-                    col3.metric("Vol. Anualizada (Hist)", f"{vol_anual:.2f}%")
-                    
-                    # Exibe GARCH Vol, se for diferente de NaN e Hist
+                    # Coluna 1: Preço
+                    col_m1.metric("Preço Atual (R$)", f"R$ {preco_atual:.2f}") 
+                    # Coluna 2: Volume Médio
+                    col_m2.metric("Volume Médio", f"{volume_medio:,.0f}")
+                    # Coluna 3: Volatilidade Histórica
+                    col_m3.metric("Vol. Anualizada (Hist)", f"{vol_anual:.2f}%")
+                    # Coluna 4: Volatilidade Condicional
                     if not np.isnan(garch_vol) and abs(garch_vol - vol_anual) > 0.01:
-                         col5.metric(f"Vol. Condicional ({garch_model_name.split('(')[0].strip()})", f"{garch_vol:.2f}%")
-                    # NOVO: Retirada da métrica redundante/confusa
-                    # else:
-                    #     col5.metric(f"Vol. Condicional (N/A)", "Não Significativa")
-
+                         col_m4.metric(f"Vol. Condicional ({garch_model_name.split('(')[0].strip()})", f"{garch_vol:.2f}%")
+                    else:
+                         col_m4.metric(f"Vol. Condicional", "N/A ou Histórica")
 
                 else:
-                    col1.metric("Preço", "N/A", "N/A"); col2.metric("Volume Médio", "N/A"); col5.metric("Volatilidade", "N/A")
+                    col_m1.metric("Preço Atual (R$)", "N/A"); col_m2.metric("Volume Médio", "N/A"); col_m3.metric("Vol. Anualizada (Hist)", "N/A"); col_m4.metric("Vol. Condicional", "N/A")
                 
-                # Fallback para Setor se pynvest falhar
-                setor = features_fund.get('sector')
-                if setor == 'Unknown' or setor is None:
-                     setor = FALLBACK_SETORES.get(ativo_selecionado, 'N/A')
-
-                col3.metric("Setor", setor)
-                col4.metric("Indústria", features_fund.get('industry', 'N/A'))
+                # Coluna 5: Setor/Indústria
+                setor = features_fund.get('sector', 'N/A')
+                industria = features_fund.get('industry', 'N/A')
+                
+                col_m5.markdown(f"""
+                    <div class="stMetric" style="padding: 15px; height: 100%;">
+                        <label class="stMetricLabel">Setor/Indústria</label>
+                        <div style="font-weight: 700; color: #111; font-size: 1.1rem; line-height: 1.2;">
+                            {setor}
+                        </div>
+                        <div style="font-size: 0.9rem; color: #555;">
+                            ({industria})
+                        </div>
+                    </div>
+                """, unsafe_allow_html=True)
+                
                 
                 if not static_mode and not df_completo.empty and 'Open' in df_completo.columns:
+                    st.markdown("---")
                     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
                     fig.add_trace(go.Candlestick(x=df_completo.index, open=df_completo['Open'], high=df_completo['High'], low=df_completo['Low'], close=df_completo['Close'], name='Preço'), row=1, col=1)
                     fig.add_trace(go.Bar(x=df_completo.index, y=df_completo['Volume'], name='Volume'), row=2, col=1)
@@ -2954,16 +3046,24 @@ def aba_analise_individual():
                 def get_valid_metric(data, primary_key, primary_label, secondary_key, secondary_label):
                      val = data.get(primary_key)
                      if pd.isna(val):
-                         return secondary_label, data.get(secondary_key)
+                         # NOVO: Tenta o fallback yfinance para Beta
+                         if secondary_key == 'beta_yf':
+                             try:
+                                 val_beta = yf.Ticker(ativo_selecionado).info.get('beta')
+                                 return 'Beta (YF)', safe_format(val_beta)
+                             except:
+                                 pass
+                         
+                         return secondary_label, data.get(secondary_key, 'N/A')
                      return primary_label, val
                 
-                # Obtem Beta de Fallback se necessário (Yahoo Finance)
-                beta_val = features_fund.get('beta')
-                if pd.isna(beta_val):
-                     try:
-                         beta_val = yf.Ticker(ativo_selecionado).info.get('beta')
-                     except: 
-                         beta_val = np.nan
+                # NOVO: Mapeamento de Fallback para Dívida Bruta e Beta
+                # Se Dívida Bruta / PL for NaN, tenta Dívida Líquida
+                db_pl_label, db_pl_val = get_valid_metric(features_fund, 'debt_to_equity', 'Dívida Bruta/PL', 'divida_liquida', 'Dívida Líquida')
+                
+                # Se Beta for NaN, tenta Yahoo Finance (já incluso na função get_valid_metric)
+                beta_label, beta_val = get_valid_metric(features_fund, 'beta', 'Beta (Pynvest)', 'beta_yf', 'Beta (YF)')
+                
                 
                 # Linha 1
                 col1, col2, col3, col4, col5 = st.columns(5)
@@ -2981,14 +3081,14 @@ def aba_analise_individual():
                 
                 # Linha 2
                 col1, col2, col3, col4, col5 = st.columns(5)
-                col1.metric("Dívida Bruta/PL", safe_format(features_fund.get('debt_to_equity', np.nan)))
+                col1.metric(db_pl_label, safe_format(db_pl_val))
                 col2.metric("Liq. Corrente", safe_format(features_fund.get('current_ratio', np.nan)))
                 col3.metric("EV/EBITDA", safe_format(features_fund.get('ev_ebitda', np.nan)))
                 
-                # FIX 5: Substitui 'Cresc. Receita (5a)' que estava dando N/A por ROIC (Return on Invested Capital)
+                # ROIC
                 col4.metric("ROIC", safe_format(features_fund.get('roic', np.nan))) 
                 
-                col5.metric("Beta (Yahoo)", safe_format(beta_val))
+                col5.metric(beta_label, safe_format(beta_val))
 
                 st.markdown("---")
                 st.markdown("### Tabela Geral de Indicadores")
@@ -3026,7 +3126,7 @@ def aba_analise_individual():
                         
                         template = obter_template_grafico()
                         fig_bb.update_layout(**template)
-                        # Remove título do template para evitar duplicação
+                        # Título nos gráficos técnicos
                         fig_bb.update_layout(title_text='Bandas de Bollinger (20, 2)', height=400)
                         
                         st.plotly_chart(fig_bb, use_container_width=True)
@@ -3038,8 +3138,8 @@ def aba_analise_individual():
                     
                     template = obter_template_grafico()
                     fig_rsi.update_layout(**template)
-                    # Remove título do template para evitar duplicação
-                    fig_rsi.update_layout(title_text='Índice de Força Relativa (RSI)', height=300)
+                    # Título nos gráficos técnicos
+                    fig_rsi.update_layout(title_text='Índice de Força Relativa (RSI 14)', height=300)
                     
                     st.plotly_chart(fig_rsi, use_container_width=True)
                     
@@ -3054,7 +3154,7 @@ def aba_analise_individual():
                     
                         template = obter_template_grafico()
                         fig_macd.update_layout(**template)
-                        # Remove título do template para evitar duplicação
+                        # Título nos gráficos técnicos
                         fig_macd.update_layout(title_text='Convergência/Divergência de Média Móvel (MACD)', height=300)
                         
                         st.plotly_chart(fig_macd, use_container_width=True)
