@@ -1,42 +1,72 @@
-# --- Core & Dados ---
+# -----------------------------------------
+# --- CORE & DADOS ---
+# -----------------------------------------
 numpy>=1.24.0
 pandas>=2.0.0
 scipy>=1.11.0
 requests
 lxml
 tqdm>=4.66.0
+python-dateutil
+pytz
+simplejson
 
-# --- Interface & Visualização ---
+# -----------------------------------------
+# --- INTERFACE & VISUALIZAÇÃO ---
+# -----------------------------------------
 streamlit>=1.28.0
 plotly>=5.17.0
+protobuf
+altair
+blinker
+tenacity
+matplotlib
+seaborn
 
-# --- Finanças & Coleta de Dados ---
+# -----------------------------------------
+# --- FINANÇAS & COLETA DE DADOS ---
+# -----------------------------------------
 yfinance>=0.2.66
 ta>=0.11.0
 pynvest
+
+# tvdatafeed (instala via Git)
 git+https://github.com/rongardF/tvdatafeed.git
 
-# --- Machine Learning (Clássico & Boosting) ---
+# -----------------------------------------
+# --- MACHINE LEARNING (Clássico & Boosting) ---
+# -----------------------------------------
 scikit-learn>=1.3.0
 xgboost>=2.0.0
 lightgbm>=4.1.0
 catboost>=1.2.0
 hdbscan
+joblib
+threadpoolctl
+category_encoders
 
-# --- Deep Learning ---
+# -----------------------------------------
+# --- DEEP LEARNING ---
+# -----------------------------------------
 tensorflow>=2.13.0
 keras>=2.13.0
 
-# --- Séries Temporais & Estatística ---
+# -----------------------------------------
+# --- SÉRIES TEMPORAIS & ESTATÍSTICA ---
+# -----------------------------------------
 statsmodels>=0.14.0
 prophet>=1.1.4
 arch>=6.2.0
 
-# --- Otimização & Explicabilidade ---
+# -----------------------------------------
+# --- OTIMIZAÇÃO & EXPLICABILIDADE ---
+# -----------------------------------------
 optuna>=3.3.0
 shap>=0.42.0
 lime>=0.2.0.1
 
-# --- Nuvem (Google Cloud) ---
+# -----------------------------------------
+# --- NUVEM (GOOGLE CLOUD) ---
+# -----------------------------------------
 google-cloud-storage>=2.10.0
 gcsfs
