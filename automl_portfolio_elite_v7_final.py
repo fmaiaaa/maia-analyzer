@@ -64,7 +64,7 @@ except ImportError:
 from sklearn.ensemble import IsolationForest, RandomForestClassifier, VotingClassifier # ADICIONADO VotingClassifier (Alteração 4)
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
-from sklearn.preprocessing import StandardScaler, OneHostEncoder
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
