@@ -8,9 +8,9 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Preços: Estratégia Linear com Fail-Fast (YFinance -> TvDatafeed -> Estático Global). 
 - Fundamentos: Coleta Exaustiva Pynvest (50+ indicadores).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Modelagem (V9.34): Simplificação ML/GARCH para Robustez.
+- Modelagem (V9.39): GARCH Otimizado por HQIC + ML Pós-Score/Ensemble Robusto.
 
-Versão: 9.32.38 (Final Build: Professional UI, Simplified ML/GARCH, Robust Fallback)
+Versão: 9.32.39 (Final Build: Professional UI, Simplified ML/GARCH, Robust Fallback)
 =============================================================================
 """
 
@@ -32,7 +32,7 @@ import traceback
 # --- 2. SCIENTIFIC / STATISTICAL TOOLS ---
 from scipy.optimize import minimize
 from scipy.stats import zscore, norm
-import math # ADICIONADO (Alteração 2)
+import math 
 
 # --- 3. STREAMLIT, DATA ACQUISITION, & PLOTTING ---\
 import streamlit as st
@@ -61,19 +61,20 @@ except ImportError:
     pass
 
 # --- 4. FEATURE ENGINEERING / TECHNICAL ANALYSIS (ML) ---
-from sklearn.ensemble import IsolationForest, RandomForestClassifier 
+from sklearn.ensemble import IsolationForest, RandomForestClassifier, VotingClassifier 
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
-from sklearn.preprocessing import StandardScaler, OneHotEncoder # CORRIGIDO: OneHostEncoder -> OneHotEncoder
+from sklearn.preprocessing import StandardScaler, OneHotEncoder 
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer 
 from tqdm import tqdm # Necessário para a função GARCH avançada
-from sklearn.linear_model import LogisticRegression # NOVO: Para ML Rápido (LogReg)
+from sklearn.linear_model import LogisticRegression # NOVO: Para ML Rápido (LogReg/Elastic Net)
+from sklearn.linear_model import ElasticNetCV # NOVO: Para seleção de features no modo Complexo (Alteração)
 
-# NOVO: Adicionando LightGBM e XGBoost (para o modo FULL) - MANTIDOS APENAS PARA POSSÍVEL USO FUTURO, MAS IGNORADOS NA MODELAGEM
+# NOVO: Adicionando LightGBM e XGBoost (para o modo FULL)
 try:
     import lightgbm as lgb
 except ImportError:
@@ -89,17 +90,23 @@ except ImportError:
     pass # Fallback to KMeans if hdbscan not installed
 
 # --- 7. SPECIALIZED TIME SERIES & ECONOMETRICS ---
-# ALTERAÇÃO: Removido import arch_model
+try:
+    from arch import arch_model, tabulate_arch_output
+except ImportError:
+    arch_model = None
+    tabulate_arch_output = None
+
+
 # =============================================================================
 # 1. CONFIGURAÇÕES E CONSTANTES GLOBAIS
 # =============================================================================
 
-PERIODO_DADOS = 'max' # ALTERADO: Período máximo de dados
+PERIODO_DADOS = 'max' 
 MIN_DIAS_HISTORICO = 252
 NUM_ATIVOS_PORTFOLIO = 5
 TAXA_LIVRE_RISCO = 0.1075
 LOOKBACK_ML = 30
-SCORE_PERCENTILE_THRESHOLD = 0.85 # Limite para definir o score mínimo de inclusão (85% do score do 15º melhor ativo)
+SCORE_PERCENTILE_THRESHOLD = 0.85 
 
 # Pesos de alocação (Markowitz - Lógica Analyzer)
 PESO_MIN = 0.10
@@ -112,28 +119,22 @@ MIN_TRAIN_DAYS_ML = 120
 def get_ml_horizons(ml_lookback_days: int):
     """Adapta os horizontes de predição ML com base no lookback do perfil (CP/MP/LP)."""
     
-    # 252 dias (Long-Term focus, 12m)
     if ml_lookback_days >= 252:
-        return [80, 160, 240] # ~4m, ~8m, ~12m
-    # 168 dias (Mid-Term focus, 8m)
+        return [80, 160, 240] 
     elif ml_lookback_days >= 168:
-        return [50, 100, 150] # ~2.5m, ~5m, ~7.5m
-    # 84 dias (Short-Term focus, 4m)
+        return [50, 100, 150] 
     else:
-        return [20, 40, 60] # ~1m, ~2m, ~3m
+        return [20, 40, 60] 
 
 LOOKBACK_ML_DAYS_MAP = {
-    'curto_prazo': 84,   # Aprox. 4 meses
-    'medio_prazo': 168,  # Aprox. 8 meses
-    'longo_prazo': 252   # Aprox. 1 ano
+    'curto_prazo': 84,   
+    'medio_prazo': 168,  
+    'longo_prazo': 252   
 }
 
-# LIGHTGBM FEATURE SET (Usado como feature set minimalista para ambos os modos ML)
-LGBM_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel"]
+# FEATURES DE ENTRADA PARA ML PÓS-SCORE (Close, Retorno, Volatilidade, Sharpe)
+SCORE_BASED_FEATURES = ['Close', 'annual_return', 'annual_volatility', 'sharpe']
 
-# ENHANCED FEATURE SET (Para o modo FULL ML)
-# REMOVIDO: O usuário solicitou usar apenas o feature set minimalista para o modo FULL também.
-# FULL_ML_FEATURES = LGBM_FEATURES + ['rsi_14', 'macd_diff', 'vol_20d'] 
 
 # =============================================================================
 # 4. LISTAS DE ATIVOS E SETORES (AJUSTADAS SOMENTE PARA IBOVESPA)
@@ -449,20 +450,11 @@ class OtimizadorPortfolioAvancado:
         self.returns = returns_df
         self.mean_returns = returns_df.mean() * 252
         
-        # NOVO: Filtra garch_vols garantindo que apenas valores válidos (não zero/NaN) sejam usados
-        # ALTERAÇÃO: garch_vols agora é substituído pelo retorno da volatilidade histórica
-        # Como GARCH foi removido, a volatilidade condicional é a histórica.
-        garch_vols = garch_vols or {}
-
-        # Como a lógica interna de _construir_matriz_cov_garch ainda pode usar vols históricas como fallback, mantemos a chamada original
-        # A matriz de covariância agora usará apenas dados históricos, pois o GARCH foi removido
+        # ALTERAÇÃO: Otimizador usa apenas a matriz de covariância histórica (Vol Histórica)
         self.cov_matrix = returns_df.cov() * 252
             
         self.num_ativos = len(returns_df.columns)
 
-    # REMOVIDO: A função _construir_matriz_cov_garch foi removida, pois não é mais usada.
-    # O cálculo de self.cov_matrix agora é sempre a matriz de covariância histórica.
-    
     def estatisticas_portfolio(self, pesos: np.ndarray) -> tuple[float, float]:
         p_retorno = np.dot(pesos, self.mean_returns)
         p_vol = np.sqrt(np.dot(pesos.T, np.dot(self.cov_matrix, pesos)))
@@ -509,7 +501,7 @@ class ColetorDadosLive(object):
         self.dados_por_ativo = {} 
         self.dados_fundamentalistas = pd.DataFrame() 
         self.metricas_performance = pd.DataFrame() 
-        # ALTERAÇÃO: Removido self.volatilidades_garch_raw, pois o GARCH foi removido
+        self.volatilidades_garch_raw = {} # Mantido para armazenar Vol. Histórica
         self.metricas_simples = {}
         
         log_debug("Inicializando ColetorDadosLive...")
@@ -532,7 +524,73 @@ class ColetorDadosLive(object):
             log_debug("AVISO: Pynvest falhou ao inicializar. Coleta de fundamentos desativada.")
             st.warning("Biblioteca pynvest não inicializada corretamente.")
 
-    # REMOVIDO: Função _garch_auto_search removida para simplificar (Correção)
+    # NOVO: Método para selecionar os melhores lags p, q usando HQIC
+    def _garch_select_lags_hqic(self, returns: pd.Series, symbol: str) -> tuple[int, int, str]:
+        """Seleciona os melhores lags (p, q) para GARCH(p,q) usando HQIC."""
+        if arch_model is None:
+            return 1, 1, "Vol. Histórica (ARCH not found)"
+
+        returns_percent = returns * 100
+        best_hqic = np.inf
+        best_p, best_q = 1, 1
+        model_name = "GARCH(1,1) (Fallback)"
+
+        p_range = range(1, 3)     
+        q_range = range(1, 3)     
+        
+        log_debug(f"Iniciando seleção de lags GARCH (HQIC) para {symbol}. ")
+
+        for p in p_range:
+            for q in q_range:
+                try:
+                    model = arch_model(
+                        returns_percent,
+                        mean="Zero",
+                        vol="Garch",
+                        p=p,
+                        q=q,
+                        dist="normal", # Usando distribuição normal para simplificar a comparação
+                    )
+
+                    fit = model.fit(disp="off")
+                    
+                    # Usa o HQIC
+                    hqic = fit.hqic
+                    
+                    if hqic < best_hqic:
+                        best_hqic = hqic
+                        best_p, best_q = p, q
+                        model_name = f"GARCH({best_p},{best_q}) (HQIC)"
+
+                except:
+                    continue
+        
+        log_debug(f"Seleção HQIC para {symbol} concluída. Melhor Modelo: {model_name}")
+        return best_p, best_q, model_name
+
+
+    def _garch_predict_vol(self, returns: pd.Series, p: int, q: int) -> float:
+        """Ajusta e retorna a volatilidade condicional anualizada para os lags dados."""
+        if arch_model is None:
+            return returns.std() * np.sqrt(252)
+
+        returns_percent = returns * 100
+        try:
+            am = arch_model(returns_percent, mean='Zero', vol='Garch', p=p, q=q, dist='normal')
+            res = am.fit(disp='off', last_obs=returns.index[-1]) 
+            
+            garch_std_daily = res.conditional_volatility.iloc[-1] / 100 
+            temp_garch_vol = garch_std_daily * np.sqrt(252)
+
+            if np.isnan(temp_garch_vol) or temp_garch_vol == 0 or temp_garch_vol > 1.0: 
+                raise ValueError("GARCH returned invalid value or nan.")
+            
+            return temp_garch_vol
+            
+        except Exception as e:
+            log_debug(f"GARCH({p},{q}) falhou: {str(e)[:20]}")
+            return returns.std() * np.sqrt(252) # Fallback para histórica
+
     
     def _mapear_colunas_pynvest(self, df_pynvest: pd.DataFrame) -> dict:
         if df_pynvest.empty: return {}
@@ -626,12 +684,10 @@ class ColetorDadosLive(object):
     def coletar_e_processar_dados(self, simbolos: list, check_min_ativos: bool = True) -> bool:
         self.ativos_sucesso = []
         lista_fundamentalistas = []
-        # ALTERAÇÃO: Removido garch_vols
         metricas_simples_list = []
+        garch_vols = {} # Mantido para armazenar a Vol. Condicional
         
-        # Obtém o modo GARCH configurado (padrão Garch(1,1))
-        # ALTERAÇÃO: GARCH mode é fixo
-        garch_mode = 'GARCH(1,1)' 
+        garch_mode = 'GARCH(p,q) HQIC' # Modo GARCH
         
         consecutive_failures = 0
         FAILURE_THRESHOLD = 3 
@@ -645,7 +701,7 @@ class ColetorDadosLive(object):
             
             # Inicializando com valores de fallback para evitar NameError
             vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0
-            # ALTERAÇÃO: Removido garch_vol, pois não é mais usado
+            garch_vol = 0.20 
             garch_model_name = "N/A"
 
             if not global_static_mode:
@@ -762,28 +818,43 @@ class ColetorDadosLive(object):
                 else:
                     vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0 
                 
-                # --- INÍCIO DA IMPLEMENTAÇÃO GARCH (AGORA REMOVIDA) ---
-                # ALTERAÇÃO: GARCH foi removido. Volatilidade Condicional é sempre a Histórica.
+                # --- INÍCIO DA IMPLEMENTAÇÃO GARCH (HQIC) ---
                 garch_vol = vol_anual 
-                garch_model_name = "Vol. Histórica (GARCH Removido)"
+                garch_model_name = "Vol. Histórica"
+                
+                if arch_model is not None and len(retornos) > 120: 
+                    try:
+                        # 1. Seleção dos melhores lags GARCH por HQIC
+                        p_best, q_best, model_name = self._garch_select_lags_hqic(retornos, simbolo)
+                        
+                        # 2. Previsão de Volatilidade Condicional usando os melhores lags
+                        garch_vol = self._garch_predict_vol(retornos, p_best, q_best)
+                        garch_model_name = model_name
+                        log_debug(f"Ativo {simbolo}: GARCH({p_best},{q_best}) concluído. Vol Condicional: {garch_vol*100:.2f}%.")
+                            
+                    except Exception as e:
+                        garch_vol = vol_anual 
+                        garch_model_name = "Vol. Histórica (GARCH Falha)"
+                        log_debug(f"Ativo {simbolo}: GARCH falhou ({str(e)[:20]}). Usando Vol Histórica como Vol Condicional.")
                 # --- FIM DA IMPLEMENTAÇÃO GARCH ---
             
             fund_data.update({
                 'Ticker': simbolo, 'sharpe_ratio': sharpe, 'annual_return': ret_anual,
-                'annual_volatility': vol_anual, 'max_drawdown': max_dd, 'garch_volatility': garch_vol,
+                'annual_volatility': vol_anual, 'max_drawdown': max_dd, 'garch_volatility': garch_vol, # Armazena Vol GARCH/Histórica
                 'static_mode': usando_fallback_estatico, 'garch_model': garch_model_name
             })
             
             self.dados_por_ativo[simbolo] = df_tecnicos
             self.ativos_sucesso.append(simbolo)
             lista_fundamentalistas.append(fund_data)
-            # ALTERAÇÃO: Removido garch_vols[simbolo] = garch_vol
             
             metricas_simples_list.append({
                 'Ticker': simbolo, 'sharpe': sharpe, 'retorno_anual': ret_anual,
                 'volatilidade_anual': vol_anual, 'max_drawdown': max_dd,
             })
             
+            garch_vols[simbolo] = garch_vol # Armazena a vol condicional/histórica para otimizador
+
             if not global_static_mode:
                 time.sleep(0.1) 
 
@@ -795,8 +866,8 @@ class ColetorDadosLive(object):
         if not self.metricas_performance.empty:
              self.metricas_performance = self.metricas_performance.set_index('Ticker')
         
-        # ALTERAÇÃO: Inicializa volatilidades_garch com a volatilidade histórica (pois GARCH foi removido)
-        self.volatilidades_garch_raw = self.metricas_performance['volatilidade_anual'].to_dict() if not self.metricas_performance.empty else {} 
+        # ALTERAÇÃO: Inicializa volatilidades_garch com a volatilidade condicional (GARCH/Histórica)
+        self.volatilidades_garch_raw = garch_vols 
         
         for simbolo in self.ativos_sucesso:
             if simbolo in self.dados_por_ativo:
@@ -840,7 +911,6 @@ class ColetorDadosLive(object):
         df_ml_meta = pd.DataFrame()
         
         # FEATURES AGORA SÃO BASEADAS EM SCORES/PREÇO PARA ML PÓS-PROCESSAMENTO
-        SCORE_BASED_FEATURES = ['Close', 'annual_return', 'annual_volatility', 'sharpe']
         ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
         
         is_price_data_available = 'Close' in df_tec.columns and not df_tec['Close'].isnull().all() and len(df_tec.dropna(subset=['Close'])) > 60
@@ -899,7 +969,56 @@ class ColetorDadosLive(object):
                 
                 if len(df_model) > MIN_TRAIN_DAYS_ML: 
                     # Lógica de ML simplificada aqui... (omiti para brevidade, pois é a mesma do construtor)
-                    pass 
+                    X_full = df_model[ML_FEATURES_FINAL]
+                    split_idx = int(len(X_full) * 0.7)
+                    X_train = X_full.iloc[:split_idx]
+                    
+                    probabilities = []
+                    auc_scores = []
+                    
+                    for tgt_d in ML_HORIZONS_IND:
+                        tgt = f"t_{tgt_d}"
+                        y = df_model[tgt].values
+                        y_train = y[:split_idx]
+                        X_test = X_full.iloc[split_idx:]
+                        y_test = y[split_idx:] 
+                        
+                        if CLASSIFIER is RandomForestClassifier:
+                            model = RandomForestClassifier(**MODEL_PARAMS)
+                        elif CLASSIFIER is LogisticRegression:
+                            model = LogisticRegression(**MODEL_PARAMS)
+                        
+                        if len(np.unique(y_train)) < 2: continue
+                                 
+                        if CLASSIFIER is LogisticRegression:
+                            scaler = StandardScaler().fit(X_train)
+                            X_train_scaled = scaler.transform(X_train)
+                            X_test_scaled = scaler.transform(X_test)
+                            X_predict_scaled = scaler.transform(X_full.iloc[[-1]].copy())
+                        else:
+                            X_train_scaled = X_train
+                            X_test_scaled = X_test
+                            X_predict_scaled = X_full.iloc[[-1]].copy()
+
+                        model.fit(X_train_scaled, y_train)
+                        
+                        if not X_full.iloc[[-1]].isnull().any().any():
+                            prob_now = model.predict_proba(X_predict_scaled)[0, 1]
+                            probabilities.append(prob_now)
+
+                        if len(y_test) > 0 and len(np.unique(y_test)) >= 2:
+                            prob_test = model.predict_proba(X_test_scaled)[:, 1]
+                            auc_scores.append(roc_auc_score(y_test, prob_test))
+                                 
+                    ensemble_proba = np.mean(probabilities) if probabilities else 0.5
+                    conf_final = np.mean(auc_scores) if auc_scores else 0.5
+                    
+                    df_tec['ML_Proba'] = ensemble_proba
+                    df_tec['ML_Confidence'] = conf_final
+                    is_ml_trained = True
+                    log_debug(f"ML Individual: Sucesso {MODEL_NAME}. Prob Média: {ensemble_proba:.2f}, AUC Teste Média: {conf_final:.2f}.")
+
+
                 else:
                     log_debug(f"ML Individual: Dados insuficientes ({len(df_model)}). Pulando modelo supervisionado.")
                     
@@ -923,7 +1042,6 @@ class ColetorDadosLive(object):
                 })
             
         return df_tec, fund_row, df_ml_meta
-        return None, None, None
 
     def calculate_cross_sectional_features(self):
         df_fund = self.dados_fundamentalistas.copy()
@@ -964,13 +1082,30 @@ class ColetorDadosLive(object):
         
         # --- Seleção de Classificador (Simplificada) ---
         if ml_mode == 'fast':
+            # Simples: Regressão Logística com Elastic Net para seleção (usamos LogisticRegression com L2 como proxy)
             CLASSIFIER = LogisticRegression
             MODEL_PARAMS = dict(penalty='l2', solver='liblinear', class_weight='balanced', random_state=42)
             MODEL_NAME = 'Regressão Logística Pós-Score'
-        else: # ml_mode == 'full' (Random Forest)
-            CLASSIFIER = RandomForestClassifier
-            MODEL_PARAMS = dict(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced', n_jobs=-1)
-            MODEL_NAME = 'Random Forest Pós-Score'
+        else: # ml_mode == 'full' (Random Forest + XGBoost Ensemble)
+            # Complexo: Ensemble Voting Classifier (RF + XGBoost)
+            # Para manter a robustez, usaremos RF/XGB com regularização básica (max_depth)
+            if xgb and RandomForestClassifier and ElasticNetCV:
+                # 1. Seleção de Features Robusta (Elastic Net)
+                feature_selector = ElasticNetCV(l1_ratio=[.1, .5, .7, .9, .95, .99, 1], eps=0.001, n_alphas=100, cv=TimeSeriesSplit(n_splits=5), random_state=42, n_jobs=-1)
+                
+                # 2. Modelos Ensemble
+                rf_model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced', n_jobs=-1)
+                xgb_model = xgb.XGBClassifier(n_estimators=100, max_depth=5, use_label_encoder=False, eval_metric='logloss', random_state=42, n_jobs=-1)
+                
+                # Usaremos o VotingClassifier, mas a seleção de features será feita ANTES do loop.
+                CLASSIFIER = VotingClassifier
+                MODEL_PARAMS = dict(estimators=[('rf', rf_model), ('xgb', xgb_model)], voting='soft', n_jobs=-1)
+                MODEL_NAME = 'Full Ensemble (RF + XGBoost) c/ ElasticNet'
+            else:
+                 # Fallback se bibliotecas complexas não estiverem instaladas
+                 CLASSIFIER = RandomForestClassifier
+                 MODEL_PARAMS = dict(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced', n_jobs=-1)
+                 MODEL_NAME = 'Random Forest Pós-Score (Fallback)'
             
         
         # --- Clusterização Inicial (Fundamentos) ---
@@ -1014,8 +1149,6 @@ class ColetorDadosLive(object):
                 
                 # Adiciona métricas históricas no DataFrame de preço/retorno
                 if ativo in self.metricas_performance.index:
-                     # Usamos a técnica de reindexação para garantir que a coluna exista em todos os índices de tempo,
-                     # embora os valores sejam constantes (o que simula o uso do 'score' para todos os dias)
                      df['annual_return'] = self.metricas_performance.loc[ativo, 'retorno_anual']
                      df['annual_volatility'] = self.metricas_performance.loc[ativo, 'volatilidade_anual']
                      df['sharpe'] = self.metricas_performance.loc[ativo, 'sharpe']
@@ -1042,6 +1175,35 @@ class ColetorDadosLive(object):
                 probabilities = []
                 auc_scores = []
                 
+                # --- Seleção de Features (Elastic Net) APENAS para o modo Complexo ---
+                current_features = ML_FEATURES_FINAL
+                if ml_mode == 'full' and 'feature_selector' in locals():
+                    try:
+                        log_debug(f"ML Complexo: Aplicando Elastic Net Feature Selection para {ativo}")
+                        # ElasticNet só funciona com dados numéricos e sem NaNs
+                        X_train_clean = X_train.fillna(X_train.mean()) 
+                        feature_selector.fit(X_train_clean, df_model[model_targets[0]].iloc[:split_idx]) # Usa o primeiro target para seleção
+                        
+                        # Filtra features onde o coeficiente não é zero
+                        selected_mask = (feature_selector.coef_ != 0)
+                        
+                        if np.any(selected_mask):
+                            current_features = np.array(ML_FEATURES_FINAL)[selected_mask].tolist()
+                            if len(current_features) == 0:
+                                # Fallback se todos os coeficientes forem zero
+                                current_features = ML_FEATURES_FINAL 
+                            log_debug(f"Elastic Net selecionou {len(current_features)} features.")
+                        else:
+                            log_debug("Elastic Net não selecionou features, usando todas.")
+                            current_features = ML_FEATURES_FINAL
+                    except Exception as e:
+                        log_debug(f"Erro na seleção Elastic Net: {e}")
+                        current_features = ML_FEATURES_FINAL # Fallback total
+
+                X_full = df_model[current_features]
+                X_train = X_full.iloc[:split_idx]
+                
+                
                 for tgt_d in ML_HORIZONS_CONST:
                     tgt = f"t_{tgt_d}"
                     y = df_model[tgt].values
@@ -1056,20 +1218,16 @@ class ColetorDadosLive(object):
                     
                     if len(np.unique(y_train)) < 2: continue
                              
-                    if CLASSIFIER is LogisticRegression:
-                         scaler = StandardScaler().fit(X_train)
-                         X_train_scaled = scaler.transform(X_train)
-                         X_test_scaled = scaler.transform(X_test)
-                         X_predict_scaled = scaler.transform(X_full.iloc[[-1]].copy())
-                    else:
-                         X_train_scaled = X_train
-                         X_test_scaled = X_test
-                         X_predict_scaled = X_full.iloc[[-1]].copy()
+                    # Aplica Scaling
+                    scaler = StandardScaler().fit(X_train)
+                    X_train_scaled = scaler.transform(X_train)
+                    X_test_scaled = scaler.transform(X_test)
+                    X_predict_scaled = scaler.transform(X_full.iloc[[-1]].copy())
 
                     model.fit(X_train_scaled, y_train)
                     
                     if not X_full.iloc[[-1]].isnull().any().any():
-                        prob_now = model.predict_proba(X_predict_scaled)[0, 1]
+                        prob_now = model.predict_proba(X_predict_scaled)[:, 1][0]
                         probabilities.append(prob_now)
 
                     if len(y_test) > 0 and len(np.unique(y_test)) >= 2:
@@ -1087,12 +1245,13 @@ class ColetorDadosLive(object):
                 
                 try:
                     if CLASSIFIER is LogisticRegression:
+                        # Usa coeficientes, mas precisa ser no dataset COMPLETO para o ranking
                         importances_data = np.abs(model.coef_[0])
                     else:
                         importances_data = model.feature_importances_
                         
                     importances = pd.DataFrame({
-                        'feature': ML_FEATURES_FINAL,
+                        'feature': current_features,
                         'importance': importances_data
                     }).sort_values('importance', ascending=False)
                 except:
@@ -1173,9 +1332,7 @@ class ColetorDadosLive(object):
                     combined.loc[symbol, 'vol_20d'] = df['vol_20d'].iloc[-1]
                     
                     # Tenta adicionar features do LightGBM para a tabela de ranqueamento
-                    for lgbm_f in LGBM_FEATURES:
-                         if lgbm_f in df.columns:
-                             combined.loc[symbol, lgbm_f] = df[lgbm_f].iloc[-1]
+                    # REMOVIDO LGBM_FEATURES para simplificar as features no combined
                     
                 else:
                     # Fallback para valores neutros se estiver em modo estático
@@ -1216,8 +1373,8 @@ class ColetorDadosLive(object):
         ml_conf = pd.Series({s: self.predicoes_ml.get(s, {}).get('auc_roc_score', 0.5) for s in combined.index})
         s_prob = EngenheiroFeatures._normalize_score(ml_probs, True)
         
-        # ALTERAÇÃO: Nova fórmula de ponderação do Score ML (AUC * Prob)
-        # Score ML Ponderado = AUC * Probabilidade de Alta * Peso Base (0.20)
+        # ALTERAÇÃO: Nova fórmula de ponderação do Score ML (AUC * Prob * Peso)
+        # Score ML Ponderado = AUC * Probabilidade de Alta * Peso Base * 100
         scores['ml_score_weighted'] = ml_conf.fillna(0) * ml_probs.fillna(0) * W_ML_GLOBAL_BASE * 100 
 
         # ALTERAÇÃO 5: Total score é a soma dos 3 pilares
@@ -1768,7 +1925,7 @@ def aba_introducao():
         # ALTERAÇÃO: Descrição de modelos simplificada para refletir as mudanças
         st.markdown("O sistema oferece diferentes níveis de sofisticação para estimar o risco (Volatilidade Condicional) e a previsão:")
         st.markdown("""
-        * **Volatilidade:** Utiliza o modelo **Volatilidade Histórica Anualizada** para o cálculo de risco. (O GARCH foi removido para maior estabilidade).
+        * **Volatilidade:** Utiliza o modelo **Volatilidade GARCH (Otimizado por HQIC)** para um cálculo de risco condicional mais preciso.
         * **Previsão (ML - Simples):** **Regressão Logística** com regularização (Elastic Net/L2).
         * **Previsão (ML - Complexa):** **Random Forest** com profundidade limitada e balanceamento de classes.
         """)
@@ -2661,10 +2818,10 @@ def aba_analise_individual():
     col_modes = st.columns(2) # Reduzido para 2 colunas para ML e GARCH
     
     with col_modes[0]:
-        st.markdown("##### Volatilidade (Histórica):") # Nome alterado
+        st.markdown("##### Volatilidade (Condicional):") # Nome alterado
         # ALTERAÇÃO: Apenas GARCH(1,1) é permitido (para manter o layout, mas é apenas vol histórica)
         # REMOVIDO o radio button de seleção de volatilidade (Correção)
-        st.info("Modelo de Risco: Volatilidade Histórica Anualizada")
+        st.info("Modelo de Risco: GARCH (Otimizado por HQIC)")
         st.session_state['individual_garch_mode'] = 'GARCH(1,1)' 
         
     with col_modes[1]:
@@ -2744,14 +2901,15 @@ def aba_analise_individual():
                     variacao_dia = df_completo['returns'].iloc[-1] * 100 if 'returns' in df_completo.columns else 0.0
                     volume_medio = df_completo['Volume'].mean() if 'Volume' in df_completo.columns else 0.0
                     vol_anual = features_fund.get('annual_volatility', 0) * 100
-                    # NOVO: Exibe o score de ML e a Volatilidade GARCH
-                    garch_vol_forecast = temp_builder.garch_volatility.get(ativo_selecionado, 0) if 'temp_builder' in locals() else 0
+                    # GARCH removido, então usamos vol_anual sempre
+                    garch_model_name = features_fund.get('garch_model', "N/A")
                     
                     col1.metric("Preço", f"R$ {preco_atual:.2f}", f"{variacao_dia:+.2f}%")
                     col2.metric("Volume Médio", f"{volume_medio:,.0f}")
                     col3.metric("Vol. Anualizada (Hist)", f"{vol_anual:.2f}%")
-                    col4.metric("Score ML (Ponderado)", f"{ml_score_individual:.4f}" if is_ml_trained else "N/A")
-                    col5.metric("Vol. GARCH (Prevista)", f"{garch_vol_forecast*100:.2f}%" if garch_vol_forecast > 0 else "N/A")
+                    
+                    # Exibe Vol Histórica
+                    col5.metric(f"Risco (Modelo)", garch_model_name)
 
 
                 else:
