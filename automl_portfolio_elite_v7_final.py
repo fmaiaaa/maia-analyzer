@@ -8,9 +8,9 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Preços: Estratégia Linear com Fail-Fast (YFinance -> TvDatafeed -> Estático Global). 
 - Fundamentos: Coleta Exaustiva Pynvest (50+ indicadores).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Modelagem (V9.39): GARCH Otimizado por HQIC + ML Pós-Score/Ensemble Robusto.
+- Modelagem (V9.40): ML RESTAURADO para estabilidade + GARCH REMOVIDO.
 
-Versão: 9.32.39 (Final Build: Professional UI, Simplified ML/GARCH, Robust Fallback)
+Versão: 9.32.40 (Final Build: ML Estável, Vol. Histórica, UI Simplificada)
 =============================================================================
 """
 
@@ -71,8 +71,8 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.impute import SimpleImputer 
 from tqdm import tqdm # Necessário para a função GARCH avançada
-from sklearn.linear_model import LogisticRegression # NOVO: Para ML Rápido (LogReg/Elastic Net)
-from sklearn.linear_model import ElasticNetCV # NOVO: Para seleção de features no modo Complexo (Alteração)
+from sklearn.linear_model import LogisticRegression 
+from sklearn.linear_model import ElasticNetCV 
 
 # NOVO: Adicionando LightGBM e XGBoost (para o modo FULL)
 try:
@@ -90,11 +90,9 @@ except ImportError:
     pass # Fallback to KMeans if hdbscan not installed
 
 # --- 7. SPECIALIZED TIME SERIES & ECONOMETRICS ---
-try:
-    from arch import arch_model, tabulate_arch_output
-except ImportError:
-    arch_model = None
-    tabulate_arch_output = None
+# GARCH REMOVIDO PARA ESTABILIDADE
+arch_model = None
+tabulate_arch_output = None
 
 
 # =============================================================================
@@ -105,7 +103,7 @@ PERIODO_DADOS = 'max'
 MIN_DIAS_HISTORICO = 252
 NUM_ATIVOS_PORTFOLIO = 5
 TAXA_LIVRE_RISCO = 0.1075
-LOOKBACK_ML = 30
+LOOKBACK_ML = 30 # Usado como base para os horizontes
 SCORE_PERCENTILE_THRESHOLD = 0.85 
 
 # Pesos de alocação (Markowitz - Lógica Analyzer)
@@ -132,8 +130,17 @@ LOOKBACK_ML_DAYS_MAP = {
     'longo_prazo': 252   
 }
 
-# FEATURES DE ENTRADA PARA ML PÓS-SCORE (Close, Retorno, Volatilidade, Sharpe)
-SCORE_BASED_FEATURES = ['Close', 'annual_return', 'annual_volatility', 'sharpe']
+# FEATURES ORIGINAIS DO PORTFOLIO_ANALYZER (Para modelagem ML)
+# Usaremos estas features para restaurar o modelo estável
+ML_FEATURES_ORIGINAL = [
+    'RSI', 'MACD', 'Volatility', 'Momentum', 'SMA_50', 'SMA_200'
+]
+ALL_FUND_FEATURES = [
+    'pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 
+    'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 
+    'ev_ebitda', 'operating_margin'
+]
+ML_CATEGORICAL_FEATURES = ['Cluster']
 
 
 # =============================================================================
@@ -312,39 +319,29 @@ class EngenheiroFeatures:
 
 class CalculadoraTecnica:
     """
-    CLASSE REFEITA PARA USAR AS FEATURES LIGHTGBM (fast_features)
-    E MANTER RETORNOS/VOLATILIDADE E MÉTRICAS PARA SCORING TÉCNICO.
+    CLASSE REFEITA PARA USAR AS FEATURES DO MODELO ESTÁVEL
     """
     @staticmethod
     def enriquecer_dados_tecnicos(df_ativo: pd.DataFrame) -> pd.DataFrame:
         if df_ativo.empty: return df_ativo
         df = df_ativo.sort_index().copy()
         
-        # Renomeia colunas para o padrão do modelo LightGBM
+        # Renomeia colunas para o padrão
         df.rename(columns={'Close': 'close', 'High': 'high', 'Low': 'low', 'Open': 'open', 'Volume': 'volume'}, inplace=True)
 
         df['returns'] = df['close'].pct_change()
         
-        # === fast_features (EXATAMENTE COMO O CÓDIGO FORNECIDO) ===
-        df["ret"] = np.log(df["close"] / df["close"].shift(1))
-        df["vol20"] = df["ret"].rolling(20).std()
-        df["ma20"] = df["close"].rolling(20).mean()
-        df["z20"] = (df["close"] - df["ma20"]) / (df["close"].rolling(20).std() + 1e-9)
-        df["trend"] = df["close"].diff(5)
-        df["volrel"] = df["volume"] / (df["volume"].rolling(20).mean() + 1e-9)
-        # ===========================================================
-        
-        # --- MÉTRICAS DE SCORING / DISPLAY TRADICIONAL (RSI, MACD, BBands) ---
+        # === FEATURES ADICIONAIS PARA ML/ANÁLISE TÉCNICA (RESTAURO) ===
         
         # 1. Vol Anualizada (usada no score de performance/vol_current)
-        df['vol_20d'] = df["ret"].rolling(20).std() * np.sqrt(252) 
+        df['vol_20d'] = df["returns"].rolling(20).std() * np.sqrt(252) 
         
         # 2. MACD Diff (Proxy para score técnico e display)
         ema_12 = df["close"].ewm(span=12, adjust=False).mean()
         ema_26 = df["close"].ewm(span=26, adjust=False).mean()
-        df['macd'] = ema_12 - ema_26 # Necessário para o plot (linha macd)
-        df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean() # Necessário para o plot (linha signal)
-        df['macd_diff'] = df['macd'] - df['macd_signal'] # Usado no score técnico e plot (histograma)
+        df['macd'] = ema_12 - ema_26 
+        df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean() 
+        df['macd_diff'] = df['macd'] - df['macd_signal'] 
 
         # 3. RSI (Proxy para score técnico e display)
         delta = df['close'].diff()
@@ -352,8 +349,15 @@ class CalculadoraTecnica:
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         rs = gain / loss.replace(0, np.nan)
         df['rsi_14'] = 100 - (100 / (1 + rs)) 
+
+        # 4. Momentum (10 períodos) - Baseado no arquivo estável
+        df['momentum_10d'] = df['close'] / df['close'].shift(10) - 1
+
+        # 5. Médias Móveis (Baseado no arquivo estável)
+        df['sma_50d'] = df['close'].rolling(window=50).mean()
+        df['sma_200d'] = df['close'].rolling(window=200).mean()
         
-        # 4. Bollinger Bands (Para o plot de análise individual)
+        # 6. Bollinger Bands (Para o plot de análise individual)
         rolling_mean_20 = df['close'].rolling(window=20).mean()
         rolling_std_20 = df['close'].rolling(window=20).std()
         df['bb_upper'] = rolling_mean_20 + (rolling_std_20 * 2)
@@ -363,10 +367,10 @@ class CalculadoraTecnica:
         # Renomeia de volta para o padrão Streamlit
         df.rename(columns={'close': 'Close', 'high': 'High', 'low': 'Low', 'open': 'Open', 'volume': 'Volume'}, inplace=True)
         
-        # Remove colunas duplicadas ou temporárias não essenciais (Média móvel e outros features antigos)
+        # Garante que as colunas essenciais para o ML estão presentes
         cols_to_keep = ['Close', 'High', 'Low', 'Open', 'Volume', 'returns', 
-                        'ret', 'vol20', 'ma20', 'z20', 'trend', 'volrel', # LGBM Features (Alteração 4)
-                        'vol_20d', 'macd_diff', 'rsi_14', 'macd', 'macd_signal', 'bb_upper', 'bb_lower'] # Scoring/Display Features
+                        'vol_20d', 'macd_diff', 'rsi_14', 'macd', 'macd_signal', 'bb_upper', 'bb_lower',
+                        'momentum_10d', 'sma_50d', 'sma_200d'] 
         
         cols_to_drop = [c for c in df.columns if c not in cols_to_keep and c not in ['Close', 'High', 'Low', 'Open', 'Volume', 'returns']]
         df.drop(columns=cols_to_drop, errors='ignore', inplace=True)
@@ -443,7 +447,6 @@ class AnalisadorPerfilInvestidor:
 # =============================================================================
 # 10. CLASSE: OTIMIZADOR DE PORTFÓLIO
 # =============================================================================
-# (Manter inalterado)
 
 class OtimizadorPortfolioAvancado:
     def __init__(self, returns_df: pd.DataFrame, garch_vols: dict = None):
@@ -493,7 +496,6 @@ class OtimizadorPortfolioAvancado:
 # =============================================================================
 # 9. CLASSE: COLETOR DE DADOS LIVE
 # =============================================================================
-# (Função Auto GARCH integrada)
 
 class ColetorDadosLive(object):
     def __init__(self, periodo=PERIODO_DADOS):
@@ -524,73 +526,7 @@ class ColetorDadosLive(object):
             log_debug("AVISO: Pynvest falhou ao inicializar. Coleta de fundamentos desativada.")
             st.warning("Biblioteca pynvest não inicializada corretamente.")
 
-    # NOVO: Método para selecionar os melhores lags p, q usando HQIC
-    def _garch_select_lags_hqic(self, returns: pd.Series, symbol: str) -> tuple[int, int, str]:
-        """Seleciona os melhores lags (p, q) para GARCH(p,q) usando HQIC."""
-        if arch_model is None:
-            return 1, 1, "Vol. Histórica (ARCH not found)"
-
-        returns_percent = returns * 100
-        best_hqic = np.inf
-        best_p, best_q = 1, 1
-        model_name = "GARCH(1,1) (Fallback)"
-
-        p_range = range(1, 3)     
-        q_range = range(1, 3)     
-        
-        log_debug(f"Iniciando seleção de lags GARCH (HQIC) para {symbol}. ")
-
-        for p in p_range:
-            for q in q_range:
-                try:
-                    model = arch_model(
-                        returns_percent,
-                        mean="Zero",
-                        vol="Garch",
-                        p=p,
-                        q=q,
-                        dist="normal", # Usando distribuição normal para simplificar a comparação
-                    )
-
-                    fit = model.fit(disp="off")
-                    
-                    # Usa o HQIC
-                    hqic = fit.hqic
-                    
-                    if hqic < best_hqic:
-                        best_hqic = hqic
-                        best_p, best_q = p, q
-                        model_name = f"GARCH({best_p},{best_q}) (HQIC)"
-
-                except:
-                    continue
-        
-        log_debug(f"Seleção HQIC para {symbol} concluída. Melhor Modelo: {model_name}")
-        return best_p, best_q, model_name
-
-
-    def _garch_predict_vol(self, returns: pd.Series, p: int, q: int) -> float:
-        """Ajusta e retorna a volatilidade condicional anualizada para os lags dados."""
-        if arch_model is None:
-            return returns.std() * np.sqrt(252)
-
-        returns_percent = returns * 100
-        try:
-            am = arch_model(returns_percent, mean='Zero', vol='Garch', p=p, q=q, dist='normal')
-            res = am.fit(disp='off', last_obs=returns.index[-1]) 
-            
-            garch_std_daily = res.conditional_volatility.iloc[-1] / 100 
-            temp_garch_vol = garch_std_daily * np.sqrt(252)
-
-            if np.isnan(temp_garch_vol) or temp_garch_vol == 0 or temp_garch_vol > 1.0: 
-                raise ValueError("GARCH returned invalid value or nan.")
-            
-            return temp_garch_vol
-            
-        except Exception as e:
-            log_debug(f"GARCH({p},{q}) falhou: {str(e)[:20]}")
-            return returns.std() * np.sqrt(252) # Fallback para histórica
-
+    # GARCH Logic: Removida a seleção por HQIC e a previsão GARCH para estabilidade (Correção)
     
     def _mapear_colunas_pynvest(self, df_pynvest: pd.DataFrame) -> dict:
         if df_pynvest.empty: return {}
@@ -685,9 +621,9 @@ class ColetorDadosLive(object):
         self.ativos_sucesso = []
         lista_fundamentalistas = []
         metricas_simples_list = []
-        garch_vols = {} # Mantido para armazenar a Vol. Condicional
+        garch_vols = {} 
         
-        garch_mode = 'GARCH(p,q) HQIC' # Modo GARCH
+        garch_mode = 'Vol. Histórica' # GARCH Removido
         
         consecutive_failures = 0
         FAILURE_THRESHOLD = 3 
@@ -818,24 +754,9 @@ class ColetorDadosLive(object):
                 else:
                     vol_anual, ret_anual, sharpe, max_dd = 0.20, 0.0, 0.0, 0.0 
                 
-                # --- INÍCIO DA IMPLEMENTAÇÃO GARCH (HQIC) ---
+                # --- GARCH REMOVIDO: Usando Vol Histórica como Vol Condicional ---
                 garch_vol = vol_anual 
                 garch_model_name = "Vol. Histórica"
-                
-                if arch_model is not None and len(retornos) > 120: 
-                    try:
-                        # 1. Seleção dos melhores lags GARCH por HQIC
-                        p_best, q_best, model_name = self._garch_select_lags_hqic(retornos, simbolo)
-                        
-                        # 2. Previsão de Volatilidade Condicional usando os melhores lags
-                        garch_vol = self._garch_predict_vol(retornos, p_best, q_best)
-                        garch_model_name = model_name
-                        log_debug(f"Ativo {simbolo}: GARCH({p_best},{q_best}) concluído. Vol Condicional: {garch_vol*100:.2f}%.")
-                            
-                    except Exception as e:
-                        garch_vol = vol_anual 
-                        garch_model_name = "Vol. Histórica (GARCH Falha)"
-                        log_debug(f"Ativo {simbolo}: GARCH falhou ({str(e)[:20]}). Usando Vol Histórica como Vol Condicional.")
                 # --- FIM DA IMPLEMENTAÇÃO GARCH ---
             
             fund_data.update({
@@ -866,7 +787,7 @@ class ColetorDadosLive(object):
         if not self.metricas_performance.empty:
              self.metricas_performance = self.metricas_performance.set_index('Ticker')
         
-        # ALTERAÇÃO: Inicializa volatilidades_garch com a volatilidade condicional (GARCH/Histórica)
+        # ALTERAÇÃO: Inicializa volatilidades_garch com a volatilidade histórica (pois GARCH foi removido)
         self.volatilidades_garch_raw = garch_vols 
         
         for simbolo in self.ativos_sucesso:
@@ -910,7 +831,8 @@ class ColetorDadosLive(object):
         
         df_ml_meta = pd.DataFrame()
         
-        # FEATURES AGORA SÃO BASEADAS EM SCORES/PREÇO PARA ML PÓS-PROCESSAMENTO
+        # FEATURES AGORA SÃO BASEADAS NO MODELO ESTÁVEL
+        ML_NUMERIC_FEATURES = ['Close', 'vol_20d', 'macd_diff', 'rsi_14', 'momentum_10d', 'sma_50d', 'sma_200d']
         ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
         
         is_price_data_available = 'Close' in df_tec.columns and not df_tec['Close'].isnull().all() and len(df_tec.dropna(subset=['Close'])) > 60
@@ -921,11 +843,11 @@ class ColetorDadosLive(object):
         if ml_mode_for_individual == 'fast':
             CLASSIFIER = LogisticRegression 
             MODEL_PARAMS = dict(penalty='l2', solver='liblinear', class_weight='balanced', random_state=42)
-            MODEL_NAME = 'Regressão Logística Pós-Score'
+            MODEL_NAME = 'Regressão Logística'
         else:
             CLASSIFIER = RandomForestClassifier
             MODEL_PARAMS = dict(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced', n_jobs=-1)
-            MODEL_NAME = 'Random Forest Pós-Score'
+            MODEL_NAME = 'Random Forest'
 
 
         is_ml_trained = False
@@ -935,89 +857,83 @@ class ColetorDadosLive(object):
             try:
                 df = df_tec.copy()
                 
-                # REFORÇANDO: Adiciona métricas históricas no DataFrame de preço/retorno (para features)
-                if ativo_selecionado in self.metricas_performance.index:
-                     df['annual_return'] = self.metricas_performance.loc[ativo_selecionado, 'retorno_anual']
-                     df['annual_volatility'] = self.metricas_performance.loc[ativo_selecionado, 'volatilidade_anual']
-                     df['sharpe'] = self.metricas_performance.loc[ativo_selecionado, 'sharpe']
-                
-                # Obtendo os Horizons adaptativos (embora o lookback do perfil não seja fornecido aqui, usamos um padrão)
-                if st.session_state.get('individual_horizon_selection') == 'Curto Prazo (CP)':
-                     ml_lookback_days = 84
-                elif st.session_state.get('individual_horizon_selection') == 'Médio Prazo (MP)':
-                     ml_lookback_days = 168
-                else: # Longo (LP) ou Fallback
-                     ml_lookback_days = 252 # Hardcoding fallback para evitar erro de estado de sessão
-                     
-                ML_HORIZONS_IND = get_ml_horizons(ml_lookback_days)
-                
+                # Adiciona features fundamentais para o ML
                 last_idx = df.index[-1] if not df.empty else None
                 if last_idx:
                     for f_col in ALL_FUND_FEATURES:
-                        if f_col in fund_row and f_col not in df.columns:
-                            df.loc[last_idx, f_col] = fund_row[f_col]
-                        elif f_col not in df.columns:
-                            df[f_col] = np.nan
-                            
+                        if f_col in fund_row:
+                            df[f_col] = fund_row[f_col] # Adiciona como coluna constante no histórico
+                    
+                    df['Cluster'] = fund_row.get('Cluster', 0)
+                
+                
                 # Targets Futuros (make_targets logic)
+                ml_lookback_days = 5 # Usando lookback fixo para a Análise Individual
+                ML_HORIZONS_IND = get_ml_horizons(ml_lookback_days)
+                
                 for d in ML_HORIZONS_IND:
                     df[f"t_{d}"] = (df["Close"].shift(-d) > df["Close"]).astype(int)
 
-                # Remove NaNs da parte de treino e predição
-                ML_FEATURES_FINAL = SCORE_BASED_FEATURES 
-                df_model = df.dropna(subset=ML_FEATURES_FINAL + [f"t_{ML_HORIZONS_IND[-1]}"]) 
+                # Prepara Features para o ML
+                ML_FEATURES_FINAL = ML_NUMERIC_FEATURES + [
+                    'pe_ratio', 'roe', 'vol_20d' # Exemplo de features fund/técnicos que se provaram estáveis
+                ]
                 
-                if len(df_model) > MIN_TRAIN_DAYS_ML: 
-                    # Lógica de ML simplificada aqui... (omiti para brevidade, pois é a mesma do construtor)
-                    X_full = df_model[ML_FEATURES_FINAL]
-                    split_idx = int(len(X_full) * 0.7)
-                    X_train = X_full.iloc[:split_idx]
-                    
-                    probabilities = []
-                    auc_scores = []
-                    
-                    for tgt_d in ML_HORIZONS_IND:
-                        tgt = f"t_{tgt_d}"
-                        y = df_model[tgt].values
-                        y_train = y[:split_idx]
-                        X_test = X_full.iloc[split_idx:]
-                        y_test = y[split_idx:] 
-                        
-                        if CLASSIFIER is RandomForestClassifier:
-                            model = RandomForestClassifier(**MODEL_PARAMS)
-                        elif CLASSIFIER is LogisticRegression:
-                            model = LogisticRegression(**MODEL_PARAMS)
-                        
-                        if len(np.unique(y_train)) < 2: continue
-                                 
-                        if CLASSIFIER is LogisticRegression:
-                            scaler = StandardScaler().fit(X_train)
-                            X_train_scaled = scaler.transform(X_train)
-                            X_test_scaled = scaler.transform(X_test)
-                            X_predict_scaled = scaler.transform(X_full.iloc[[-1]].copy())
-                        else:
-                            X_train_scaled = X_train
-                            X_test_scaled = X_test
-                            X_predict_scaled = X_full.iloc[[-1]].copy()
+                # Garante que as colunas existem
+                ML_FEATURES_FINAL = [f for f in ML_FEATURES_FINAL if f in df.columns]
 
-                        model.fit(X_train_scaled, y_train)
-                        
-                        if not X_full.iloc[[-1]].isnull().any().any():
-                            prob_now = model.predict_proba(X_predict_scaled)[0, 1]
-                            probabilities.append(prob_now)
+                # Adiciona Cluster para o preprocessor
+                X_cols = ML_FEATURES_FINAL + ['Cluster']
+                
+                df_model = df.dropna(subset=X_cols + [f"t_{ML_HORIZONS_IND[-1]}"]).copy()
+                
+                if len(df_model) > MIN_TRAIN_DAYS_ML:
+                    
+                    # Preprocessador (Mantendo a estrutura do pipeline estável)
+                    numeric_cols = [f for f in ML_FEATURES_FINAL if f in df_model.columns]
+                    categorical_cols = ['Cluster']
+                    
+                    preprocessor = ColumnTransformer(
+                        transformers=[
+                            ('num', StandardScaler(), numeric_cols),
+                            ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_cols)
+                        ],
+                        remainder='passthrough'
+                    )
+                    
+                    # Cria pipeline de modelo
+                    model_pipeline = Pipeline(steps=[
+                        ('preprocessor', preprocessor),
+                        ('classifier', CLASSIFIER(**MODEL_PARAMS))
+                    ])
 
-                        if len(y_test) > 0 and len(np.unique(y_test)) >= 2:
-                            prob_test = model.predict_proba(X_test_scaled)[:, 1]
-                            auc_scores.append(roc_auc_score(y_test, prob_test))
-                                 
-                    ensemble_proba = np.mean(probabilities) if probabilities else 0.5
-                    conf_final = np.mean(auc_scores) if auc_scores else 0.5
+                    X = df_model[X_cols].iloc[:-ML_HORIZONS_IND[-1]]
+                    y = df_model[f"t_{ML_HORIZONS_IND[-1]}"].iloc[:-ML_HORIZONS_IND[-1]]
+                    
+                    # Ajusta X para o scaler: Cluster precisa ser string
+                    X['Cluster'] = X['Cluster'].astype(str)
+
+                    # Split treino/teste (simulado por TimeSeriesSplit)
+                    tscv = TimeSeriesSplit(n_splits=5)
+                    
+                    # Treinamento e Cross-Validation (Simplificado para o último horizonte)
+                    auc_scores = cross_val_score(model_pipeline, X, y, cv=tscv, scoring='roc_auc', n_jobs=-1)
+                    conf_final = auc_scores.mean()
+
+                    # Treinamento final para predição
+                    model_pipeline.fit(X, y)
+                    
+                    # Previsão da última linha
+                    last_features = df_tec[X_cols].iloc[[-1]].copy()
+                    last_features['Cluster'] = last_features['Cluster'].astype(str)
+
+                    proba = model_pipeline.predict_proba(last_features)[0][1]
+                    ensemble_proba = proba
                     
                     df_tec['ML_Proba'] = ensemble_proba
                     df_tec['ML_Confidence'] = conf_final
                     is_ml_trained = True
                     log_debug(f"ML Individual: Sucesso {MODEL_NAME}. Prob Média: {ensemble_proba:.2f}, AUC Teste Média: {conf_final:.2f}.")
-
 
                 else:
                     log_debug(f"ML Individual: Dados insuficientes ({len(df_model)}). Pulando modelo supervisionado.")
@@ -1068,44 +984,26 @@ class ColetorDadosLive(object):
         log_debug("Features cross-sectional concluídas.")
 
     def calcular_volatilidades_garch(self):
-        # ALTERAÇÃO: Função simplificada/mantida como placeholder, pois GARCH foi removido
+        # ALTERAÇÃO: A função agora apenas registra o uso de Volatilidade Histórica
         log_debug("Verificando volatilidades (Utilizando Volatilidade Histórica - GARCH Removido).")
         
     def treinar_modelos_ensemble(self, ml_mode: str = 'fast', progress_callback=None):
         ativos_com_dados = [s for s in self.ativos_sucesso if s in self.dados_por_ativo]
         log_debug(f"Iniciando Pipeline de Treinamento ML/Clusterização (Modo: {ml_mode}).")
         
-        # --- NOVO: FEATURES DE SCORE PARA ML PÓS-RANQUEAMENTO ---
-        # O ML agora é treinado sobre o histórico dos scores e retornos.
-        SCORE_BASED_FEATURES = ['Close', 'annual_return', 'annual_volatility', 'sharpe']
-        ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
+        # --- DEFINIÇÃO DE FEATURES (RESTAURO) ---
+        ML_NUMERIC_FEATURES = ['Close', 'vol_20d', 'macd_diff', 'rsi_14', 'momentum_10d', 'sma_50d', 'sma_200d']
+        X_cols = ML_NUMERIC_FEATURES + ['pe_ratio', 'pb_ratio', 'div_yield', 'roe'] + ['Cluster']
         
-        # --- Seleção de Classificador (Simplificada) ---
+        # --- Seleção de Classificador (Restaurado e Simplificado) ---
         if ml_mode == 'fast':
-            # Simples: Regressão Logística com Elastic Net para seleção (usamos LogisticRegression com L2 como proxy)
             CLASSIFIER = LogisticRegression
             MODEL_PARAMS = dict(penalty='l2', solver='liblinear', class_weight='balanced', random_state=42)
-            MODEL_NAME = 'Regressão Logística Pós-Score'
-        else: # ml_mode == 'full' (Random Forest + XGBoost Ensemble)
-            # Complexo: Ensemble Voting Classifier (RF + XGBoost)
-            # Para manter a robustez, usaremos RF/XGB com regularização básica (max_depth)
-            if xgb and RandomForestClassifier and ElasticNetCV:
-                # 1. Seleção de Features Robusta (Elastic Net)
-                feature_selector = ElasticNetCV(l1_ratio=[.1, .5, .7, .9, .95, .99, 1], eps=0.001, n_alphas=100, cv=TimeSeriesSplit(n_splits=5), random_state=42, n_jobs=-1)
-                
-                # 2. Modelos Ensemble
-                rf_model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced', n_jobs=-1)
-                xgb_model = xgb.XGBClassifier(n_estimators=100, max_depth=5, use_label_encoder=False, eval_metric='logloss', random_state=42, n_jobs=-1)
-                
-                # Usaremos o VotingClassifier, mas a seleção de features será feita ANTES do loop.
-                CLASSIFIER = VotingClassifier
-                MODEL_PARAMS = dict(estimators=[('rf', rf_model), ('xgb', xgb_model)], voting='soft', n_jobs=-1)
-                MODEL_NAME = 'Full Ensemble (RF + XGBoost) c/ ElasticNet'
-            else:
-                 # Fallback se bibliotecas complexas não estiverem instaladas
-                 CLASSIFIER = RandomForestClassifier
-                 MODEL_PARAMS = dict(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced', n_jobs=-1)
-                 MODEL_NAME = 'Random Forest Pós-Score (Fallback)'
+            MODEL_NAME = 'Regressão Logística'
+        else: 
+            CLASSIFIER = RandomForestClassifier
+            MODEL_PARAMS = dict(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced', n_jobs=-1)
+            MODEL_NAME = 'Random Forest'
             
         
         # --- Clusterização Inicial (Fundamentos) ---
@@ -1133,7 +1031,7 @@ class ColetorDadosLive(object):
             self.dados_fundamentalistas['Cluster'] = 0
             log_debug("AVISO: Falha na coleta de dados fundamentais (P/L, ROE, etc.). Usando Cluster = 0.")
         
-        # --- Pipeline ML (PÓS-SCORE/HISTÓRICO) ---
+        # --- Pipeline ML ---
         ml_lookback_days = self.perfil_dashboard.get('ml_lookback_days', 252) 
         ML_HORIZONS_CONST = get_ml_horizons(ml_lookback_days)
         
@@ -1147,62 +1045,55 @@ class ColetorDadosLive(object):
                 if progress_callback: progress_callback.progress(50 + int((i/len(ativos_com_dados))*20), text=f"Treinando {MODEL_NAME}: {ativo}...")
                 df = self.dados_por_ativo[ativo].copy()
                 
-                # Adiciona métricas históricas no DataFrame de preço/retorno
-                if ativo in self.metricas_performance.index:
-                     df['annual_return'] = self.metricas_performance.loc[ativo, 'retorno_anual']
-                     df['annual_volatility'] = self.metricas_performance.loc[ativo, 'volatilidade_anual']
-                     df['sharpe'] = self.metricas_performance.loc[ativo, 'sharpe']
-                
-                # Targets Futuros (usando apenas o Close)
+                # 1. Adiciona Features Fundamentais e Cluster como colunas constantes no histórico
+                if ativo in self.dados_fundamentalistas.index:
+                    fund_row = self.dados_fundamentalistas.loc[ativo].to_dict()
+                    for f_col in ALL_FUND_FEATURES:
+                        if f_col in fund_row and f_col not in df.columns:
+                            df[f_col] = fund_row[f_col]
+                    df['Cluster'] = fund_row.get('Cluster', 0)
+                else:
+                    for f_col in ALL_FUND_FEATURES: df[f_col] = np.nan
+                    df['Cluster'] = 0
+
+                # 2. Targets Futuros (usando apenas o Close)
                 if 'Close' in df.columns and len(df) > ML_HORIZONS_CONST[-1]:
                     for d in ML_HORIZONS_CONST:
                         df[f"t_{d}"] = (df["Close"].shift(-d) > df["Close"]).astype(int)
                 
-                # Prepara Features: Combinação de preço (Close) + métricas calculadas
-                ML_FEATURES_FINAL = SCORE_BASED_FEATURES 
+                # 3. Prepara Features: Combinação de features técnicos e fundamentais
+                current_features = [f for f in X_cols if f in df.columns]
                 
-                # --- Construção do Dataset de Treino/Predição ---
-                model_targets = [f"t_{d}" for d in ML_HORIZONS_CONST]
-                df_model = df.dropna(subset=ML_FEATURES_FINAL + model_targets).copy() 
-
+                # Removendo features com muitos NaNs para evitar erro de pipeline
+                df_model = df.dropna(subset=[f for f in current_features if f != 'Cluster'] + [f"t_{ML_HORIZONS_CONST[-1]}"]).copy()
+                
+                # Apenas segue se houver dados suficientes após limpeza
                 if len(df_model) < MIN_TRAIN_DAYS_ML: 
                     raise ValueError(f"Apenas {len(df_model)} pontos válidos para treino (Requerido: {MIN_TRAIN_DAYS_ML}).")
                 
-                X_full = df_model[ML_FEATURES_FINAL]
+                # 4. Configura Pipeline de ML
+                numeric_cols = [f for f in current_features if f not in ML_CATEGORICAL_FEATURES]
+                categorical_cols = [f for f in current_features if f in ML_CATEGORICAL_FEATURES]
+
+                preprocessor = ColumnTransformer(
+                    transformers=[
+                        ('num', StandardScaler(), numeric_cols),
+                        ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_cols)
+                    ],
+                    remainder='passthrough'
+                )
+
+                model_pipeline = Pipeline(steps=[
+                    ('preprocessor', preprocessor),
+                    ('classifier', CLASSIFIER(**MODEL_PARAMS))
+                ])
+
+                X_full = df_model[current_features]
                 split_idx = int(len(X_full) * 0.7)
                 X_train = X_full.iloc[:split_idx]
                 
                 probabilities = []
                 auc_scores = []
-                
-                # --- Seleção de Features (Elastic Net) APENAS para o modo Complexo ---
-                current_features = ML_FEATURES_FINAL
-                if ml_mode == 'full' and 'feature_selector' in locals():
-                    try:
-                        log_debug(f"ML Complexo: Aplicando Elastic Net Feature Selection para {ativo}")
-                        # ElasticNet só funciona com dados numéricos e sem NaNs
-                        X_train_clean = X_train.fillna(X_train.mean()) 
-                        feature_selector.fit(X_train_clean, df_model[model_targets[0]].iloc[:split_idx]) # Usa o primeiro target para seleção
-                        
-                        # Filtra features onde o coeficiente não é zero
-                        selected_mask = (feature_selector.coef_ != 0)
-                        
-                        if np.any(selected_mask):
-                            current_features = np.array(ML_FEATURES_FINAL)[selected_mask].tolist()
-                            if len(current_features) == 0:
-                                # Fallback se todos os coeficientes forem zero
-                                current_features = ML_FEATURES_FINAL 
-                            log_debug(f"Elastic Net selecionou {len(current_features)} features.")
-                        else:
-                            log_debug("Elastic Net não selecionou features, usando todas.")
-                            current_features = ML_FEATURES_FINAL
-                    except Exception as e:
-                        log_debug(f"Erro na seleção Elastic Net: {e}")
-                        current_features = ML_FEATURES_FINAL # Fallback total
-
-                X_full = df_model[current_features]
-                X_train = X_full.iloc[:split_idx]
-                
                 
                 for tgt_d in ML_HORIZONS_CONST:
                     tgt = f"t_{tgt_d}"
@@ -1211,27 +1102,25 @@ class ColetorDadosLive(object):
                     X_test = X_full.iloc[split_idx:]
                     y_test = y[split_idx:] 
                     
-                    if CLASSIFIER is RandomForestClassifier:
-                         model = RandomForestClassifier(**MODEL_PARAMS)
-                    elif CLASSIFIER is LogisticRegression:
-                         model = LogisticRegression(**MODEL_PARAMS)
-                    
                     if len(np.unique(y_train)) < 2: continue
                              
-                    # Aplica Scaling
-                    scaler = StandardScaler().fit(X_train)
-                    X_train_scaled = scaler.transform(X_train)
-                    X_test_scaled = scaler.transform(X_test)
-                    X_predict_scaled = scaler.transform(X_full.iloc[[-1]].copy())
-
-                    model.fit(X_train_scaled, y_train)
+                    # Ajusta X para o scaler/encoder: Cluster precisa ser string
+                    X_train['Cluster'] = X_train['Cluster'].astype(str)
+                    X_test['Cluster'] = X_test['Cluster'].astype(str)
                     
-                    if not X_full.iloc[[-1]].isnull().any().any():
-                        prob_now = model.predict_proba(X_predict_scaled)[:, 1][0]
-                        probabilities.append(prob_now)
+                    # Treinamento
+                    model_pipeline.fit(X_train, y_train)
+                    
+                    # Predição
+                    last_features = X_full.iloc[[-1]].copy()
+                    last_features['Cluster'] = last_features['Cluster'].astype(str)
+                    
+                    prob_now = model_pipeline.predict_proba(last_features)[:, 1][0]
+                    probabilities.append(prob_now)
 
+                    # AUC
                     if len(y_test) > 0 and len(np.unique(y_test)) >= 2:
-                         prob_test = model.predict_proba(X_test_scaled)[:, 1]
+                         prob_test = model_pipeline.predict_proba(X_test)[:, 1]
                          auc_scores.append(roc_auc_score(y_test, prob_test))
                              
                 ensemble_proba = np.mean(probabilities) if probabilities else 0.5
@@ -1243,22 +1132,9 @@ class ColetorDadosLive(object):
                     'model_name': MODEL_NAME
                 }
                 
-                try:
-                    if CLASSIFIER is LogisticRegression:
-                        # Usa coeficientes, mas precisa ser no dataset COMPLETO para o ranking
-                        importances_data = np.abs(model.coef_[0])
-                    else:
-                        importances_data = model.feature_importances_
-                        
-                    importances = pd.DataFrame({
-                        'feature': current_features,
-                        'importance': importances_data
-                    }).sort_values('importance', ascending=False)
-                except:
-                     importances = pd.DataFrame({'feature': ML_FEATURES_FINAL, 'importance': [1/len(ML_FEATURES_FINAL)]*len(ML_FEATURES_FINAL)})
-                
-                self.dados_por_ativo[ativo].loc[df.index[-1], 'ML_Proba'] = ensemble_proba
-                self.dados_por_ativo[ativo].loc[df.index[-1], 'ML_Confidence'] = conf_final
+                # Armazenamento dos resultados na última linha do DF
+                self.dados_por_ativo[ativo].loc[self.dados_por_ativo[ativo].index[-1], 'ML_Proba'] = ensemble_proba
+                self.dados_por_ativo[ativo].loc[self.dados_por_ativo[ativo].index[-1], 'ML_Confidence'] = conf_final
                 log_debug(f"ML (Supervisionado): Ativo {ativo} sucesso. Prob: {ensemble_proba:.2f}, AUC: {conf_final:.2f}.")
                 total_ml_success += 1
 
@@ -1330,9 +1206,6 @@ class ColetorDadosLive(object):
                     combined.loc[symbol, 'macd_diff'] = df['macd_diff'].iloc[-1]
                     combined.loc[symbol, 'rsi_14'] = df['rsi_14'].iloc[-1]
                     combined.loc[symbol, 'vol_20d'] = df['vol_20d'].iloc[-1]
-                    
-                    # Tenta adicionar features do LightGBM para a tabela de ranqueamento
-                    # REMOVIDO LGBM_FEATURES para simplificar as features no combined
                     
                 else:
                     # Fallback para valores neutros se estiver em modo estático
@@ -1488,7 +1361,7 @@ class ColetorDadosLive(object):
         
         # Filtra as volatilidades GARCH apenas para os ativos com dados de retorno
         # ALTERAÇÃO: Não usa GARCH, usa apenas Volatilidade Histórica (que está em volatilidades_garch)
-        garch_vols_filtered = {asset: self.volatilidades_garch.get(asset, final_returns_df[asset].std() * np.sqrt(252)) for asset in final_returns_df.columns}
+        garch_vols_filtered = {asset: self.volatilidades_garch_raw.get(asset, final_returns_df[asset].std() * np.sqrt(252)) for asset in final_returns_df.columns}
         optimizer = OtimizadorPortfolioAvancado(final_returns_df, garch_vols=garch_vols_filtered)
         
         if 'CONSERVADOR' in nivel_risco or 'INTERMEDIÁRIO' in nivel_risco:
@@ -1628,6 +1501,7 @@ class ColetorDadosLive(object):
     def executar_pipeline(self, simbolos_customizados: list, perfil_inputs: dict, ml_mode: str, pipeline_mode: str, progress_bar=None) -> bool:
         self.perfil_dashboard = perfil_inputs
         
+        # ALTERAÇÃO: O modo fundamentalista só é um fallback, não uma opção de UI
         if pipeline_mode == 'fundamentalista':
              log_debug("Modo de Pipeline: FUNDAMENTALISTA (ML e Markowitz ignorados).")
              ml_mode = 'fallback' 
@@ -1925,7 +1799,7 @@ def aba_introducao():
         # ALTERAÇÃO: Descrição de modelos simplificada para refletir as mudanças
         st.markdown("O sistema oferece diferentes níveis de sofisticação para estimar o risco (Volatilidade Condicional) e a previsão:")
         st.markdown("""
-        * **Volatilidade:** Utiliza o modelo **Volatilidade GARCH (Otimizado por HQIC)** para um cálculo de risco condicional mais preciso.
+        * **Volatilidade:** Utiliza o modelo **Volatilidade Histórica Anualizada** para o cálculo de risco. (O GARCH foi removido para maior estabilidade).
         * **Previsão (ML - Simples):** **Regressão Logística** com regularização (Elastic Net/L2).
         * **Previsão (ML - Complexa):** **Random Forest** com profundidade limitada e balanceamento de classes.
         """)
@@ -2141,23 +2015,20 @@ def aba_construtor_portfolio():
                 st.markdown("---")
                 st.markdown("#### Modo de Execução do Pipeline")
 
-                pipeline_mode = st.radio(
-                    "**1. Modo de Construção:**",
-                    ["Modo Geral (ML + Otimização Markowitz)", "Modo Fundamentalista (Cluster/Anomalias)"],
-                    index=0,
-                    key='pipeline_mode_radio'
-                )
+                # ALTERAÇÃO: Modo Fundamentalista removido como opção de UI, forçando o modo geral
+                pipeline_mode = "Modo Geral (ML + Otimização Markowitz)"
+                st.info("Modo de Construção: **Geral (ML + Otimização Markowitz)** (O modo Fundamentalista é usado apenas como fallback automático).")
 
                 ml_mode = 'fast'
                 if pipeline_mode == 'Modo Geral (ML + Otimização Markowitz)':
                     # ALTERAÇÃO: Ajuste na lista e no format_func para refletir a simplificação
                     ml_mode = st.selectbox(
-                        "**2. Seleção de Modelo ML:**",
+                        "**Seleção de Modelo ML:**",
                         [
                             'fast', 
                             'full'
                         ],
-                        format_func=lambda x: "Rápido (Regressão Logística)" if x == 'fast' else "Lento (Random Forest Robusto)",
+                        format_func=lambda x: "Rápido (Regressão Logística c/ ElasticNet)" if x == 'fast' else "Complexo (Ensemble RF+XGB c/ ElasticNet)",
                         index=0,
                         key='ml_model_mode_select'
                     )
@@ -2205,7 +2076,7 @@ def aba_construtor_portfolio():
                     simbolos_customizados=st.session_state.ativos_para_analise,
                     perfil_inputs=st.session_state.profile,
                     ml_mode=ml_mode,
-                    pipeline_mode=pipeline_mode.split('(')[1].lower().split('/')[0].strip().replace('+', ' ').replace(' ', '_'), # Extrai 'ml' ou 'fundamentalista'
+                    pipeline_mode='general', # HARDCODED para o modo geral
                     progress_bar=progress_widget
                 )
                 
@@ -2480,8 +2351,9 @@ def aba_construtor_portfolio():
             st.markdown("---")
             st.markdown('##### 🔬 Análise de Qualidade Fundamentalista (Unsupervised Learning)')
             
-            if st.session_state.get('pipeline_mode_radio', '') == 'Modo Fundamentalista (Cluster/Anomalias)':
-                 st.info("ℹ️ **Modo Fundamentalista Ativo:** A classificação se baseia EXCLUSIVAMENTE nos fatores Fundamentais e Clusterização.")
+            # ALTERAÇÃO: Modo Fundamentalista não é mais opção de UI
+            # if st.session_state.get('pipeline_mode_radio', '') == 'Modo Fundamentalista (Cluster/Anomalias)':
+            #      st.info("ℹ️ **Modo Fundamentalista Ativo:** A classificação se baseia EXCLUSIVAMENTE nos fatores Fundamentais e Clusterização.")
                  
             st.markdown("###### Score Fundamentalista e Cluster por Ativo")
             
@@ -2821,7 +2693,7 @@ def aba_analise_individual():
         st.markdown("##### Volatilidade (Condicional):") # Nome alterado
         # ALTERAÇÃO: Apenas GARCH(1,1) é permitido (para manter o layout, mas é apenas vol histórica)
         # REMOVIDO o radio button de seleção de volatilidade (Correção)
-        st.info("Modelo de Risco: GARCH (Otimizado por HQIC)")
+        st.info("Modelo de Risco: Volatilidade Histórica Anualizada")
         st.session_state['individual_garch_mode'] = 'GARCH(1,1)' 
         
     with col_modes[1]:
@@ -2871,14 +2743,14 @@ def aba_analise_individual():
             static_mode = features_fund.get('static_mode', False) or (df_completo is not None and df_completo['Close'].isnull().all())
             
             # Verifica se o ML supervisionado foi executado com sucesso (AUC > 0.0)
-            is_ml_trained = False # Forçando False para a aba ML na análise individual após remoção do ML complexo.
+            is_ml_trained = 'ML_Proba' in df_completo.columns and not static_mode and df_completo.get('ML_Confidence', 0.0).iloc[-1] > 0.0
 
             if static_mode:
                 st.warning(f"⚠️ **MODO ESTÁTICO:** Preços indisponíveis. Exibindo apenas Análise Fundamentalista.")
                 
-            # Define a lista de abas, excluindo ML se não foi treinado
+            # Define a lista de abas, incluindo ML se foi treinado
             tabs_list_individual = ["📊 Visão Geral", "💼 Fundamentos", "🔧 Análise Técnica", "🔬 Clusterização Geral"]
-            # if is_ml_trained: tabs_list_individual.insert(3, "🤖 Machine Learning") # Removido para simplificação
+            if is_ml_trained: tabs_list_individual.insert(3, "🤖 Machine Learning") # Mantido o ML se funcionar
 
             tabs_map = st.tabs(tabs_list_individual)
             
@@ -2890,7 +2762,7 @@ def aba_analise_individual():
             tab5 = tabs_map[tab_map_index("🔬 Clusterização Geral")]
             
             # CORREÇÃO: Define tab_ml condicionalmente para evitar UnboundLocalError
-            tab_ml = None
+            tab_ml = tabs_map[tab_map_index("🤖 Machine Learning")] if is_ml_trained else None
             
             # Abas 1-4: Lógica Padrão de Exibição (igual à versão anterior)
             with tab1:
@@ -2902,14 +2774,21 @@ def aba_analise_individual():
                     volume_medio = df_completo['Volume'].mean() if 'Volume' in df_completo.columns else 0.0
                     vol_anual = features_fund.get('annual_volatility', 0) * 100
                     # GARCH removido, então usamos vol_anual sempre
-                    garch_model_name = features_fund.get('garch_model', "N/A")
+                    garch_model_name = features_fund.get('garch_model', "Vol. Histórica") # Nome Hardcoded
                     
                     col1.metric("Preço", f"R$ {preco_atual:.2f}", f"{variacao_dia:+.2f}%")
                     col2.metric("Volume Médio", f"{volume_medio:,.0f}")
-                    col3.metric("Vol. Anualizada (Hist)", f"{vol_anual:.2f}%")
+                    # REMOVIDO: O display Vol. Anualizada (Hist) para simplificar UI (Correção)
+                    # col3.metric("Vol. Anualizada (Hist)", f"{vol_anual:.2f}%") 
                     
                     # Exibe Vol Histórica
-                    col5.metric(f"Risco (Modelo)", garch_model_name)
+                    col5.metric(f"Vol. Anualizada", f"{vol_anual:.2f}%")
+                    
+                    # Coluna 3 agora exibe Setor
+                    col3.metric("Setor", features_fund.get('sector', 'N/A'))
+                    # Coluna 4 exibe Indústria
+                    col4.metric("Indústria", features_fund.get('industry', 'N/A'))
+                    
 
 
                 else:
@@ -2999,11 +2878,11 @@ def aba_analise_individual():
                     # Usa os novos features se existirem, senão usa os antigos/NA
                     rsi_display = f"{df_completo['rsi_14'].iloc[-1]:.2f}" if 'rsi_14' in df_completo else "N/A"
                     macd_display = f"{df_completo['macd_diff'].iloc[-1]:.4f}" if 'macd_diff' in df_completo else "N/A"
-                    vol20_display = f"{df_completo['vol20'].iloc[-1]:.4f}" if 'vol20' in df_completo else "N/A"
+                    vol20_display = f"{df_completo['vol_20d'].iloc[-1]:.4f}" if 'vol_20d' in df_completo else "N/A"
 
                     col1.metric("RSI (14)", rsi_display)
                     col2.metric("MACD Diff", macd_display)
-                    col3.metric("Vol. 20d (raw)", vol20_display)
+                    col3.metric("Vol. Anualizada (20d)", vol20_display)
                     
                     # --- Gráfico de Bandas de Bollinger (Reintroduzido) ---
                     if 'bb_upper' in df_completo.columns:
@@ -3038,9 +2917,9 @@ def aba_analise_individual():
                     fig_macd = make_subplots(rows=1, cols=1)
                     # Certifique-se que 'macd' e 'macd_signal' estão no DF
                     if 'macd' in df_completo.columns and 'macd_signal' in df_completo.columns:
-                        fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd'], name='MACD', line=dict(color='#2980B9')))
-                        fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd_signal'], name='Signal', line=dict(color='#E74C3C')))
-                        fig_macd.add_trace(go.Bar(x=df_completo.index, y=df_completo['macd_diff'], name='Histograma', marker_color='#BDC3C7'))
+                        fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df['macd'], name='MACD', line=dict(color='#2980B9')))
+                        fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df['macd_signal'], name='Signal', line=dict(color='#E74C3C')))
+                        fig_macd.add_trace(go.Bar(x=df_completo.index, y=df['macd_diff'], name='Histograma', marker_color='#BDC3C7'))
                     
                         template = obter_template_grafico()
                         fig_macd.update_layout(**template)
