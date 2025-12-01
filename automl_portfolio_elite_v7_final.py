@@ -1063,6 +1063,141 @@ class ColetorDadosLive(object):
         return df_tec, fund_row, df_ml_meta
 
 # =============================================================================
+# 10. CLASSE: OTIMIZADOR DE PORTFÓLIO
+# =============================================================================
+# (Manter inalterado)
+
+class OtimizadorPortfolioAvancado:
+    def __init__(self, returns_df: pd.DataFrame, garch_vols: dict = None):
+        self.returns = returns_df
+        self.mean_returns = returns_df.mean() * 252
+        
+        # NOVO: Filtra garch_vols garantindo que apenas valores válidos (não zero/NaN) sejam usados
+        valid_garch_vols = {k: v for k, v in garch_vols.items() if not np.isnan(v) and v > 0} if garch_vols else {}
+
+        if valid_garch_vols:
+            try:
+                self.cov_matrix = self._construir_matriz_cov_garch(returns_df, valid_garch_vols)
+            except Exception:
+                # Fallback total para matriz de covariância histórica
+                self.cov_matrix = returns_df.cov() * 252 
+        else:
+            self.cov_matrix = returns_df.cov() * 252
+            
+        self.num_ativos = len(returns_df.columns)
+
+    def _construir_matriz_cov_garch(self, returns_df: pd.DataFrame, garch_vols: dict) -> pd.DataFrame:
+        # A matriz de correlação é baseada em retornos históricos
+        corr_matrix = returns_df.corr()
+        
+        vol_array = []
+        for ativo in returns_df.columns:
+            # Usa GARCH vol se disponível e válida, senão cai para vol histórica
+            vol = garch_vols.get(ativo)
+            if pd.isna(vol) or vol <= 0:
+                vol = returns_df[ativo].std() * np.sqrt(252) # Fallback histórico
+            vol_array.append(vol)
+            
+        vol_array = np.array(vol_array)
+        # Reconstroi a matriz de covariância usando correlação histórica e volatilidade condicional/histórica
+        cov_matrix = corr_matrix.values * np.outer(vol_array, vol_array)
+        return pd.DataFrame(cov_matrix, index=returns_df.columns, columns=returns_df.columns)
+    
+    def estatisticas_portfolio(self, pesos: np.ndarray) -> tuple[float, float]:
+        p_retorno = np.dot(pesos, self.mean_returns)
+        p_vol = np.sqrt(np.dot(pesos.T, np.dot(self.cov_matrix, pesos)))
+        return p_retorno, p_vol
+    
+    def sharpe_negativo(self, pesos: np.ndarray) -> float:
+        p_retorno, p_vol = self.estatisticas_portfolio(pesos)
+        if p_vol <= 1e-9: return -100.0
+        return -(p_retorno - TAXA_LIVRE_RISCO) / p_vol
+    
+    def minimizar_volatilidade(self, pesos: np.ndarray) -> float:
+        return self.estatisticas_portfolio(pesos)[1]
+    
+    def otimizar(self, estrategia: str = 'MaxSharpe') -> dict:
+        if self.num_ativos == 0: return {}
+        restricoes = ({'type': 'eq', 'fun': lambda x: np.sum(x) - 1})
+        limites = tuple((PESO_MIN, PESO_MAX) for _ in range(self.num_ativos))
+        chute_inicial = np.array([1.0 / self.num_ativos] * self.num_ativos)
+        
+        if estrategia == 'MinVolatility': objetivo = self.minimizar_volatilidade
+        else: objetivo = self.sharpe_negativo
+        
+        try:
+            resultado = minimize(objetivo, chute_inicial, method='SLSQP', bounds=limites, constraints=restricoes, options={'maxiter': 500, 'ftol': 1e-6})
+            if resultado.success:
+                final_weights = resultado.x / np.sum(resultado.x)
+                return {ativo: peso for ativo, peso in zip(self.returns.columns, final_weights)}
+            else:
+                return {ativo: 1.0 / self.num_ativos for ativo in self.returns.columns}
+        except Exception:
+            return {ativo: 1.0 / self.num_ativos for ativo in self.returns.columns}
+
+# =============================================================================
+# 6. CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR (MOVIMENTO DE CORREÇÃO DE ESCOPO)
+# =============================================================================
+# MOVIMENTO: Esta classe deve vir APÓS todas as constantes de mapeamento (SCORE_MAP_ORIGINAL, etc.)
+# para que o NameError não ocorra.
+
+class AnalisadorPerfilInvestidor:
+    def __init__(self):
+        self.nivel_risco = ""
+        self.horizonte_tempo = ""
+        self.dias_lookback_ml = 5
+    
+    def determinar_nivel_risco(self, pontuacao: int) -> str:
+        if pontuacao <= 46: return "CONSERVADOR"
+        elif pontuacao <= 67: return "INTERMEDIÁRIO"
+        elif pontuacao <= 88: return "MODERADO"
+        elif pontuacao <= 109: return "MODERADO-ARROJADO"
+        else: return "AVANÇADO"
+    
+    def determinar_horizonte_ml(self, liquidez_key: str, objetivo_key: str) -> tuple[str, int]:
+        # Corresponde às novas configurações: A=84, B=168, C=252
+        time_map = { 'A': 84, 'B': 168, 'C': 252 } 
+        final_lookback = max( time_map.get(liquidez_key, 84), time_map.get(objetivo_key, 84) )
+        
+        if final_lookback >= 252:
+            self.horizonte_tempo = "LONGO PRAZO"
+        elif final_lookback >= 168:
+            self.horizonte_tempo = "MÉDIO PRAZO"
+        else:
+            self.horizonte_tempo = "CURTO PRAZO"
+            
+        self.dias_lookback_ml = final_lookback
+        
+        return self.horizonte_tempo, self.dias_lookback_ml
+    
+    def calcular_perfil(self, respostas_risco_originais: dict) -> tuple[str, str, int, int]:
+        score_risk_accept = SCORE_MAP_ORIGINAL.get(respostas_risco_originais['risk_accept'], 3)
+        score_max_gain = SCORE_MAP_ORIGINAL.get(respostas_risco_originais['max_gain'], 3)
+        score_stable_growth = SCORE_MAP_INV_ORIGINAL.get(respostas_risco_originais['stable_growth'], 3)
+        score_avoid_loss = SCORE_MAP_INV_ORIGINAL.get(respostas_risco_originais['avoid_loss'], 3)
+        score_level = SCORE_MAP_CONHECIMENTO_ORIGINAL.get(respostas_risco_originais['level'], 3)
+        score_reaction = SCORE_MAP_REACTION_ORIGINAL.get(respostas_risco_originais['reaction'], 3)
+
+        pontuacao = (
+            score_risk_accept * 5 +
+            score_max_gain * 5 +
+            score_stable_growth * 5 +
+            score_avoid_loss * 5 +
+            score_level * 3 +
+            score_reaction * 3
+        )
+        nivel_risco = self.determinar_nivel_risco(pontuacao)
+        
+        liquidez_val = respostas_risco_originais.get('liquidity')
+        objetivo_val = respostas_risco_originais.get('time_purpose')
+
+        liquidez_key = liquidez_val[0] if isinstance(liquidez_val, str) and liquidez_val else 'C'
+        objetivo_key = objetivo_val[0] if isinstance(objetivo_val, str) and objetivo_val else 'C'
+        
+        horizonte_tempo, ml_lookback = self.determinar_horizonte_ml(liquidez_key, objetivo_key)
+        return nivel_risco, horizonte_tempo, ml_lookback, pontuacao
+
+# =============================================================================
 # 11. CLASSE PRINCIPAL: CONSTRUTOR DE PORTFÓLIO AUTOML (com Modelos ML Atualizados)
 # =============================================================================
 
@@ -2274,6 +2409,7 @@ def aba_construtor_portfolio():
                     'liquidity': p311_liquid_desc,
                 }
                 
+                # CORREÇÃO DO NAMEERROR: A classe AnalisadorPerfilInvestidor agora está definida em escopo.
                 analyzer = AnalisadorPerfilInvestidor()
                 risk_level, horizon, lookback, score = analyzer.calcular_perfil(risk_answers_originais)
                 
