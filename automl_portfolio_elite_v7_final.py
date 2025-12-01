@@ -64,7 +64,7 @@ except ImportError:
 from sklearn.ensemble import IsolationForest, RandomForestClassifier, VotingClassifier # ADICIONADO VotingClassifier (Alteração 4)
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.preprocessing import StandardScaler, OneHostEncoder
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
@@ -504,14 +504,17 @@ class OtimizadorPortfolioAvancado:
         else: objetivo = self.sharpe_negativo
         
         try:
-            resultado = minimize(objetivo, chute_inicial, method='SLSQP', bounds=limites, constraints=restricoes, options={'maxiter': 500, 'ftol': 1e-6})
+            # Aumento o maxiter para maior robustez na minimização numérica (Correção)
+            resultado = minimize(objetivo, chute_inicial, method='SLSQP', bounds=limites, constraints=restricoes, options={'maxiter': 1000, 'ftol': 1e-6})
             if resultado.success:
                 final_weights = resultado.x / np.sum(resultado.x)
                 return {ativo: peso for ativo, peso in zip(self.returns.columns, final_weights)}
             else:
-                return {ativo: 1.0 / self.num_ativos for ativo in self.returns.columns}
+                # Se a otimização falhar, retorna um dicionário vazio para forçar o fallback de score
+                return {} 
         except Exception:
-            return {ativo: 1.0 / self.num_ativos for ativo in self.returns.columns}
+            # Se ocorrer um erro de cálculo (ex: singular matrix), retorna vazio
+            return {}
 
 # =============================================================================
 # 9. CLASSE: COLETOR DE DADOS LIVE
@@ -1386,7 +1389,7 @@ class ConstrutorPortfolioAutoML:
                         importances_data = np.abs(model.coef_[0])
                     elif CLASSIFIER is VotingClassifier:
                          # Calcula a média da importância de features dos modelos base (RF/XGB)
-                         rf_imp = model.estimators_[0].feature_importances_ if hasattr(model.estimators_[0], 'feature_importances_') else np.zeros(len(MODEL_FEATURES))
+                         rf_imp = model.estimators_[0].feature_importance_s if hasattr(model.estimators_[0], 'feature_importances_') else np.zeros(len(MODEL_FEATURES))
                          xgb_imp = model.estimators_[1].feature_importances_ if hasattr(model.estimators_[1], 'feature_importances_') else np.zeros(len(MODEL_FEATURES))
                          importances_data = (rf_imp + xgb_imp) / 2
                     else:
@@ -1647,9 +1650,22 @@ class ConstrutorPortfolioAutoML:
         weights = optimizer.otimizar(estrategia=strategy)
         
         if not weights:
-             log_debug("AVISO: Otimizador falhou. Usando PESOS IGUAIS como fallback total.")
-             weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
-             self.metodo_alocacao_atual += " (FALLBACK)"
+             # CORREÇÃO: Se a otimização falhou (retornou {}), usa o fallback de PONDERAÇÃO POR SCORE (Linha 1391)
+             log_debug("AVISO: Otimizador Markowitz falhou. Usando PONDERAÇÃO POR SCORE como fallback.")
+             
+             valid_selection = [a for a in self.ativos_selecionados if a in self.scores_combinados.index]
+             if valid_selection:
+                 scores = self.scores_combinados.loc[valid_selection, 'total_score']
+                 total_score = scores.sum()
+                 if total_score > 0:
+                     weights = (scores / total_score).to_dict()
+                     self.metodo_alocacao_atual = 'PONDERAÇÃO POR SCORE (Fallback Markowitz)'
+                 else:
+                     weights = {asset: 1.0 / len(valid_selection) for asset in valid_selection}
+                     self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
+             else:
+                 weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
+                 self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
         
         total_weight = sum(weights.values())
         log_debug(f"Otimização Markowitz finalizada. Peso total: {total_weight:.2f}")
@@ -2151,7 +2167,7 @@ def aba_selecao_ativos():
                     # CORREÇÃO DO ERRO: ATIVOS_POR_POR_SETOR -> ATIVOS_POR_SETOR
                     ativos_do_setor = ATIVOS_POR_SETOR.get(setor, []) 
                     st.markdown(f"**{setor}** ({len(ativos_do_setor)} ativos)")
-                    st.write(", ".join([a.replace('.SA', '') for a in ativos_do_setor]))
+                    st.write(", ". един([a.replace('.SA', '') for a in ativos_do_setor]))
         else:
             st.warning("⚠️ Selecione pelo menos um setor.")
     
@@ -3344,7 +3360,7 @@ def aba_analise_individual():
                         
                         with st.expander(f"📋 Ver {len(pares)} ativos similares no Cluster {cluster_ativo}", expanded=True):
                             if pares:
-                                st.write(", ".join(pares))
+                                st.write(", ". един(pares))
                             else:
                                 st.write("Este ativo possui características únicas (Outlier).")
                     else:
