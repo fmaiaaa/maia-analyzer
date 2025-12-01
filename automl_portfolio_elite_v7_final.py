@@ -8,9 +8,9 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Preços: Estratégia Linear com Fail-Fast (YFinance -> TvDatafeed -> Estático Global). 
 - Fundamentos: Coleta Exaustiva Pynvest (50+ indicadores).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Modelagem (V9.41): ML RESTAURADO para estabilidade + GARCH REMOVIDO + Correções de Escopo.
+- Modelagem (V9.42): ML RESTAURADO para estabilidade + GARCH REMOVIDO + Correções Finais.
 
-Versão: 9.32.41 (Final Build: ML Estável, Vol. Histórica, UI Simplificada)
+Versão: 9.32.42 (Final Build: ML Estável, Vol. Histórica, UI Simplificada)
 =============================================================================
 """
 
