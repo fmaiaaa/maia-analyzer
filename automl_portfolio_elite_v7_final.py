@@ -150,7 +150,7 @@ LOOKBACK_ML_DAYS_MAP = {
     'longo_prazo': 252   # Aprox. 1 ano
 }
 
-# LIGHTGBM FEATURE SET
+# LIGHTBM FEATURE SET
 # NOVO: Features crus para Modelos Simples e Complexos (Itens 7, 9)
 RAW_PRICE_VOLUME_FEATURES = ['Close_Lag_1', 'Open_Lag_1', 'High_Lag_1', 'Low_Lag_1', 'Volume_Lag_1']
 BASIC_RETURN_FEATURES = ['Log_Ret_1D', 'Log_Ret_5D']
@@ -2243,7 +2243,14 @@ def aba_analise_individual():
                 st.session_state['individual_garch_mode'] = option
                 st.session_state.analisar_ativo_triggered = False
                 st.rerun()
-            if is_selected: st.markdown(f"""<script>const btn = document.querySelector('[data-testid="stButton"] button[key="btn_mode_garch_{option.replace("-", "_"]}"]'); if (btn) {{ btn.classList.add('selected'); }}</script>""", unsafe_allow_html=True)
+            # CORREÇÃO DO SYNTAX ERROR: O script foi movido para fora da linha do st.button para evitar conflitos de aspas
+            if is_selected: 
+                st.markdown(f"""
+                <script>
+                    const btn = document.querySelector('[data-testid="stButton"] button[key="btn_mode_garch_{option.replace("-", "_"]}"]'); 
+                    if (btn) {{ btn.classList.add('selected'); }}
+                </script>
+                """, unsafe_allow_html=True)
             
     # Botões para ML (usando col_btn_ml_1 e col_btn_ml_2)
     for col, option in zip([col_btn_ml_1, col_btn_ml_2], ml_options):
@@ -2254,7 +2261,13 @@ def aba_analise_individual():
                 st.session_state['individual_ml_mode'] = option
                 st.session_state.analisar_ativo_triggered = False
                 st.rerun()
-            if is_selected: st.markdown(f"""<script>const btn = document.querySelector('[data-testid="stButton"] button[key="btn_mode_ml_{option}"]'); if (btn) {{ btn.classList.add('selected'); }}</script>""", unsafe_allow_html=True)
+            if is_selected: 
+                st.markdown(f"""
+                <script>
+                    const btn = document.querySelector('[data-testid="stButton"] button[key="btn_mode_ml_{option}"]'); 
+                    if (btn) {{ btn.classList.add('selected'); }}
+                </script>
+                """, unsafe_allow_html=True)
     
     # --- FIM ALTERAÇÃO SOLICITADA 4 ---
     
