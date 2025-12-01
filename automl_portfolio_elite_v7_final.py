@@ -8,9 +8,9 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Preços: Estratégia Linear com Fail-Fast (YFinance -> TvDatafeed -> Estático Global). 
 - Fundamentos: Coleta Exaustiva Pynvest (50+ indicadores).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Modelagem (V9.40): ML RESTAURADO para estabilidade + GARCH REMOVIDO.
+- Modelagem (V9.41): ML RESTAURADO para estabilidade + GARCH REMOVIDO + Correções de Escopo.
 
-Versão: 9.32.40 (Final Build: ML Estável, Vol. Histórica, UI Simplificada)
+Versão: 9.32.41 (Final Build: ML Estável, Vol. Histórica, UI Simplificada)
 =============================================================================
 """
 
@@ -130,16 +130,8 @@ LOOKBACK_ML_DAYS_MAP = {
     'longo_prazo': 252   
 }
 
-# FEATURES ORIGINAIS DO PORTFOLIO_ANALYZER (Para modelagem ML)
-# Usaremos estas features para restaurar o modelo estável
-ML_FEATURES_ORIGINAL = [
-    'RSI', 'MACD', 'Volatility', 'Momentum', 'SMA_50', 'SMA_200'
-]
-ALL_FUND_FEATURES = [
-    'pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 
-    'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 
-    'ev_ebitda', 'operating_margin'
-]
+# FEATURES DE ML (Para modelagem Pós-Score)
+ML_NUMERIC_FEATURES = ['Close', 'vol_20d', 'macd_diff', 'rsi_14', 'momentum_10d', 'sma_50d', 'sma_200d']
 ML_CATEGORICAL_FEATURES = ['Cluster']
 
 
@@ -2089,7 +2081,7 @@ def aba_construtor_portfolio():
                     st.rerun() 
                 
                 st.session_state.builder_complete = True
-                st.rerun()
+                    st.rerun()
     
     else:
         builder = st.session_state.builder
@@ -2917,9 +2909,10 @@ def aba_analise_individual():
                     fig_macd = make_subplots(rows=1, cols=1)
                     # Certifique-se que 'macd' e 'macd_signal' estão no DF
                     if 'macd' in df_completo.columns and 'macd_signal' in df_completo.columns:
-                        fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df['macd'], name='MACD', line=dict(color='#2980B9')))
-                        fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df['macd_signal'], name='Signal', line=dict(color='#E74C3C')))
-                        fig_macd.add_trace(go.Bar(x=df_completo.index, y=df['macd_diff'], name='Histograma', marker_color='#BDC3C7'))
+                        # CORREÇÃO: Usando df_completo em vez de df (causa do NameError)
+                        fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd'], name='MACD', line=dict(color='#2980B9')))
+                        fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd_signal'], name='Signal', line=dict(color='#E74C3C')))
+                        fig_macd.add_trace(go.Bar(x=df_completo.index, y=df_completo['macd_diff'], name='Histograma', marker_color='#BDC3C7'))
                     
                         template = obter_template_grafico()
                         fig_macd.update_layout(**template)
