@@ -64,7 +64,7 @@ except ImportError:
 from sklearn.ensemble import IsolationForest, RandomForestClassifier, VotingClassifier # ADICIONADO VotingClassifier (Alteração 4)
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
-from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.preprocessing import StandardScaler, OneHotEncoder # CORRIGIDO: OneHostEncoder -> OneHotEncoder
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
@@ -1389,7 +1389,7 @@ class ConstrutorPortfolioAutoML:
                         importances_data = np.abs(model.coef_[0])
                     elif CLASSIFIER is VotingClassifier:
                          # Calcula a média da importância de features dos modelos base (RF/XGB)
-                         rf_imp = model.estimators_[0].feature_importance_s if hasattr(model.estimators_[0], 'feature_importances_') else np.zeros(len(MODEL_FEATURES))
+                         rf_imp = model.estimators_[0].feature_importances_ if hasattr(model.estimators_[0], 'feature_importances_') else np.zeros(len(MODEL_FEATURES))
                          xgb_imp = model.estimators_[1].feature_importances_ if hasattr(model.estimators_[1], 'feature_importances_') else np.zeros(len(MODEL_FEATURES))
                          importances_data = (rf_imp + xgb_imp) / 2
                     else:
