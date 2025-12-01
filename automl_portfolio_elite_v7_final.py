@@ -41,7 +41,7 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 import requests
 
-# --- IMPORTAÇÕES PARA COLETA LIVE (HÍBRIDO) ---
+# --- IMPORTAÇÕES PARA COLETA LIVE (HÍBRIDO) ---\
 # 1. TvDatafeed (Primário)
 try:
     from tvDatafeed import TvDatafeed, Interval
@@ -278,7 +278,7 @@ def obter_template_grafico() -> dict:
         'paper_bgcolor': 'rgba(0,0,0,0)',
         'font': {'family': 'Inter, sans-serif', 'size': 12, 'color': '#343a40'},
         # TÍTULOS DE EIXO E ETC. MANTÊM-SE, APENAS O TÍTULO PRINCIPAL É REMOVIDO NAS ABAS TÉCNICAS
-        'title': {'font': {'family': 'Inter, sans-serif', 'size': 16, 'color': '#212529', 'weight': 'bold'}, 'x': 0.5, 'xanchor': 'center'},
+        'title': {'font': {'family': 'Inter', 'size': 16, 'color': '#212529', 'weight': 'bold'}, 'x': 0.5, 'xanchor': 'center'},
         'xaxis': {'showgrid': True, 'gridcolor': '#ecf0f1', 'showline': True, 'linecolor': '#bdc3c7', 'linewidth': 1},
         'yaxis': {'showgrid': True, 'gridcolor': '#ecf0f1', 'showline': True, 'linecolor': '#bdc3c7', 'linewidth': 1},
         'legend': {'bgcolor': 'rgba(255,255,255,0.5)', 'bordercolor': '#ecf0f1'},
@@ -2081,7 +2081,7 @@ def aba_construtor_portfolio():
                     st.rerun() 
                 
                 st.session_state.builder_complete = True
-                    st.rerun()
+                st.rerun()
     
     else:
         builder = st.session_state.builder
