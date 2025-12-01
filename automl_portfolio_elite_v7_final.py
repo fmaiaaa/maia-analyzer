@@ -106,6 +106,9 @@ SCORE_PERCENTILE_THRESHOLD = 0.85 # Limite para definir o score mínimo de inclu
 PESO_MIN = 0.10
 PESO_MAX = 0.30
 
+# NOVO: Limite mínimo de dias para o treinamento ML (AJUSTADO PARA 120)
+MIN_TRAIN_DAYS_ML = 120 
+
 # NOVO: Horizontes ML baseados no lookback adaptativo
 def get_ml_horizons(ml_lookback_days: int):
     """Adapta os horizontes de predição ML com base no lookback do perfil (CP/MP/LP)."""
@@ -847,6 +850,10 @@ class ColetorDadosLive(object):
                         else:
                             # MODO RÁPIDO: GARCH(1,1) padrão
                             am = arch_model(retornos * 100, mean='Zero', vol='Garch', p=1, q=1)
+                            # CORREÇÃO DE ROBUSTEZ: Verifica se há dados suficientes para ajuste antes de tentar fit
+                            if len(retornos) < 120:
+                                raise ValueError("Dados insuficientes para GARCH(1,1).")
+                            
                             res = am.fit(disp='off', last_obs=retornos.index[-1]) 
                             garch_std_daily = res.conditional_volatility.iloc[-1] / 100 
                             temp_garch_vol = garch_std_daily * np.sqrt(252)
@@ -996,7 +1003,8 @@ class ColetorDadosLive(object):
                 # Remove NaNs da parte de treino e predição
                 df_model = df.dropna(subset=MODEL_FEATURES + [f"t_{ML_HORIZONS_IND[-1]}"]) # Usa o maior horizonte para filtrar NaNs
                 
-                if len(df_model) > 200: # Mínimo de pontos para treino (70% de 200 = 140)
+                # ALTERAÇÃO AQUI: De 200 para MIN_TRAIN_DAYS_ML
+                if len(df_model) > MIN_TRAIN_DAYS_ML: 
                     X_full = df_model[MODEL_FEATURES]
                     
                     # Split para treino (70%)
@@ -1285,7 +1293,7 @@ class ConstrutorPortfolioAutoML:
                         df[f"t_{d}"] = (df["Close"].shift(-d) > df["Close"]).astype(int)
 
                 # Condição de desvio para o FALLBACK
-                if CLASSIFIER is None or f"t_{ML_HORIZONS_CONST[-1]}" not in df.columns or df[f"t_{ML_HORIZONS_CONST[-1]}"].isnull().all() or len(df.dropna(subset=MODEL_FEATURES)) < 200:
+                if CLASSIFIER is None or f"t_{ML_HORIZONS_CONST[-1]}" not in df.columns or df[f"t_{ML_HORIZONS_CONST[-1]}"].isnull().all() or len(df.dropna(subset=MODEL_FEATURES)) < 60: # <-- Limite mínimo para rodar o filtro
                     raise ValueError("Dados insuficientes para treinamento supervisionado.")
 
                 # --- Construção do Dataset de Treino/Predição ---
@@ -1300,8 +1308,9 @@ class ConstrutorPortfolioAutoML:
                 model_targets = [f"t_{d}" for d in ML_HORIZONS_CONST]
                 df_model = df.dropna(subset=MODEL_FEATURES + model_targets).copy() 
 
-                if len(df_model) < 200: 
-                    raise ValueError(f"Apenas {len(df_model)} pontos válidos para treino.")
+                # ALTERAÇÃO AQUI: De 200 para MIN_TRAIN_DAYS_ML (120)
+                if len(df_model) < MIN_TRAIN_DAYS_ML: 
+                    raise ValueError(f"Apenas {len(df_model)} pontos válidos para treino (Requerido: {MIN_TRAIN_DAYS_ML}).")
                 
                 X_full = df_model[MODEL_FEATURES]
                 split_idx = int(len(X_full) * 0.7)
