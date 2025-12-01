@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 """
 =============================================================================
@@ -11,7 +10,7 @@ Adaptação do Sistema AutoML para coleta em TEMPO REAL (Live Data).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Design (V9.31): ML Soft Fallback (Short History Support).
 
-Versão: 9.32.26 (Update: CENTRALIZATION FIXES, MERGED CLUSTER TABS, INDIVIDUAL ANALYSIS FIX)
+Versão: 9.32.25 (Update: FIX ML/GARCH & RESTORED ALL ORIGINAL CENTRALIZED DESIGN)
 =============================================================================
 """
 
@@ -228,16 +227,30 @@ def log_debug(message: str):
     timestamp = datetime.now().strftime("%H:%M:%S")
     # Imprime no console (para Streamlit Cloud logs) e armazena na sessão
     print(f"DEBUG {timestamp} | {message}") 
-    if 'debug_logs' in st.session_state:
-        st.session_state.debug_logs.append(f"[{timestamp}] {message}")
+    st.session_state.debug_logs.append(f"[{timestamp}] {message}")
 
-# REMOVIDO: A função mostrar_debug_panel() foi removida conforme solicitado.
+def mostrar_debug_panel():
+    """Exibe o painel de debug (Streamlit expander) no topo da aplicação."""
+    # Garante que st.session_state.debug_logs está inicializado
+    if 'debug_logs' not in st.session_state:
+        st.session_state.debug_logs = []
+
+    with st.expander("🐛 Log de Debug Detalhado (Streamlit Cloud CMD)"):
+        if st.session_state.debug_logs:
+            # Exibe os logs mais recentes primeiro
+            logs = "\n".join(reversed(st.session_state.debug_logs))
+            st.code(logs, language='text')
+            
+            if st.button("Limpar Logs", key='clear_debug_logs'):
+                st.session_state.debug_logs = []
+                st.rerun()
+        else:
+            st.info("Nenhuma mensagem de debug registrada ainda.")
 
 def obter_template_grafico() -> dict:
     """Retorna o template padrão de cores e estilo para gráficos Plotly."""
     corporate_colors = ['#2E86C1', '#D35400', '#27AE60', '#8E44AD', '#C0392B', '#16A085', '#F39C12', '#34495E']
     return {
-        # Fundo transparente para gráficos
         'plot_bgcolor': 'rgba(0,0,0,0)',
         'paper_bgcolor': 'rgba(0,0,0,0)',
         'font': {'family': 'Inter, sans-serif', 'size': 12, 'color': '#343a40'},
@@ -1691,25 +1704,22 @@ def aba_selecao_ativos():
     elif "Seleção Setorial" in modo_selecao:
         st.markdown("### 🏢 Seleção por Setor")
         setores_disponiveis = sorted(list(ATIVOS_POR_SETOR.keys()))
+        col1, col2 = st.columns([2, 1])
         
-        # BARRA DE SELEÇÃO SETORIAL
-        setores_selecionados = st.multiselect(
-            "Escolha um ou mais setores:",
-            options=setores_disponiveis,
-            default=setores_disponiveis[:3] if setores_disponiveis else [],
-            key='setores_multiselect_v8'
-        )
+        with col1:
+            setores_selecionados = st.multiselect(
+                "Escolha um ou mais setores:",
+                options=setores_disponiveis,
+                default=setores_disponiveis[:3] if setores_disponiveis else [],
+                key='setores_multiselect_v8'
+            )
         
         if setores_selecionados:
             for setor in setores_selecionados: ativos_selecionados.extend(ATIVOS_POR_SETOR[setor])
             ativos_selecionados = list(set(ativos_selecionados))
             
-            # NOVO: Centraliza as métricas abaixo do multiselect
-            st.markdown("#### Setores e Ativos Selecionados")
-            col_metrics_s1, col_metrics_s2, col_metrics_s3 = st.columns([1, 1, 1])
-            with col_metrics_s1:
+            with col2:
                 st.metric("Setores", len(setores_selecionados))
-            with col_metrics_s3:
                 st.metric("Total de Ativos", len(ativos_selecionados))
             
             with st.expander("📋 Visualizar Ativos por Setor"):
@@ -1729,19 +1739,18 @@ def aba_selecao_ativos():
         
         todos_tickers_ibov = sorted(list(ativos_com_setor.keys()))
         
-        # BARRA DE SELEÇÃO INDIVIDUAL
-        st.markdown("#### 📝 Selecione Tickers (Ibovespa)")
-        ativos_selecionados = st.multiselect(
-            "Pesquise e selecione os tickers:",
-            options=todos_tickers_ibov,
-            format_func=lambda x: f"{x.replace('.SA', '')} - {ativos_com_setor.get(x, 'Desconhecido')}",
-            key='ativos_individuais_multiselect_v8'
-        )
+        col1, col2 = st.columns([3, 1])
         
-        # NOVO: Centraliza a métrica abaixo do multiselect
-        st.markdown("#### Tickers Selecionados")
-        col_metrics_i1, col_metrics_i2, col_metrics_i3 = st.columns([1, 1, 1])
-        with col_metrics_i2:
+        with col1:
+            st.markdown("#### 📝 Selecione Tickers (Ibovespa)")
+            ativos_selecionados = st.multiselect(
+                "Pesquise e selecione os tickers:",
+                options=todos_tickers_ibov,
+                format_func=lambda x: f"{x.replace('.SA', '')} - {ativos_com_setor.get(x, 'Desconhecido')}",
+                key='ativos_individuais_multiselect_v8'
+            )
+        
+        with col2:
             st.metric("Tickers Selecionados", len(ativos_selecionados))
 
         if not ativos_selecionados:
@@ -1771,7 +1780,7 @@ def aba_construtor_portfolio():
     if 'profile' not in st.session_state: st.session_state.profile = {}
     if 'builder_complete' not in st.session_state: st.session_state.builder_complete = False
     
-    # REMOVIDO: progress_bar_placeholder = st.empty()
+    progress_bar_placeholder = st.empty()
     
     if not st.session_state.builder_complete:
         st.markdown('## 📋 Calibração do Perfil de Risco')
@@ -1834,12 +1843,7 @@ def aba_construtor_portfolio():
                     min_value=1000, max_value=10000000, value=10000, step=1000, key='investment_amount_input_v8'
                 )
             
-            # NOVO: Centralização do botão e barra de loading
-            st.markdown("---")
-            col_btn_start, col_btn_center, col_btn_end = st.columns([1, 2, 1])
-            with col_btn_center:
-                submitted = st.form_submit_button("🚀 Gerar Alocação Otimizada", type="primary", use_container_width=True)
-            st.markdown("---") # Separador para o loading
+            submitted = st.form_submit_button("🚀 Gerar Alocação Otimizada", type="primary", use_container_width=False)
             
             if submitted:
                 log_debug("Questionário de perfil submetido.")
@@ -1869,8 +1873,7 @@ def aba_construtor_portfolio():
                     st.error(f"Erro fatal ao inicializar o construtor do portfólio: {e}")
                     return
 
-                # NOVO: Barra de progresso visível logo após o submit
-                progress_widget = st.progress(0, text=f"Iniciando pipeline para PERFIL {risk_level}...")
+                progress_widget = progress_bar_placeholder.progress(0, text=f"Iniciando pipeline para PERFIL {risk_level}...")
                 
                 success = builder_local.executar_pipeline(
                     simbolos_customizados=st.session_state.ativos_para_analise,
@@ -1878,7 +1881,7 @@ def aba_construtor_portfolio():
                     progress_bar=progress_widget
                 )
                 
-                progress_widget.empty() # Limpa após o sucesso
+                progress_bar_placeholder.empty()
                     
                 if not success:
                     st.error("Falha na aquisição ou processamento dos dados.")
@@ -1947,9 +1950,19 @@ def aba_construtor_portfolio():
                 log_debug("GARCH: Ocultando aba GARCH. Nenhuma diferença significativa em relação à Volatilidade Histórica (Redundante).")
         # --- FIM NOVO ---
         
-        # Define as abas (agora consolidada)
-        tabs_list = ["📊 Alocação de Capital", "📈 Performance e Retornos", "🔬 Análise de Fatores e Clusterização"]
+        # Define as abas com base na disponibilidade dos dados
+        tabs_list = ["📊 Alocação de Capital", "📈 Performance e Retornos", ]
         
+        if has_price_data and has_usable_ml:
+             tab_title_ml = "🤖 Fator Predição ML"
+        else:
+             tab_title_ml = "🔬 Clusters e Anomalias"
+             
+        tabs_list.append(tab_title_ml)
+        
+        # --- NOVO: Adiciona aba de Clusterização/Anomalia do Portfólio (Visualização) ---
+        tabs_list.append("🔭 Análise de Clusters") 
+
         if has_price_data and has_garch_data and not is_garch_redundant:
              tabs_list.append("📉 Fator Volatilidade GARCH")
              
@@ -1959,15 +1972,17 @@ def aba_construtor_portfolio():
         tabs_map = st.tabs(tabs_list)
         tab1 = tabs_map[0] # Alocação
         tab2 = tabs_map[1] # Performance/Retornos
-        tab_fator_cluster = tabs_map[2] # Aba consolidada de ML/Clusters
+        tab3 = tabs_map[2] # ML / Cluster
+        tab_portfolio_cluster = tabs_map[3] # Nova aba de Análise de Clusters
         
         # Atribuição dinâmica das últimas abas
+        last_tab_index = 4
         if "📉 Fator Volatilidade GARCH" in tabs_list:
-            tab_garch = tabs_map[3]
-            tab_justificativas = tabs_map[4]
+            tab_garch = tabs_map[4]
+            tab_justificativas = tabs_map[5]
         else:
             tab_garch = None
-            tab_justificativas = tabs_map[3]
+            tab_justificativas = tabs_map[4]
 
         
         with tab1:
@@ -2060,16 +2075,14 @@ def aba_construtor_portfolio():
             else:
                 st.info("Gráfico de retorno indisponível (Modo Estático Ativo - Sem histórico de preços).")
         
-        with tab_fator_cluster:
-            st.markdown('#### 🔬 Análise Consolidada de Fatores e Clusterização')
-
-            # --- PARTE 1: FATOR ML/FUNDAMENTOS (Conteúdo da Antiga tab3) ---
+        with tab3:
+            # LÓGICA ROBUSTA DE IF PARA EXIBIÇÃO DO MODELO
             if has_price_data and has_usable_ml:
-                 st.markdown('##### 🤖 Predição de Movimento Direcional (Random Forest)')
-                 st.markdown("O modelo utiliza histórico de preços para prever a probabilidade de alta no curto prazo.")
+                 st.markdown('#### 🤖 Predição de Movimento Direcional (Random Forest)')
+                 st.markdown("O modelo abaixo utiliza histórico de preços para prever a probabilidade de alta no curto prazo.")
                  title_text_plot = "Probabilidade de Alta (0-100%)"
                  
-                 # Exibe os gráficos de barra de ML 
+                 # Exibe os gráficos de barra de ML (mantidos aqui se has_usable_ml for True)
                  ml_data = []
                  for asset in assets:
                     if asset in builder.predicoes_ml:
@@ -2108,7 +2121,7 @@ def aba_construtor_portfolio():
                     st.plotly_chart(fig_ml, use_container_width=True)
                     
                     st.markdown("---")
-                    st.markdown('##### Detalhamento Predição ML')
+                    st.markdown('#### Detalhamento Técnico')
                     df_ml_display = df_ml.copy()
                     df_ml_display['Score/Prob.'] = df_ml_display['Score/Prob.'].round(2)
                     df_ml_display['Confiança'] = df_ml_display['Confiança'].apply(lambda x: safe_format(x))
@@ -2116,12 +2129,14 @@ def aba_construtor_portfolio():
                  else:
                      st.warning("Não há dados de ML para exibir.")
 
+
             else:
-                 # Exibe a tabela de clusters e scores se o modo fallback estiver ativo
-                 st.markdown('##### 🔬 Análise de Qualidade Fundamentalista (Unsupervised Learning)')
+                 # FIX 6: Exibe a tabela de clusters e scores se o modo fallback estiver ativo
+                 st.markdown('#### 🔬 Análise de Qualidade Fundamentalista (Unsupervised Learning)')
                  st.info("ℹ️ **Modo Fallback Ativo:** O modelo de predição supervisionada não encontrou padrões significativos ou o histórico de preços é limitado. O sistema está utilizando a **Clusterização Fundamentalista** (qualidade) como fator ML dominante.")
                  
-                 st.markdown("###### Score Fundamentalista e Cluster por Ativo")
+                 st.markdown("##### Score Fundamentalista e Cluster por Ativo")
+                 # Garante que o df_fund_clean tem as colunas necessárias
                  if not builder.scores_combinados.empty:
                      df_cluster_display = builder.scores_combinados[['fundamental_score', 'Final_Cluster', 'pe_ratio', 'roe']].copy()
                      df_cluster_display.rename(columns={'fundamental_score': 'Score Fund.', 'Final_Cluster': 'Cluster', 'pe_ratio': 'P/L', 'roe': 'ROE'}, inplace=True)
@@ -2131,12 +2146,12 @@ def aba_construtor_portfolio():
                      }).background_gradient(cmap='Blues', subset=['Score Fund.']), use_container_width=True)
                  else:
                      st.warning("Dados de fundamentos insuficientes para exibir clusters.")
-            
-            st.markdown("---")
-            # --- PARTE 2: ANÁLISE DE CLUSTERS (Conteúdo da Antiga tab_portfolio_cluster) ---
+
+        with tab_portfolio_cluster:
             st.markdown('#### 🔭 Visualização da Diversificação e Clusters')
             st.info("Esta análise utiliza PCA sobre os scores para visualizar a distribuição dos ativos selecionados no 'espaço de risco/retorno' e confirmar a diversificação entre os clusters.")
             
+            # Reutiliza o PCA e Clusterização dos Scores Finais
             if 'Final_Cluster' in builder.scores_combinados.columns and len(builder.scores_combinados) >= 2:
                 df_viz = builder.scores_combinados.loc[assets].copy().reset_index().rename(columns={'index': 'Ticker'})
                 
@@ -2175,10 +2190,6 @@ def aba_construtor_portfolio():
                 df_sector = df_viz.groupby('sector')['Ticker'].count().reset_index()
                 df_sector.columns = ['Setor', 'Contagem']
                 fig_sector = px.bar(df_sector, x='Setor', y='Contagem', title='Contagem de Ativos por Setor')
-                
-                # NOVO: Aplicando o template para garantir o fundo transparente
-                fig_sector.update_layout(**obter_template_grafico())
-                
                 st.plotly_chart(fig_sector, use_container_width=True)
                 
             else:
@@ -2344,17 +2355,11 @@ def aba_analise_individual():
     
     st.write("") # Spacer
     
-    # NOVO: Botões Centralizados (Executar Análise e Limpar Análise)
-    col_btn_start, col_btn_center, col_btn_end = st.columns([1, 2, 1])
-    with col_btn_center:
-        col_exec, col_clear = st.columns(2)
-        with col_exec:
-            if st.button("🔄 Executar Análise", key='analyze_asset_button_v8', type="primary", use_container_width=True):
-                st.session_state.analisar_ativo_triggered = True 
-        with col_clear:
-            if st.button("🗑️ Limpar Análise", key='clear_asset_analysis_button_v8', type="secondary", use_container_width=True):
-                 st.session_state.analisar_ativo_triggered = False # Resetar o trigger
-                 st.rerun()
+    # Botão Centralizado Abaixo
+    c1, c2, c3 = st.columns([1, 1, 1])
+    with c2:
+        if st.button("🔄 Executar Análise", key='analyze_asset_button_v8', type="primary", use_container_width=True):
+            st.session_state.analisar_ativo_triggered = True 
     
     if 'analisar_ativo_triggered' not in st.session_state or not st.session_state.analisar_ativo_triggered:
         st.info("👆 Selecione um ticker e clique em 'Executar Análise' para obter o relatório completo.")
@@ -2377,7 +2382,6 @@ def aba_analise_individual():
             static_mode = features_fund.get('static_mode', False) or (df_completo is not None and df_completo['Close'].isnull().all())
             
             # Verifica se o ML supervisionado foi ignorado
-            # A confidence de 0.55 é o limite neutro/baixo, se for maior, consideramos treinado
             is_ml_trained = 'ML_Proba' in df_completo.columns and not static_mode and df_completo['ML_Confidence'].iloc[-1] > 0.55
 
             if static_mode:
@@ -2396,9 +2400,8 @@ def aba_analise_individual():
             tab2 = tabs_map[tab_map_index("💼 Fundamentos")]
             tab3 = tabs_map[tab_map_index("🔧 Análise Técnica")]
             tab5 = tabs_map[tab_map_index("🔬 Clusterização Geral")]
-            
-            # CORREÇÃO: Define tab_ml condicionalmente para evitar UnboundLocalError
-            tab_ml = tabs_map[tab_map_index("🤖 Machine Learning")] if is_ml_trained else None
+            if is_ml_trained:
+                tab4 = tabs_map[tab_map_index("🤖 Machine Learning")]
             
             # Abas 1-4: Lógica Padrão de Exibição (igual à versão anterior)
             with tab1:
@@ -2543,9 +2546,11 @@ def aba_analise_individual():
                     
                 else: st.warning("Análise Técnica não disponível sem histórico de preços.")
 
-            # CORREÇÃO: Utiliza a variável tab_ml para o bloco condicional
-            if tab_ml is not None:
-                with tab_ml:
+            with tab4:
+                # --- LÓGICA DE EXCLUSÃO DA ABA ML SE NÃO HOUVER DADOS DE PREÇO SUFICIENTES ---
+                if not is_ml_trained and static_mode:
+                    st.info("⚠️ O modelo de Machine Learning Supervisionado não foi executado (Modo Estático Ativo). Utilize a aba Clusterização Geral para análise não-supervisionada.")
+                else:
                     st.markdown("### Predição de Machine Learning")
                     
                     # Se veio do ML Real (com preço) ou do Fallback (com proxy fundamentalista)
@@ -2557,7 +2562,7 @@ def aba_analise_individual():
                     
                     if static_mode:
                         col2.metric("Status", "Fallback Não-Supervisionado")
-                        st.info("ℹ️ **Modo Fallback Ativo:** O modelo não encontrou histórico de preços. Este score reflete uma análise de anomalia (Isolation Forest) baseada nos fundamentos. Um score alto indica que o ativo se destaca positivamente em relação aos seus pares.")
+                        st.info("ℹ️ **Modo Fallback Ativo:** Como não há histórico de preços, este score reflete uma análise de anomalia (Isolation Forest) baseada nos fundamentos. Um score alto indica que o ativo se destaca positivamente em relação aos seus pares.")
                     elif ml_conf <= 0.55:
                          col2.metric("Confiança do Modelo (AUC)", f"{ml_conf:.2f}")
                          st.info("ℹ️ **Modelo Supervisionado Neutro:** A confiança do modelo é baixa (AUC ≤ 0.55). O score de probabilidade exibido foi ajustado para um **Proxy Fundamentalista** para garantir relevância na classificação.")
@@ -2734,10 +2739,10 @@ def main():
         st.session_state.analisar_ativo_triggered = False
         
     configurar_pagina()
-    # Garante que st.session_state.debug_logs está inicializado para log_debug()
+    # Garante que o painel de debug está sempre disponível no topo
     if 'debug_logs' not in st.session_state:
         st.session_state.debug_logs = []
-    # REMOVIDO: A chamada mostrar_debug_panel() foi removida conforme solicitado.
+    mostrar_debug_panel() 
 
     st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos</h1>', unsafe_allow_html=True)
     
