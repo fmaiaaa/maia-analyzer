@@ -1578,40 +1578,62 @@ class ConstrutorPortfolioAutoML:
         if not self.ativos_selecionados or len(self.ativos_selecionados) < 1:
             self.metodo_alocacao_atual = "ERRO: Ativos Insuficientes"; return {}
         
+        # --- FILTRAGEM DE ATIVOS COM DADOS DE PREÇO VÁLIDOS ---
         available_assets_returns = {}
         ativos_sem_dados = []
-        
+        ativos_static_mode = [] # Novo: Rastrear ativos em modo estático
+
         for s in self.ativos_selecionados:
+            is_static = self.dados_fundamentalistas.loc[s, 'static_mode'] if s in self.dados_fundamentalistas.index else True
+            
+            if is_static:
+                 ativos_static_mode.append(s)
+            
             if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s] and not self.dados_por_ativo[s]['returns'].dropna().empty:
                 available_assets_returns[s] = self.dados_por_ativo[s]['returns']
             else:
                 ativos_sem_dados.append(s)
-        
+
         final_returns_df = pd.DataFrame(available_assets_returns).dropna()
         
-        if final_returns_df.shape[0] < 50 or len(ativos_sem_dados) > 0 or 'PESOS_IGUAIS' in nivel_risco:
-            log_debug("Otimização de Markowitz ignorada. Recorrendo à PONDERAÇÃO POR SCORE (Modo Estático/Poucos Dados).")
+        # DECISÃO: USAR MARKOWITZ APENAS SE TIVER DADOS SUFICIENTES E NÃO ESTIVER EM MODO FUNDAMENTALISTA FORÇADO
+        # E SE TODOS OS ATIVOS TIVEREM PREÇO (não estático).
+        
+        is_markowitz_possible = (
+            final_returns_df.shape[0] >= 50 and 
+            len(final_returns_df.columns) == len(self.ativos_selecionados) and
+            not any(self.dados_fundamentalistas.loc[s, 'static_mode'] for s in final_returns_df.columns if s in self.dados_fundamentalistas.index)
+        )
+        
+        if not is_markowitz_possible or 'PESOS_IGUAIS' in nivel_risco:
+            log_debug(f"Markowitz Indisponível: Forçando Ponderação por Score/Fallback. Motivo: Dados Retorno: {final_returns_df.shape[0]}, Ativos com Retorno: {len(final_returns_df.columns)}, Estáticos: {len(ativos_static_mode)}.")
 
-            if len(ativos_sem_dados) > 0:
-                st.warning(f"⚠️ Alguns ativos ({', '.join(ativos_sem_dados)}) não possuem histórico de preços. A otimização de variância (Markowitz) será substituída por alocação baseada em Score/Pesos Iguais.")
+            # Esta lógica garante que todos os ativos *selecionados* (mesmo os estáticos/sem retorno)
+            # recebam um peso baseado no Score Total calculado anteriormente.
             
             valid_selection = [a for a in self.ativos_selecionados if a in self.scores_combinados.index]
             
             if valid_selection:
                  scores = self.scores_combinados.loc[valid_selection, 'total_score']
                  total_score = scores.sum()
+                 
+                 # Cria um dicionário de pesos para *todos* os ativos selecionados (incluindo os problemáticos)
                  if total_score > 0:
                      weights = (scores / total_score).to_dict()
-                     self.metodo_alocacao_atual = 'PONDERAÇÃO POR SCORE (Modo Estático)'
+                     self.metodo_alocacao_atual = 'PONDERAÇÃO POR SCORE (Modo Estático/Dados Insuficientes)'
                  else:
                      weights = {asset: 1.0 / len(valid_selection) for asset in valid_selection}
                      self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
             else:
+                 # Fallback de segurança se nem o score foi calculado corretamente
                  weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
                  self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
                  
             return self._formatar_alocacao(weights)
 
+        # --- EXECUÇÃO MARKOWITZ (Se a condição for True) ---
+        
+        # Filtra as volatilidades GARCH apenas para os ativos com dados de retorno
         garch_vols_filtered = {asset: self.volatilidades_garch.get(asset, final_returns_df[asset].std() * np.sqrt(252)) for asset in final_returns_df.columns}
         optimizer = OtimizadorPortfolioAvancado(final_returns_df, garch_vols=garch_vols_filtered)
         
@@ -1623,6 +1645,7 @@ class ConstrutorPortfolioAutoML:
         log_debug(f"Otimizando Markowitz. Estratégia: {self.metodo_alocacao_atual} (Risco: {nivel_risco}).")
             
         weights = optimizer.otimizar(estrategia=strategy)
+        
         if not weights:
              log_debug("AVISO: Otimizador falhou. Usando PESOS IGUAIS como fallback total.")
              weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
