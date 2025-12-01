@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Modelagem (V9.34): Simplificação ML/GARCH para Robustez.
 
-Versão: 9.32.38 (Final Build: Professional UI, Simplified ML/GARCH, Robust Fallback)
+Versão: 9.32.39 (Final Build: Professional UI, Simplified ML/GARCH, Robust Fallback)
 =============================================================================
 """
 
@@ -131,9 +131,9 @@ LOOKBACK_ML_DAYS_MAP = {
 # LIGHTGBM FEATURE SET (Usado como feature set minimalista para ambos os modos ML)
 LGBM_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel"]
 
-# ENHANCED FEATURE SET (Para o modo FULL ML)
-# REMOVIDO: O usuário solicitou usar apenas o feature set minimalista para o modo FULL também.
-# FULL_ML_FEATURES = LGBM_FEATURES + ['rsi_14', 'macd_diff', 'vol_20d'] 
+# FEATURES DE ENTRADA PARA ML PÓS-SCORE (Close, Retorno, Volatilidade, Sharpe)
+SCORE_BASED_FEATURES = ['Close', 'annual_return', 'annual_volatility', 'sharpe']
+
 
 # =============================================================================
 # 4. LISTAS DE ATIVOS E SETORES (AJUSTADAS SOMENTE PARA IBOVESPA)
@@ -899,7 +899,56 @@ class ColetorDadosLive(object):
                 
                 if len(df_model) > MIN_TRAIN_DAYS_ML: 
                     # Lógica de ML simplificada aqui... (omiti para brevidade, pois é a mesma do construtor)
-                    pass 
+                    X_full = df_model[ML_FEATURES_FINAL]
+                    split_idx = int(len(X_full) * 0.7)
+                    X_train = X_full.iloc[:split_idx]
+                    
+                    probabilities = []
+                    auc_scores = []
+                    
+                    for tgt_d in ML_HORIZONS_IND:
+                        tgt = f"t_{tgt_d}"
+                        y = df_model[tgt].values
+                        y_train = y[:split_idx]
+                        X_test = X_full.iloc[split_idx:]
+                        y_test = y[split_idx:] 
+                        
+                        if CLASSIFIER is RandomForestClassifier:
+                            model = RandomForestClassifier(**MODEL_PARAMS)
+                        elif CLASSIFIER is LogisticRegression:
+                            model = LogisticRegression(**MODEL_PARAMS)
+                        
+                        if len(np.unique(y_train)) < 2: continue
+                                 
+                        if CLASSIFIER is LogisticRegression:
+                            scaler = StandardScaler().fit(X_train)
+                            X_train_scaled = scaler.transform(X_train)
+                            X_test_scaled = scaler.transform(X_test)
+                            X_predict_scaled = scaler.transform(X_full.iloc[[-1]].copy())
+                        else:
+                            X_train_scaled = X_train
+                            X_test_scaled = X_test
+                            X_predict_scaled = X_full.iloc[[-1]].copy()
+
+                        model.fit(X_train_scaled, y_train)
+                        
+                        if not X_full.iloc[[-1]].isnull().any().any():
+                            prob_now = model.predict_proba(X_predict_scaled)[0, 1]
+                            probabilities.append(prob_now)
+
+                        if len(y_test) > 0 and len(np.unique(y_test)) >= 2:
+                            prob_test = model.predict_proba(X_test_scaled)[:, 1]
+                            auc_scores.append(roc_auc_score(y_test, prob_test))
+                                 
+                    ensemble_proba = np.mean(probabilities) if probabilities else 0.5
+                    conf_final = np.mean(auc_scores) if auc_scores else 0.5
+                    
+                    df_tec['ML_Proba'] = ensemble_proba
+                    df_tec['ML_Confidence'] = conf_final
+                    is_ml_trained = True
+                    log_debug(f"ML Individual: Sucesso {MODEL_NAME}. Prob Média: {ensemble_proba:.2f}, AUC Teste Média: {conf_final:.2f}.")
+
+
                 else:
                     log_debug(f"ML Individual: Dados insuficientes ({len(df_model)}). Pulando modelo supervisionado.")
                     
@@ -923,7 +972,6 @@ class ColetorDadosLive(object):
                 })
             
         return df_tec, fund_row, df_ml_meta
-        return None, None, None
 
     def calculate_cross_sectional_features(self):
         df_fund = self.dados_fundamentalistas.copy()
