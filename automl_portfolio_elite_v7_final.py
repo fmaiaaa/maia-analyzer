@@ -2239,15 +2239,17 @@ def aba_analise_individual():
     for col, option in zip([col_btn_garch_1, col_btn_garch_2], garch_options):
         is_selected = st.session_state['individual_garch_mode'] == option
         with col:
-            if st.button(option, key=f'btn_mode_garch_{option.replace("-", "_")}', use_container_width=True):
+            # Chave única para o botão
+            button_key = f'btn_mode_garch_{option.replace("-", "_")}'
+            if st.button(option, key=button_key, use_container_width=True):
                 st.session_state['individual_garch_mode'] = option
                 st.session_state.analisar_ativo_triggered = False
                 st.rerun()
-            # CORREÇÃO DO SYNTAX ERROR: O script foi movido para fora da linha do st.button para evitar conflitos de aspas
+            # Injeção de JS para persistência de estilo
             if is_selected: 
                 st.markdown(f"""
                 <script>
-                    const btn = document.querySelector('[data-testid="stButton"] button[key="btn_mode_garch_{option.replace("-", "_"]}"]'); 
+                    const btn = document.querySelector('[data-testid="stButton"] button[key="{button_key}"]'); 
                     if (btn) {{ btn.classList.add('selected'); }}
                 </script>
                 """, unsafe_allow_html=True)
@@ -2257,14 +2259,16 @@ def aba_analise_individual():
         is_selected = st.session_state['individual_ml_mode'] == option
         button_label = "Rápido (LogReg)" if option == 'fast' else "Lento (RF/XGB)"
         with col:
-            if st.button(button_label, key=f'btn_mode_ml_{option}', use_container_width=True):
+            # Chave única para o botão
+            button_key = f'btn_mode_ml_{option}'
+            if st.button(button_label, key=button_key, use_container_width=True):
                 st.session_state['individual_ml_mode'] = option
                 st.session_state.analisar_ativo_triggered = False
                 st.rerun()
             if is_selected: 
                 st.markdown(f"""
                 <script>
-                    const btn = document.querySelector('[data-testid="stButton"] button[key="btn_mode_ml_{option}"]'); 
+                    const btn = document.querySelector('[data-testid="stButton"] button[key="{button_key}"]'); 
                     if (btn) {{ btn.classList.add('selected'); }}
                 </script>
                 """, unsafe_allow_html=True)
