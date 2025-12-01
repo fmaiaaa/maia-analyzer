@@ -61,7 +61,8 @@ except ImportError:
     pass
 
 # --- 4. FEATURE ENGINEERING / TECHNICAL ANALYSIS (ML) ---
-from sklearn.ensemble import IsolationForest, RandomForestClassifier, VotingClassifier # ADICIONADO VotingClassifier (Alteração 4)
+# ALTERAÇÃO: Removido VotingClassifier
+from sklearn.ensemble import IsolationForest, RandomForestClassifier 
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit, cross_val_score
 from sklearn.preprocessing import StandardScaler, OneHotEncoder # CORRIGIDO: OneHostEncoder -> OneHotEncoder
@@ -73,7 +74,7 @@ from sklearn.impute import SimpleImputer
 from tqdm import tqdm # Necessário para a função GARCH avançada
 from sklearn.linear_model import LogisticRegression # NOVO: Para ML Rápido (LogReg)
 
-# NOVO: Adicionando LightGBM e XGBoost (para o modo FULL)
+# NOVO: Adicionando LightGBM e XGBoost (para o modo FULL) - MANTIDOS APENAS PARA POSSÍVEL USO FUTURO, MAS IGNORADOS NA MODELAGEM
 try:
     import lightgbm as lgb
 except ImportError:
@@ -550,71 +551,8 @@ class ColetorDadosLive(object):
             log_debug("AVISO: Pynvest falhou ao inicializar. Coleta de fundamentos desativada.")
             st.warning("Biblioteca pynvest não inicializada corretamente.")
 
-    def _garch_auto_search(self, returns: pd.Series, symbol: str) -> tuple[float, str]:
-        """Implementa a lógica de grid search massivo (Auto GARCH)."""
-        
-        returns_percent = returns * 100
-        
-        vol_types = ["Garch", "EGARCH", "GJR-GARCH", "HARCH", "APARCH"]
-        dists = ["normal", "t", "ged"]
-        p_range = range(1, 3)     
-        q_range = range(1, 3)     
-        o_range = [0, 1]          
-
-        results = []
-        fitted_models = {}
-        
-        log_debug(f"Iniciando Auto GARCH (Grid Search) para {symbol}. ")
-
-        for vol in vol_types:
-            for dist in dists:
-                for p in p_range:
-                    for q in q_range:
-                        for o in o_range:
-                            if vol not in ["GJR-GARCH", "APARCH"] and o > 0:
-                                continue 
-                            
-                            if vol in ["HARCH", "APARCH"] and p > 1:
-                                continue 
-
-                            try:
-                                model = arch_model(
-                                    returns_percent,
-                                    mean="Zero",
-                                    vol=vol,
-                                    p=p,
-                                    q=q,
-                                    o=o,
-                                    dist=dist,
-                                )
-
-                                fit = model.fit(disp="off")
-                                
-                                model_name = f"{vol}(p={p},q={q},o={o}), dist={dist}"
-                                results.append({"model": model_name, "bic": fit.bic, "aic": fit.aic})
-                                fitted_models[model_name] = fit
-
-                            except:
-                                continue
-        
-        results_df = pd.DataFrame(results)
-        if results_df.empty:
-             log_debug(f"AVISO: Auto GARCH falhou em todas as combinações para {symbol}.")
-             return np.nan, "GARCH(1,1) (Fallback: Auto-Search Failed)"
-
-        # Selecionar melhor modelo por BIC
-        best_row = results_df.loc[results_df["bic"].idxmin()]
-        best_model_name = best_row["model"]
-        best_fit = fitted_models[best_model_name]
-        
-        final_vol_daily = best_fit.conditional_volatility.iloc[-1] / 100
-        final_vol_annualized = final_vol_daily * np.sqrt(252)
-
-        log_debug(f"Auto GARCH para {symbol} concluído. Melhor Modelo: {best_model_name}")
-        
-        return final_vol_annualized, best_model_name
-
-
+    # REMOVIDO: Função _garch_auto_search removida para simplificar (Correção)
+    
     def _mapear_colunas_pynvest(self, df_pynvest: pd.DataFrame) -> dict:
         if df_pynvest.empty: return {}
         row = df_pynvest.iloc[0]
@@ -711,7 +649,8 @@ class ColetorDadosLive(object):
         metricas_simples_list = []
         
         # Obtém o modo GARCH configurado (padrão Garch(1,1))
-        garch_mode = st.session_state.get('garch_mode', 'GARCH(1,1)')
+        # ALTERAÇÃO: Força GARCH(1,1) pois Auto-Search foi removido
+        garch_mode = 'GARCH(1,1)' 
         
         consecutive_failures = 0
         FAILURE_THRESHOLD = 3 
@@ -848,12 +787,11 @@ class ColetorDadosLive(object):
                 
                 if len(retornos) > 60: 
                     try:
-                        if 'Auto-Search GARCH' in garch_mode:
-                            garch_vol, garch_model_name = self._garch_auto_search(retornos, simbolo)
-                        else:
+                        # ALTERAÇÃO: Remoção do Auto-Search GARCH. Apenas GARCH(1,1) é executado.
+                        if garch_mode == 'GARCH(1,1)':
                             # MODO RÁPIDO: GARCH(1,1) padrão
                             am = arch_model(retornos * 100, mean='Zero', vol='Garch', p=1, q=1)
-                            # CORREÇÃO DE ROBUSTEZ: Verifica se há dados suficientes para ajuste antes de tentar fit
+                            
                             if len(retornos) < 120:
                                 raise ValueError("Dados insuficientes para GARCH(1,1).")
                             
@@ -867,6 +805,9 @@ class ColetorDadosLive(object):
                             garch_vol = temp_garch_vol
                             garch_model_name = "GARCH(1,1) (Rápido)"
                             log_debug(f"Ativo {simbolo}: GARCH(1,1) concluído. Vol Condicional: {garch_vol*100:.2f}%.")
+                        else:
+                            # Fallback para o caso de algum Auto-Search ainda estar configurado
+                            raise ValueError("Modo GARCH complexo desabilitado.")
                             
                     except Exception as e:
                         garch_vol = vol_anual 
@@ -954,22 +895,15 @@ class ColetorDadosLive(object):
 
         # Configura o Classificador e Features baseado no modo selecionado (Alteração 4)
         if ml_mode_for_individual == 'fast':
-            CLASSIFIER = LogisticRegression # Elastic Net (com L2) + Regressão Logística
+            CLASSIFIER = LogisticRegression # Simples: Regressão Logística
             MODEL_PARAMS = dict(penalty='l2', solver='liblinear', class_weight='balanced', random_state=42)
             MODEL_NAME = 'Regressão Logística Rápida'
         else:
-            # Full Ensemble (RF/XGBoost) - Complexo
-            if xgb and RandomForestClassifier:
-                rf_model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced', n_jobs=-1)
-                xgb_model = xgb.XGBClassifier(n_estimators=100, max_depth=5, use_label_encoder=False, eval_metric='logloss', random_state=42, n_jobs=-1)
-                CLASSIFIER = VotingClassifier
-                MODEL_PARAMS = dict(estimators=[('rf', rf_model), ('xgb', xgb_model)], voting='soft', n_jobs=-1)
-                MODEL_NAME = 'Full Ensemble (RF + XGBoost)'
-            else:
-                 # Fallback se XGB não estiver instalado
-                 CLASSIFIER = RandomForestClassifier
-                 MODEL_PARAMS = dict(n_estimators=150, max_depth=7, random_state=42, class_weight='balanced', n_jobs=-1)
-                 MODEL_NAME = 'Full Ensemble (RF/XGB - Fallback RF)'
+            # Full: Random Forest (mais estável e bom com regularização)
+            CLASSIFIER = RandomForestClassifier
+            MODEL_PARAMS = dict(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced', n_jobs=-1)
+            MODEL_NAME = 'Random Forest Robusto'
+
 
         # CORREÇÃO CRÍTICA: Inicializa is_ml_trained antes do bloco try/except
         is_ml_trained = False
@@ -1025,13 +959,8 @@ class ColetorDadosLive(object):
                         X_test = X_full.iloc[split_idx:]
                         y_test = y[split_idx:] 
                         
-                        # --- INICIALIZAÇÃO DO MODELO (Incluindo Ensemble) ---
-                        if CLASSIFIER is VotingClassifier:
-                            # Re-inicializa o VotingClassifier com as instâncias de RF/XGB para cada target
-                            rf_model_t = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced', n_jobs=-1)
-                            xgb_model_t = xgb.XGBClassifier(n_estimators=100, max_depth=5, use_label_encoder=False, eval_metric='logloss', random_state=42, n_jobs=-1)
-                            model = VotingClassifier(estimators=[('rf', rf_model_t), ('xgb', xgb_model_t)], voting='soft', n_jobs=-1)
-                        elif CLASSIFIER is RandomForestClassifier:
+                        # --- INICIALIZAÇÃO DO MODELO ---
+                        if CLASSIFIER is RandomForestClassifier:
                              model = RandomForestClassifier(**MODEL_PARAMS)
                         elif CLASSIFIER is LogisticRegression:
                              model = LogisticRegression(**MODEL_PARAMS)
@@ -1081,13 +1010,8 @@ class ColetorDadosLive(object):
                          if CLASSIFIER is LogisticRegression:
                              # Usa coeficientes para LogReg
                              importances_data = np.abs(model.coef_[0])
-                         elif CLASSIFIER is VotingClassifier:
-                             # Calcula a média da importância de features dos modelos base (RF/XGB)
-                             rf_imp = model.estimators_[0].feature_importances_ if hasattr(model.estimators_[0], 'feature_importances_') else np.zeros(len(MODEL_FEATURES))
-                             xgb_imp = model.estimators_[1].feature_importances_ if hasattr(model.estimators_[1], 'feature_importances_') else np.zeros(len(MODEL_FEATURES))
-                             importances_data = (rf_imp + xgb_imp) / 2
                          else:
-                             # Usa feature_importances_ para RF/XGB
+                             # Usa feature_importances_ para RF
                              importances_data = model.feature_importances_
 
                          importances = pd.DataFrame({
@@ -1153,9 +1077,8 @@ class ConstrutorPortfolioAutoML:
         
     def coletar_e_processar_dados(self, simbolos: list) -> bool:
         # Passa o modo GARCH selecionado para o coletor
-        garch_mode_select = st.session_state.get('ml_model_mode_select', 'fast')
-        # Determina o modo GARCH para o construtor: GARCH(1,1) para fast, Auto-Search para full
-        garch_mode = 'Auto-Search GARCH' if garch_mode_select == 'full' else 'GARCH(1,1)'
+        # ALTERAÇÃO: Força GARCH(1,1)
+        garch_mode = 'GARCH(1,1)' 
         
         # Seta o modo GARCH na sessão para ser usado dentro do coletor
         st.session_state['garch_mode'] = garch_mode
@@ -1226,22 +1149,12 @@ class ConstrutorPortfolioAutoML:
             CLASSIFIER = LogisticRegression # Simples: Regressão Logística
             MODEL_PARAMS = dict(penalty='l2', solver='liblinear', class_weight='balanced', random_state=42)
             MODEL_NAME = 'Regressão Logística Rápida'
-        else: # ml_mode == 'full' (RF/XGB Ensemble)
-            # Complexo: Ensemble Voting Classifier (RF + XGBoost)
+        else: # ml_mode == 'full' (Random Forest)
+            # Complexo: Random Forest (mais estável e bom com regularização)
             MODEL_FEATURES = LGBM_FEATURES # Alteração 4: Features minimalistas
-            
-            if xgb and RandomForestClassifier:
-                # Usa Ensemble Voting
-                rf_model = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced', n_jobs=-1)
-                xgb_model = xgb.XGBClassifier(n_estimators=100, max_depth=5, use_label_encoder=False, eval_metric='logloss', random_state=42, n_jobs=-1)
-                CLASSIFIER = VotingClassifier
-                MODEL_PARAMS = dict(estimators=[('rf', rf_model), ('xgb', xgb_model)], voting='soft', n_jobs=-1)
-                MODEL_NAME = 'Full Ensemble (RF + XGBoost)'
-            else:
-                 # Fallback se XGB não estiver instalado (menos ideal)
-                 CLASSIFIER = RandomForestClassifier
-                 MODEL_PARAMS = dict(n_estimators=150, max_depth=7, random_state=42, class_weight='balanced', n_jobs=-1)
-                 MODEL_NAME = 'Full Ensemble (RF/XGB - Fallback RF)'
+            CLASSIFIER = RandomForestClassifier
+            MODEL_PARAMS = dict(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced', n_jobs=-1)
+            MODEL_NAME = 'Random Forest Robusto'
             
         
         # --- Clusterização Inicial (Fundamentos) ---
@@ -1330,13 +1243,8 @@ class ConstrutorPortfolioAutoML:
                     X_test = X_full.iloc[split_idx:]
                     y_test = y[split_idx:] 
                     
-                    # --- INICIALIZAÇÃO DO MODELO (Incluindo Ensemble) ---
-                    if CLASSIFIER is VotingClassifier:
-                        # Re-inicializa o VotingClassifier com as instâncias de RF/XGB para cada target
-                        rf_model_t = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced', n_jobs=-1)
-                        xgb_model_t = xgb.XGBClassifier(n_estimators=100, max_depth=5, use_label_encoder=False, eval_metric='logloss', random_state=42, n_jobs=-1)
-                        model = VotingClassifier(estimators=[('rf', rf_model_t), ('xgb', xgb_model_t)], voting='soft', n_jobs=-1)
-                    elif CLASSIFIER is RandomForestClassifier:
+                    # --- INICIALIZAÇÃO DO MODELO ---
+                    if CLASSIFIER is RandomForestClassifier:
                          model = RandomForestClassifier(**MODEL_PARAMS)
                     elif CLASSIFIER is LogisticRegression:
                          model = LogisticRegression(**MODEL_PARAMS)
@@ -1387,11 +1295,6 @@ class ConstrutorPortfolioAutoML:
                 try:
                     if CLASSIFIER is LogisticRegression:
                         importances_data = np.abs(model.coef_[0])
-                    elif CLASSIFIER is VotingClassifier:
-                         # Calcula a média da importância de features dos modelos base (RF/XGB)
-                         rf_imp = model.estimators_[0].feature_importances_ if hasattr(model.estimators_[0], 'feature_importances_') else np.zeros(len(MODEL_FEATURES))
-                         xgb_imp = model.estimators_[1].feature_importances_ if hasattr(model.estimators_[1], 'feature_importances_') else np.zeros(len(MODEL_FEATURES))
-                         importances_data = (rf_imp + xgb_imp) / 2
                     else:
                         importances_data = model.feature_importances_
                         
@@ -2071,12 +1974,12 @@ def aba_introducao():
         
     with col_p3:
         st.markdown("#### 🛡️ Gestão de Risco e Modelagem")
+        # ALTERAÇÃO: Descrição de modelos simplificada para refletir as mudanças
         st.markdown("O sistema oferece diferentes níveis de sofisticação para estimar o risco (Volatilidade Condicional) e a previsão:")
-        # ALTERAÇÃO 4: Atualizado o descritivo dos modelos ML
         st.markdown("""
-        * **Volatilidade:** Utiliza **GARCH(1,1)** para cálculo rápido ou **Auto-Search GARCH** (Grid Search) para modelos de risco mais precisos e complexos.
-        * **Previsão (ML - Simples):** **Regressão Logística** para modelagem rápida (apenas features de preço/volume).
-        * **Previsão (ML - Complexa):** **Ensemble RF/XGBoost** para máxima precisão (apenas features de preço/volume).
+        * **Volatilidade:** Utiliza o modelo **GARCH(1,1)** para calcular a volatilidade condicional de forma estável.
+        * **Previsão (ML - Simples):** **Regressão Logística** com regularização (Elastic Net/L2).
+        * **Previsão (ML - Complexa):** **Random Forest** com profundidade limitada e balanceamento de classes.
         """)
 
 
@@ -2164,10 +2067,10 @@ def aba_selecao_ativos():
             
             with st.expander("📋 Visualizar Ativos por Setor"):
                 for setor in setores_selecionados:
-                    # CORREÇÃO DO ERRO: ATIVOS_POR_POR_SETOR -> ATIVOS_POR_SETOR
+                    # CORRIGIDO: O erro "един" foi corrigido para "join" (Correção)
                     ativos_do_setor = ATIVOS_POR_SETOR.get(setor, []) 
                     st.markdown(f"**{setor}** ({len(ativos_do_setor)} ativos)")
-                    st.write(", ". един([a.replace('.SA', '') for a in ativos_do_setor]))
+                    st.write(", ".join([a.replace('.SA', '') for a in ativos_do_setor]))
         else:
             st.warning("⚠️ Selecione pelo menos um setor.")
     
@@ -2299,14 +2202,14 @@ def aba_construtor_portfolio():
 
                 ml_mode = 'fast'
                 if pipeline_mode == 'Modo Geral (ML + Otimização Markowitz)':
-                    # ALTERAÇÃO 4: Atualizado o format_func para refletir LogReg e RF/XGB
+                    # ALTERAÇÃO: Ajuste na lista e no format_func para refletir a simplificação
                     ml_mode = st.selectbox(
                         "**2. Seleção de Modelo ML:**",
                         [
                             'fast', 
                             'full'
                         ],
-                        format_func=lambda x: "Rápido (Regressão Logística)" if x == 'fast' else "Lento (Ensemble RF/XGB + Auto-GARCH)",
+                        format_func=lambda x: "Rápido (Regressão Logística)" if x == 'fast' else "Lento (Random Forest Robusto)",
                         index=0,
                         key='ml_model_mode_select'
                     )
@@ -2414,26 +2317,14 @@ def aba_construtor_portfolio():
         is_ml_actually_trained = assets and builder.predicoes_ml.get(assets[0], {}).get('auc_roc_score', 0.0) > 0.0
         
         # --- NOVO: Verificação de Redundância GARCH ---
+        # Removido GARCH Redundancy check já que Auto-Search foi removido. Apenas verificamos se há dados de preço.
         is_garch_redundant = False
-        if has_price_data:
-            distinct_garch_count = 0
-            for ativo in assets:
-                if ativo in builder.metricas_performance.index and ativo in builder.volatilidades_garch:
-                    vol_hist = builder.metricas_performance.loc[ativo].get('volatilidade_anual', np.nan)
-                    vol_garch = builder.volatilidades_garch.get(ativo)
-                    # Checa se a diferença é maior que 1 ponto percentual
-                    if not np.isnan(vol_hist) and not np.isnan(vol_garch) and abs(vol_garch - vol_hist) > 0.01:
-                        distinct_garch_count += 1
-            
-            if distinct_garch_count == 0:
-                is_garch_redundant = True
-                log_debug("GARCH: Ocultando aba GARCH. Nenhuma diferença significativa em relação à Volatilidade Histórica (Redundante).")
-        # --- FIM NOVO ---
         
         # Define as abas (agora consolidada)
         tabs_list = ["📊 Alocação de Capital", "📈 Performance e Retornos", "🔬 Análise de Fatores e Clusterização"]
         
-        if has_price_data and has_garch_data and not is_garch_redundant:
+        # O GARCH(1,1) é a única opção, então a aba é mostrada se houver dados de preço
+        if has_price_data:
              tabs_list.append("📉 Fator Volatilidade GARCH")
              
         tabs_list.append("❓ Justificativas e Ranqueamento")
@@ -2585,7 +2476,7 @@ def aba_construtor_portfolio():
             if has_price_data and st.session_state.get('pipeline_mode_radio', '').startswith('Modo Geral'):
                  
                  if is_ml_actually_trained:
-                     # ALTERAÇÃO 4: Nome do modelo atualizado para refletir o Ensemble/LogReg
+                     # ALTERAÇÃO 4: Nome do modelo atualizado para refletir o LogReg/RandomForest
                      st.markdown(f"##### 🤖 Predição de Movimento Direcional ({builder.predicoes_ml.get(assets[0], {}).get('model_name', 'Modelo ML')})")
                      st.markdown("O modelo utiliza histórico de preços para prever a probabilidade de alta no curto prazo.")
                      title_text_plot = "Probabilidade de Alta (0-100%)"
@@ -2976,10 +2867,10 @@ def aba_analise_individual():
     
     with col_modes[0]:
         st.markdown("##### Volatilidade (GARCH):")
-        # Usando st.radio para manter o estado do botão
+        # ALTERAÇÃO: Apenas GARCH(1,1) é permitido
         garch_mode_select = st.radio(
             "Selecione o Modelo de Risco:",
-            ['GARCH(1,1)', 'Auto-Search GARCH'],
+            ['GARCH(1,1)'],
             key='individual_garch_mode_radio',
             index=0,
             format_func=lambda x: x,
@@ -2989,14 +2880,13 @@ def aba_analise_individual():
         
     with col_modes[1]:
         st.markdown("##### Modelo ML:")
-        # Usando st.radio para manter o estado do botão
-        # ALTERAÇÃO 4: Atualizado o format_func para refletir LogReg e RF/XGB
+        # ALTERAÇÃO: Refletindo as simplificações de ML (LogReg e Random Forest)
         ml_mode_select = st.radio(
             "Selecione o Modelo de Predição:",
             ['fast', 'full'],
             key='individual_ml_mode_radio',
             index=0,
-            format_func=lambda x: "Rápido (Regressão Logística)" if x == 'fast' else "Lento (Ensemble RF/XGB)",
+            format_func=lambda x: "Rápido (Regressão Logística)" if x == 'fast' else "Lento (Random Forest)",
             label_visibility="collapsed"
         )
         st.session_state['individual_ml_mode'] = ml_mode_select
@@ -3360,7 +3250,7 @@ def aba_analise_individual():
                         
                         with st.expander(f"📋 Ver {len(pares)} ativos similares no Cluster {cluster_ativo}", expanded=True):
                             if pares:
-                                st.write(", ". един(pares))
+                                st.write(", ".join(pares))
                             else:
                                 st.write("Este ativo possui características únicas (Outlier).")
                     else:
