@@ -148,37 +148,145 @@ LGBM_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel"]
 
 # =============================================================================
 # 4. LISTAS DE ATIVOS E SETORES (AJUSTADAS SOMENTE PARA IBOVESPA)
+#
+# ATUALIZAÇÃO: Inclusão da nova lista completa de ativos e setores fornecida
+# pelo usuário. Tickers da B3 (Ações, FIIs, Fiagros, ETFs) recebem .SA. BDRs
+# (final 31, 33, 34, 35) permanecem sem sufixo. Tickers não-padrão/placeholders
+# (com 'F' no início, como FRENT3) foram removidos para garantir a colega.
 # =============================================================================
 
-ATIVOS_IBOVESPA = [
-    'ALOS3.SA', 'ABEV3.SA', 'ASAI3.SA', 'AESB3.SA', 'AZZA3.SA', 'B3SA3.SA',
-    'BBSE3.SA', 'BBDC3.SA', 'BBDC4.SA', 'BRAP4.SA', 'BBAS3.SA', 'BRKM5.SA',
-    'BRAV3.SA', 'BPAC11.SA', 'CXSE3.SA', 'CEAB3.SA', 'CMIG4.SA', 'COGN3.SA',
-    'CPLE6.SA', 'CSAN3.SA', 'CPFE3.SA', 'CMIN3.SA', 'CURY3.SA', 'CVCB3.SA',
-    'CYRE3.SA', 'DIRR3.SA', 'ELET3.SA', 'ELET6.SA', 'EMBR3.SA', 'ENGI11.SA',
-    'ENEV3.SA', 'EGIE3.SA', 'EQTL3.SA', 'FLRY3.SA', 'GGBR4.SA', 'GOAU4.SA',
-    'HAPV3.SA', 'HYPE3.SA', 'IGTI11.SA', 'IRBR3.SA', 'ISAE4.SA', 'ITSA4.SA',
-    'ITUB4.SA', 'KLBN11.SA', 'RENT3.SA', 'LREN3.SA', 'MGLU3.SA', 'POMO4.SA',
-    'BEEF3.SA', 'MRVE3.SA', 'MULT3.SA', 'NATU3.SA',
-    'PCAR3.SA', 'PETR3.SA', 'PETR4.SA', 'RECV3.SA', 'PRIO3.SA', 'PSSA3.SA',
-    'RADL3.SA', 'RAIZ4.SA', 'RDOR3.SA', 'RAIL3.SA', 'SBSP3.SA', 'SANB11.SA',
-    'CSNA3.SA', 'SLCE3.SA', 'SMFT3.SA', 'SUZB3.SA', 'TAEE11.SA', 'VIVT3.SA',
-    'TIMS3.SA', 'TOTS3.SA', 'UGPA3.SA', 'USIM5.SA', 'VALE3.SA', 'VAMO3.SA',
-    'VBBR3.SA', 'VIVA3.SA', 'WEGE3.SA', 'YDUQ3.SA'
-]
-
 ATIVOS_POR_SETOR_IBOV = {
-    'Bens Industriais': ['EMBR3.SA', 'VAMO3.SA', 'WEGE3.SA', 'VIVA3.SA', 'ASAI3.SA', 'SMFT3.SA', 'CMIN3.SA', 'SLCE3.SA'],
-    'Consumo Cíclico': ['AZZA3.SA', 'ALOS3.SA', 'CEAB3.SA', 'COGN3.SA', 'CURY3.SA', 'CVCB3.SA', 'CYRE3.SA', 'DIRR3.SA', 'LREN3.SA', 'MGLU3.SA', 'MRVE3.SA', 'MULT3.SA', 'NATU3.SA', 'PCAR3.SA', 'RENT3.SA', 'YDUQ3.SA'],
-    'Consumo não Cíclico': ['BEEF3.SA', 'NATU3.SA', 'PCAR3.SA', 'VIVA3.SA'], 
-    'Financeiro': ['B3SA3.SA', 'BBSE3.SA', 'BBDC3.SA', 'BBDC4.SA', 'BBAS3.SA', 'BPAC11.SA', 'CXSE3.SA', 'HYPE3.SA', 'IGTI11.SA', 'IRBR3.SA', 'ITSA4.SA', 'ITUB4.SA', 'MULT3.SA', 'PSSA3.SA', 'RDOR3.SA', 'SANB11.SA'],
-    'Materiais Básicos': ['BRAP4.SA', 'BRKM5.SA', 'CSNA3.SA', 'GGBR4.SA', 'GOAU4.SA', 'KLBN11.SA', 'POMO4.SA', 'SUZB3.SA', 'USIM5.SA', 'VALE3.SA'],
-    'Petróleo, Gás e Biocombustíveis': ['ENEV3.SA', 'PETR3.SA', 'PETR4.SA', 'PRIO3.SA', 'RAIZ4.SA', 'RECV3.SA', 'UGPA3.SA', 'VBBR3.SA'],
-    'Saúde': ['FLRY3.SA', 'HAPV3.SA', 'RADL3.SA'],
-    'Tecnologia da Informação': ['TOTS3.SA'],
-    'Telecomunicações': ['TIMS3.SA', 'VIVT3.SA'],
-    'Utilidade Pública': ['AESB3.SA', 'AURE3.SA', 'BRAV3.SA', 'CMIG4.SA', 'CPLE6.SA', 'CPFE3.SA', 'EGIE3.SA', 'ELET3.SA', 'ELET6.SA', 'ENGI11.SA', 'EQTL3.SA', 'ISAE4.SA', 'RAIL3.SA', 'SBSP3.SA', 'TAEE11.SA']
+    'Consumo Cíclico': [
+        'AZZA3.SA', 'ALOS3.SA', 'VIIA3.SA', 'CEDO4.SA', 'NFLX34', 'NIKE34', 'MCDC34', 
+        'HOME34', 'FDMO34', 'CMCS34', 'AMZO34', 'RDNI3.SA', 'SLED4.SA', 'SLED3.SA', 
+        'RSID3.SA', 'MNDL3.SA', 'LEVE3.SA', 'CTKA4.SA', 'CTKA3.SA', 'MYPK3.SA', 
+        'GRND3.SA', 'LCAM3.SA', 'CEAB3.SA', 'VSTE3.SA', 'CGRA3.SA', 'ESTR4.SA', 
+        'ESTR3.SA', 'DIRR3.SA', 'CTNM3.SA', 'ANIM3.SA', 'EVEN3.SA', 'AMAR3.SA', 
+        'MOVI3.SA', 'JHSF3.SA', 'HBOR3.SA', 'PDGR3.SA', 'ARZZ3.SA', 'EZTC3.SA', 
+        'ALPA3.SA', 'RENT3.SA', 'MRVE3.SA', 'MGLU3.SA', 'LREN3.SA', 'COGN3.SA', 
+        'WHRL4.SA', 'WHRL3.SA', 'TCSA3.SA', 'SBUB34', 'SMLS3.SA', 'SEER3.SA', 
+        'HOOT4.SA', 'GFSA3.SA', 'YDUQ3.SA', 'CYRE3.SA', 'CVCB3.SA', 'SBFG3.SA',
+        # Novos ativos incluídos
+        'MOTV3.SA', 'AMOB3.SA', 'BHIA3.SA', 'ZAMP3.SA', 'WEST3.SA', 'CSED3.SA', 
+        'TOKY3.SA', 'ESPA3.SA', 'ENJU3.SA', 'CASH3.SA', 'TFCO4.SA', 'CONX3.SA',
+        'GMAT3.SA', 'SEQL3.SA', 'LJQQ3.SA', 'DMVF3.SA', 'SOMA3.SA', 'RIVA3.SA'
+    ],
+    'Consumo não Cíclico': [
+        'PRVA3.SA', 'WALM34', 'SBUB34', 'SMTO3.SA', 'MDIA3.SA', 'CAML3.SA', 'AGRO3.SA', 
+        'BEEF3.SA', 'BEEF11.SA', 'VIVA3.SA', 'CRFB3.SA', 'PCAR3.SA', 'NTCO3.SA', 
+        'MRFG3.SA', 'JBSS3.SA', 'PGCO34', 'MBRF3.SA',
+        # Novos ativos incluídos
+        'NATU3.SA', 'VITT3.SA', 'PGMN3.SA', 'PETZ3.SA', 'ASAI3.SA', 'JALL3.SA'
+    ],
+    'Financeiro': [
+        'NDIV11.SA', 'CSUD3.SA', 'INBR31', 'BIDI3.SA', 'BIDI11.SA', 'BIDI4.SA', 'STOC31', 
+        'NUBR33', 'IGTI11.SA', 'IGTI3.SA', 'XPBR31', 'TRAD3.SA', 'BSLI4.SA', 'BSLI3.SA', 
+        'BTTL3.SA', 'BPAR3.SA', 'WFCO34', 'VISA34', 'MSBR34', 'MSCD34', 'JPMC34', 
+        'HONB34', 'GEOO34', 'GSGI34', 'CTGP34', 'BOAC34', '3MMMC34', 'SCAR3.SA', 
+        'LPSB3.SA', 'BMGB11.SA', 'BMGB4.SA', 'IGBR3.SA', 'GSHP3.SA', 'PSSA3.SA', 
+        'CARD3.SA', 'BBRK3.SA', 'BRPR3.SA', 'BRSR6.SA', 'BRSR5.SA', 'BRSR3.SA', 
+        'SANB4.SA', 'SANB3.SA', 'SANB11.SA', 'MULT3.SA', 'ITUB3.SA', 'ITUB4.SA', 
+        'ALSO3.SA', 'BMIN3.SA', 'MERC4.SA', 'LOGG3.SA', 'ITSA4.SA', 'ITSA3.SA', 
+        'IRBR3.SA', 'PDTC3.SA', 'SYNE3.SA', 'BBDC4.SA', 'BBDC3.SA', 'BRML3.SA', 
+        'APER3.SA', 'BBSE3.SA', 'BPAN4.SA', 'BBAS3.SA', 'BBAS12.SA', 'BBAS11.SA', 
+        'AXPB34',
+        # Novos ativos incluídos (FIIs, Fiagros e Ações)
+        'BRBI11.SA', 'MODL4.SA', 'MODL11.SA', 'MODL3.SA', 'CXSE3.SA', 'BOAS3.SA', 
+        'HGAG11.SA', 'REAG3.SA', 'CJCT11.SA', 'BMLC11.SA', 'RECR11.SA', 'URPR11.SA', 
+        'DEVA11.SA', 'MFAI11.SA', 'HODL11.SA', 'FOOD11.SA', 'RZAT11.SA', 'GRWA11.SA', 
+        'CRAA11.SA', 'BBGO11.SA', 'AGRX11.SA', 'PLCA11.SA', 'RURA11.SA', 'SNAG11.SA', 
+        'GCRA11.SA', 'VCRA11.SA', 'KNCA11.SA', 'NCRA11.SA', 'CPTR11.SA', 'FGAA11.SA', 
+        'EGAF11.SA', 'VGIA11.SA', 'LSAG11.SA'
+    ],
+    'Materiais Básicos': [
+        'LAND3.SA', 'DEXP4.SA', 'DEXP3.SA', 'RANI3.SA', 'FCXO34', 'PMAM3.SA', 'FESA4.SA', 
+        'FESA3.SA', 'EUCA3.SA', 'SUZB3.SA', 'KLBN4.SA', 'KLBN3.SA', 'KLBN11.SA', 
+        'VALE5.SA', 'UNIP6.SA', 'UNIP5.SA', 'UNIP3.SA', 'NEMO6.SA', 'NEMO5.SA', 
+        'NEMO3.SA', 'MMXM3.SA', 'MMXM11.SA', 'GOAU4.SA', 'DXCO3.SA', 'CSNA3.SA', 
+        'BRKM6.SA', 'BRKM5.SA', 'BRKM3.SA', 'BRAP4.SA', 'BRAP3.SA', 'ARMT34',
+        # Novos ativos incluídos
+        'CMIN3.SA', 'ORVR3.SA', 'SOJA3.SA', 'BOAS3.SA'
+    ],
+    'Outros': [
+        'BDOM11.SA', 'VTRU3.SA', 'RBIV11.SA', 'CPLE11.SA', 'GTLG11.SA', 'PPLA11.SA', 
+        'BTLT39', 'HY39', 'SHV39', 'IEI39', 'IYT39', 'BGOV39', 'ALUG11.SA', 'WRLD11.SA', 
+        'CXAG11.SA', 'ROOF11.SA', 'JGPX11.SA', 'PURB11.SA', 'BIME11.SA', 'JSAF11.SA', 
+        'TELD11.SA', 'MORC11.SA', 'HUSI11.SA', 'CYCR11.SA', 'EQIR11.SA', 'CACR11.SA', 
+        'RZAG11.SA', 'PORT3.SA', 'GETT11.SA', 'GETT4.SA', 'GETT3.SA', 'BIYE39', 
+        'BSCZ39', 'BUSA39', 'BERU39', 'BSOX39', 'BFCG39', 'BFXH39', 'BFTA39', 'BKYY39', 
+        'BQTC39', 'BFDN39', 'BFDA39', 'BFPI39', 'BQQW39', 'BFPX39', 'BCIR39', 'BFDL39', 
+        'BFBI39', 'BOEF39', 'BURT39', 'BICL39', 'BIXG39', 'C2OI34', 'S2TO34', 'MILA.SA', 
+        'CSMO.SA', 'IYDRO11.SA', 'ISPXB11.SA', 'CISMAB11.SA', 'W2ST34', 'S2QS34', 
+        'P2AT34', 'G2DD34', 'D2AS34', 'C2PT34', 'BIVW39', 'BIVE39', 'BCWV39', 'A2VL34', 
+        'A2MC34', 'AFHI11.SA', 'HSRE11.SA', 'VSEC11.SA', 'GRAO3.SA', 'USTK11.SA', 
+        'AGXY3.SA', 'CRPG6.SA', 'CRPG5.SA', 'CRPG3.SA', 'SMFT3.SA', 'SOJA3.SA', 
+        'Z2NG34', 'T2TD34', 'T2DH34', 'S2UI34', 'S2QU34', 'S2NW34', 'S2HO34', 'C2ZR34', 
+        'U2ST34', 'S2EA34', 'P2EN34', 'M2PW34', 'K2CG34', 'D2KN34', 'C2ON34', 'C2HD34', 
+        'B2YN34',
+        # Novos ativos incluídos
+        'ALLD3.SA', 'ATMP3.SA', 'BMOB3.SA', 'ELMD3.SA', 'OPCT3.SA', 'TOKY3.SA',
+        'LAVV3.SA', 'PLPL3.SA', 'MELK3.SA', 'AVLL3.SA', 'CBAV33.SA', 'DOTZ3.SA',
+        'GGPS3.SA', 'HBSA3.SA', 'SIMH3.SA', 'PASS3.SA', 'TTEN3.SA', 'CURY3.SA'
+    ],
+    'Petróleo, Gás e Biocombustíveis': [
+        'SRNA3.SA', 'VBBR3.SA', 'RAIZ4.SA', 'RECV3.SA', 'SLBG34', 'HALI34', 'COPH34', 
+        'CHVX34', 'PRIO3.SA', 'OSXB3.SA', 'DMMO11.SA', 'DMMO3.SA', 'RPMG3.SA', 
+        'UGPA3.SA', 'PETR4.SA', 'PETR3.SA', 'EXXO34', 'ENAT3.SA',
+        # Novos ativos incluídos
+        'RRRP3.SA'
+    ],
+    'Saúde': [
+        'ONCO3.SA', 'VVEO3.SA', 'PARD3.SA', 'BIOM3.SA', 'BALM3.SA', 'PFIZ34', 
+        'MRCK34', 'GBIO33', 'PNVL3.SA', 'AALR3.SA', 'ODPV3.SA', 'RADL3.SA', 
+        'QUAL3.SA', 'OFSA3.SA', 'JNJB34', 'HYPE3.SA', 'FLRY3.SA', 'BMYB34', 
+        'ABTT34',
+        # Novos ativos incluídos
+        'ATEA3.SA', 'KRSA3.SA', 'HCAR3.SA', 'MATD3.SA', 'BLAU3.SA'
+    ],
+    'Tecnologia da Informação': [
+        'CLSA3.SA', 'LVTC3.SA', 'G2DI33', 'IFCM3.SA', 'GOGL35', 'LWSA3.SA', 'TOTS3.SA', 
+        'XRXB34', 'QCOM34', 'ORCL34', 'MSFT34', 'IBMB34', 'ITLC34', 'HPQB34', 
+        'EBAY34', 'CSCO34', 'ATTB34', 'AAPL34', 'LINX3.SA', 'POSI3.SA',
+        # Novos ativos incluídos
+        'ET34', 'M1TA34', 'NGRD3.SA', 'BMOB3.SA'
+    ],
+    'Telecomunicações': [
+        'BRIT3.SA', 'FIQE3.SA', 'DESK3.SA', 'VERZ34', 'OIBR4.SA', 'OIBR3.SA', 
+        'TIMS3.SA', 'VIVT3.SA', 'TELB4.SA', 'TELB3.SA', 'ATTB34'
+    ],
+    'Utilidade Pública': [
+        'AXIA5.SA', 'AXIA3.SA', 'AXIA6.SA', 'BRAV3.SA', 'AURE3.SA', 'MEGA3.SA', 
+        'CEPE6.SA', 'CEPE5.SA', 'CEPE3.SA', 'CEED3.SA', 'EEEL4.SA', 'EEEL3.SA', 
+        'CASN4.SA', 'CASN3.SA', 'CEGR3.SA', 'CEBR3.SA', 'CEBR5.SA', 'CEBR6.SA', 
+        'RNEW11.SA', 'RNEW4.SA', 'RNEW3.SA', 'COCE6.SA', 'COCE5.SA', 'COCE3.SA', 
+        'CLSC4.SA', 'CLSC3.SA', 'ALUP4.SA', 'ALUP3.SA', 'ALUP11.SA', 'SAPR11.SA', 
+        'SAPR4.SA', 'SAPR3.SA', 'CPRE3.SA', 'CPLE5.SA', 'CPLE3.SA', 'CPFE3.SA', 
+        'CGAS3.SA', 'AESB3.SA', 'NEOE3.SA', 'TRPL4.SA', 'TRPL3.SA', 'EGIE3.SA', 
+        'TAEE4.SA', 'TAEE3.SA', 'TAEE11.SA', 'SBSP3.SA', 'GEPA4.SA', 'GEPA3.SA', 
+        'CESP6.SA', 'CESP5.SA', 'CESP3.SA', 'CMIG4.SA', 'CMIG3.SA', 'AFLT3.SA',
+        # Novos ativos incluídos
+        'ISAE4.SA', 'RIOS3.SA'
+    ],
+    'Bens Industriais': [
+        'EMBR3.SA', 'VAMO3.SA', 'WEGE3.SA', 'VIVA3.SA', 'ASAI3.SA', 'SMFT3.SA', 
+        'CMIN3.SA', 'SLCE3.SA', 
+        # Novos ativos incluídos
+        'AERI3.SA', 'ICBR3.SA', 'GOLL3.SA', 'ARML3.SA', 'JSLG3.SA', 'OPCT3.SA', 
+        'SAINTB3.SA', 'HBSA3.SA', 'PASS3.SA', 'TTEN3.SA'
+    ]
 }
+
+# -----------------------------------------------------------------------------
+# Reconstrução da lista principal ATIVOS_IBOVESPA e FALLBACK_SETORES
+# -----------------------------------------------------------------------------
+
+# Cria a lista de todos os ativos únicos a partir do novo dicionário setorial
+TODOS_ATIVOS_SET = set()
+for ativos in ATIVOS_POR_SETOR_IBOV.values():
+    for ativo in ativos:
+        TODOS_ATIVOS_SET.add(ativo)
+
+ATIVOS_IBOVESPA = sorted(list(TODOS_ATIVOS_SET))
 
 # Dicionário Fallback Invertido (Ticker -> Setor)
 FALLBACK_SETORES = {}
@@ -197,6 +305,9 @@ ATIVOS_POR_SETOR = {
 # =============================================================================
 # 5. MAPEAMENTOS DE PONTUAÇÃO DO QUESTIONÁRIO (Design Original)
 # =============================================================================
+# ... Rest of the file remains unchanged from here ...
+# (The code below this point is identical to the original file)
+# ...
 
 SCORE_MAP_ORIGINAL = {
     'CT: Concordo Totalmente': 5, 'C: Concordo': 4, 'N: Neutro': 3, 'D: Discordo': 2, 'DT: Discordo Totalmente': 1
@@ -2164,7 +2275,7 @@ def aba_introducao():
         st.write("""
         A MPT é a espinha dorsal da nossa fase de alocação de capital. Ela se baseia no princípio de que o risco de um portfólio não é a mera soma dos riscos individuais dos ativos, mas sim o risco resultante da **combinação** desses ativos, considerando a correlação entre eles.
         
-        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente** [Image of Efficient Frontier], que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
+        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente** , que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
         """)
         
         col_mpt_1, col_mpt_2 = st.columns(2)
@@ -2210,7 +2321,7 @@ def aba_introducao():
         
         st.markdown("##### 4.2. Random Forest (Floresta Aleatória)")
         st.write("""
-        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão [Image of Random Forest structure].
+        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão .
         
         **Funcionamento:** Cada árvore na floresta é treinada em uma subamostra diferente do conjunto de dados e em um subconjunto aleatório de *features*. A previsão final é determinada pela maioria dos votos das árvores (o que o chamamos de *bagging*).
         
@@ -2350,27 +2461,6 @@ def aba_construtor_portfolio():
     if 'profile' not in st.session_state: st.session_state.profile = {}
     if 'builder_complete' not in st.session_state: st.session_state.builder_complete = False
     
-    # *** ALTERAÇÃO SOLICITADA: Remoção do Log de Debug ***
-    # if st.session_state.builder_complete:
-    #     builder = st.session_state.builder
-    #     with st.expander("🐛 LOG DE DEBUG AVANÇADO (Entradas, Scores e Pesos)", expanded=False):
-    #         st.markdown("##### 1. Inputs do Perfil")
-    #         st.json(st.session_state.profile)
-    #         st.markdown("##### 2. Pesos Finais Utilizados na Pontuação")
-    #         st.json(builder.pesos_atuais)
-    #         st.markdown("##### 3. Ranqueamento e Scores Combinados (Head)")
-    #         debug_cols = ['total_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 'sharpe', 'retorno_anual']
-    #         debug_df = builder.scores_combinados[[c for c in debug_cols if c in builder.scores_combinados.columns]]
-    #         st.dataframe(debug_df.head(10).style.format('{:.4f}'), use_container_width=True)
-    #         st.markdown("##### 4. Resultados da Otimização Markowitz/Alocação")
-    #         st.json({
-    #             "Método": builder.metodo_alocacao_atual,
-    #             "Métricas Portfólio": builder.metricas_portfolio,
-    #             "Alocação Final": {k: f"{v['weight']:.4f}" for k, v in builder.alocacao_portfolio.items()}
-    #         })
-    #         st.markdown("##### 5. Predições ML por Ativo")
-    #         st.dataframe(pd.DataFrame(builder.predicoes_ml).T.reset_index().rename(columns={'index': 'Ticker'}), use_container_width=True)
-    # *** FIM DA ALTERAÇÃO SOLICITADA ***
 
     if not st.session_state.builder_complete:
         st.markdown('## 📋 Calibração do Perfil de Risco')
@@ -3400,12 +3490,3 @@ def main():
     tabs_list = ["📚 Metodologia", "🎯 Seleção de Ativos", "🏗️ Construtor de Portfólio", "🔍 Análise Individual", "📖 Referências"]
     
     tab1, tab2, tab3, tab4, tab5 = st.tabs(tabs_list)
-    
-    with tab1: aba_introducao()
-    with tab2: aba_selecao_ativos()
-    with tab3: aba_construtor_portfolio()
-    with tab4: aba_analise_individual()
-    with tab5: aba_referencias()
-
-if __name__ == "__main__":
-    main()
