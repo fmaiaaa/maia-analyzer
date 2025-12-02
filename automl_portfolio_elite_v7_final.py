@@ -3122,4 +3122,307 @@ def aba_analise_individual():
                     col3.metric("Vol. Anualizada (20d)", vol20_display)
                     
                     # --- Gráfico de Bandas de Bollinger (Reintroduzido) ---
-                    if 'bb_upper' in df
+                    if 'bb_upper' in df_completo.columns:
+                        st.markdown('#### Bandas de Bollinger (20, 2)')
+                        fig_bb = go.Figure()
+                        
+                        fig_bb.add_trace(go.Scatter(x=df_completo.index, y=df_completo['bb_upper'], name='Upper Band', line=dict(color='#95A5A6'), showlegend=False))
+                        fig_bb.add_trace(go.Scatter(x=df_completo.index, y=df_completo['bb_lower'], name='Lower Band', line=dict(color='#95A5A6'), fill='tonexty', fillcolor='rgba(149, 165, 166, 0.1)', showlegend=False))
+                        fig_bb.add_trace(go.Scatter(x=df_completo.index, y=df_completo['Close'], name='Close', line=dict(color='#2C3E50')))
+                        
+                        template = obter_template_grafico()
+                        fig_bb.update_layout(**template)
+                        # Remove título do template para evitar duplicação
+                        fig_bb.update_layout(title_text='Bandas de Bollinger (20, 2)', height=400)
+                        
+                        st.plotly_chart(fig_bb, use_container_width=True)
+                    
+                    # --- Gráfico RSI ---
+                    st.markdown('#### Índice de Força Relativa (RSI)')
+                    fig_rsi = go.Figure(go.Scatter(x=df_completo.index, y=df_completo['rsi_14'], name='RSI', line=dict(color='#8E44AD')))
+                    fig_rsi.add_hline(y=70, line_dash="dash", line_color="red"); fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
+                    
+                    template = obter_template_grafico()
+                    fig_rsi.update_layout(**template)
+                    # Remove título do template para evitar duplicação
+                    fig_rsi.update_layout(title_text='Índice de Força Relativa (RSI)', height=300)
+                    
+                    st.plotly_chart(fig_rsi, use_container_width=True)
+                    
+                    # --- Gráfico MACD ---
+                    st.markdown('#### Convergência/Divergência de Média Móvel (MACD)')
+                    fig_macd = make_subplots(rows=1, cols=1)
+                    # Certifique-se que 'macd' e 'macd_signal' estão no DF
+                    if 'macd' in df_completo.columns and 'macd_signal' in df_completo.columns:
+                        fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd'], name='MACD', line=dict(color='#2980B9')))
+                        fig_macd.add_trace(go.Scatter(x=df_completo.index, y=df_completo['macd_signal'], name='Signal', line=dict(color='#E74C3C')))
+                        fig_macd.add_trace(go.Bar(x=df_completo.index, y=df_completo['macd_diff'], name='Histograma', marker_color='#BDC3C7'))
+                    
+                        template = obter_template_grafico()
+                        fig_macd.update_layout(**template)
+                        # Remove título do template para evitar duplicação
+                        fig_macd.update_layout(title_text='Converência/Divergência de Média Móvel (MACD)', height=300)
+                        
+                        st.plotly_chart(fig_macd, use_container_width=True)
+                    else:
+                         st.info("Dados de MACD insuficientes para plotar.")
+
+                    
+                else: st.warning("Análise Técnica não disponível sem histórico de preços.")
+
+            # CORREÇÃO: Utiliza a variável tab_ml para o bloco condicional
+            if tab_ml is not None:
+                with tab_ml:
+                    st.markdown("### Predição de Machine Learning")
+                    
+                    # Se veio do ML Real (com preço) ou do Fallback (com proxy fundamentalista)
+                    ml_proba = df_completo['ML_Proba'].iloc[-1] if 'ML_Proba' in df_completo.columns else 0.5
+                    ml_conf = df_completo['ML_Confidence'].iloc[-1] if 'ML_Confidence' in df_completo.columns else 0.0
+                    
+                    # *** ALTERAÇÃO 2.4: Exibe o Score Ponderado ***
+                    ml_score_weighted_display = df_completo['ML_Score_Weighted'].iloc[-1] if 'ML_Score_Weighted' in df_completo.columns else 0.0
+                    # *** FIM ALTERAÇÃO 2.4 ***
+                    
+                    col1, col2, col3 = st.columns(3)
+                    col1.metric("Probabilidade Média de Alta", f"{ml_proba*100:.1f}%")
+                    
+                    # NOVO: Apenas se AUC > 0.0, mostra que foi treinado
+                    if ml_conf > 0.0:
+                        col2.metric("Confiança do Modelo (AUC)", f"{ml_conf:.2f}")
+                        col3.metric("Score Ponderado (Prob * AUC)", f"{ml_score_weighted_display:.3f}")
+                        st.info(f"ℹ️ **Modelo Supervisionado Ativo:** O score reflete a **MÉDIA** da probabilidade de alta do ativo nos {len(get_ml_horizons(st.session_state.profile.get('ml_lookback_days', 252)))} horizontes, conforme previsto pelo modelo. Confiança validada via AUC de teste.")
+                    else:
+                         col2.metric("Confiança do Modelo (AUC)", "N/A (Falha de Treinamento)")
+                         col3.metric("Score Ponderado (Prob * AUC)", "0.000")
+                         st.warning("⚠️ **Modelo ML Falhou:** Não foi possível treinar o modelo supervisionado (dados insuficientes ou classes desbalanceadas). A predição não está disponível.")
+                        
+                    if df_ml_meta is not None and not df_ml_meta.empty:
+                        st.markdown("#### Importância dos Fatores na Decisão")
+                        fig_imp = px.bar(df_ml_meta.head(6), x='importance', y='feature', orientation='h', title='Top Fatores')
+                        
+                        template = obter_template_grafico()
+                        fig_imp.update_layout(**template)
+                        fig_imp.update_layout(height=300)
+                        st.plotly_chart(fig_imp, use_container_width=True)
+
+            with tab5: 
+                st.markdown("### 🔬 Clusterização Geral (Ibovespa)")
+                
+                st.info(f"Analisando similaridade do **{ativo_selecionado.replace('.SA', '')}** com **TODOS** os ativos do Ibovespa (Baseado apenas em Fundamentos).")
+                
+                # 2. Coleta e Clusteriza (Apenas Fundamentos - Lista Global)
+                resultado_cluster, n_clusters = AnalisadorIndividualAtivos.realizar_clusterizacao_fundamentalista_geral(coletor, ativo_selecionado)
+                
+                if resultado_cluster is not None:
+                    st.success(f"Identificados {n_clusters} grupos (clusters) de qualidade fundamentalista.")
+                    
+                    # --- NOVO: Gráfico 3D (Com formatação de cor/símbolo) ---
+                    df_plot = resultado_cluster.copy().reset_index().rename(columns={'index': 'Ticker'})
+                    
+                    # 1. Determina a cor: Ticker Selecionado (preto) ou Cluster
+                    df_plot['Cor'] = df_plot['Cluster'].astype(str)
+                    df_plot.loc[df_plot['Ticker'] == ativo_selecionado, 'Cor'] = 'Ativo Selecionado'
+                    
+                    # 2. Determina o formato: Anomalia (Losango) ou Normal (Círculo)
+                    df_plot['Formato'] = df_plot['Anomalia'].astype(str).replace({'1': 'Normal', '-1': 'Anomalia'})
+                    
+                    # Mapeamento de cores para manter consistência, com o ativo selecionado em preto
+                    cluster_colors = obter_template_grafico()['colorway']
+                    color_map = {str(i): cluster_colors[i % len(cluster_colors)] for i in range(n_clusters)}
+                    color_map['Ativo Selecionado'] = 'black'
+                    
+                    # Mapeamento de formato
+                    symbol_map = {'Normal': 'circle', 'Anomalia': 'diamond'}
+                    
+                    # Garante que PC1, PC2 e PC3 existem
+                    if 'PC3' in df_plot.columns: # Verifica se PCA 3D é possível
+                        
+                        fig_combined = px.scatter_3d(
+                            df_plot, 
+                            x='PC1', 
+                            y='PC2', 
+                            z='PC3',
+                            color='Cor',
+                            symbol='Formato',
+                            hover_name=df_plot['Ticker'].str.replace('.SA', ''), 
+                            color_discrete_map=color_map,
+                            symbol_map=symbol_map,
+                            opacity=0.8,
+                            title="Mapa de Similaridade Fundamentalista (PCA 3D: Cluster e Anomalia)"
+                        )
+                        
+                        template = obter_template_grafico()
+                        fig_combined.update_layout(
+                            title=template['title'],
+                            paper_bgcolor=template['paper_bgcolor'],
+                            plot_bgcolor=template['plot_bgcolor'],
+                            font=template['font'],
+                            scene=dict(xaxis_title='PCA 1', yaxis_title='PCA 2', zaxis_title='PCA 3'),
+                            margin=dict(l=0, r=0, b=0, t=40),
+                            height=600
+                        )
+
+                        # Aplica o formato e tamanho para todos os pontos
+                        fig_combined.update_traces(marker=dict(size=10, line=dict(width=1, color='DarkSlateGrey')))
+                        
+                        # Aplica o formato específico para o ativo selecionado (cor preta forçada)
+                        fig_combined.update_traces(selector=dict(name='Ativo Selecionado'), 
+                                                   marker=dict(size=14, line=dict(width=2), 
+                                                               color='black', symbol='circle'))
+                        
+                        st.plotly_chart(fig_combined, use_container_width=True)
+                        
+                    else:
+                        st.warning("Dados PCA insuficientes (menos de 3 componentes) para gerar o gráfico 3D. Exibindo 2D.")
+                        # Se 3D falhar, mostra o 2D (fallback)
+                        if 'PC2' in df_plot.columns:
+                            st.markdown('#### Detecção de Anomalias (Visualização 2D - Fallback)')
+                            fig_anomaly_2d = px.scatter(
+                                df_plot, x='PC1', y='PC2',
+                                color='Cor',
+                                symbol='Formato',
+                                hover_name=df_plot['Ticker'].str.replace('.SA', ''), 
+                                color_discrete_map=color_map,
+                                symbol_map=symbol_map,
+                                title="Detecção de Anomalias (Isolation Forest) no Espaço PCA 2D"
+                            )
+                            template = obter_template_grafico()
+                            fig_anomaly_2d.update_layout(**template)
+                            fig_anomaly_2d.update_layout(height=500)
+                            fig_anomaly_2d.update_traces(marker=dict(size=10))
+                            fig_anomaly_2d.update_traces(selector=dict(name='Ativo Selecionado'), marker=dict(size=14))
+                            st.plotly_chart(fig_anomaly_2d, use_container_width=True)
+                        else:
+                             st.warning("Dados PCA insuficientes (menos de 2 componentes) para qualquer gráfico de dispersão.")
+
+                    
+                    # Tabela de Anomalia
+                    st.markdown('##### Tabela de Scores de Anomalia (Quanto maior, menos anômalo)')
+                    df_anomaly_show = resultado_cluster[['Anomaly_Score', 'Anomalia', 'Cluster']].copy()
+                    df_anomaly_show.rename(columns={'Anomaly_Score': 'Score Anomalia', 'Anomalia': 'Status', 'Cluster': 'Grupo Cluster'}, inplace=True)
+                    df_anomaly_show['Status'] = df_anomaly_show['Status'].replace({1: 'Normal', -1: 'Outlier/Anomalia'})
+                    
+                    st.dataframe(df_anomaly_show.sort_values('Score Anomalia', ascending=False), use_container_width=True)
+                    st.markdown("---")
+                    
+                    # Identifica pares
+                    if ativo_selecionado in resultado_cluster.index:
+                        cluster_ativo = resultado_cluster.loc[ativo_selecionado, 'Cluster']
+                        pares = resultado_cluster[resultado_cluster['Cluster'] == cluster_ativo].index.tolist()
+                        pares = [p.replace('.SA', '') for p in pares if p != ativo_selecionado]
+                        
+                        with st.expander(f"📋 Ver {len(pares)} ativos similares no Cluster {cluster_ativo}", expanded=True):
+                            if pares:
+                                st.write(", ".join(pares))
+                            else:
+                                st.write("Este ativo possui características únicas (Outlier).")
+                    else:
+                        st.warning("Ativo não encontrado no mapa de clusters (provavelmente sem dados suficientes).")
+                else:
+                    st.warning("Dados insuficientes para gerar clusters confiáveis.")
+        
+        except Exception as e:
+            st.error(f"Erro ao analisar o ticker {ativo_selecionado}: {str(e)}")
+            st.code(traceback.format_exc())
+
+def aba_referencias():
+    """Aba 5: Referências Bibliográficas Completas (V8.7 Original)"""
+    
+    st.markdown("## 📚 Referências e Bibliografia")
+    st.markdown("Esta seção consolida as referências bibliográficas indicadas nas ementas das disciplinas relacionadas (GRDECO222 e GRDECO203).")
+
+    st.markdown("---")
+    
+    st.markdown("### GRDECO222: Machine Learning (Prof. Rafael Martins de Souza)")
+    
+    st.markdown("**Bibliografia Obrigatória**")
+    
+    st.markdown("1. **Jupter Notebooks apresentados em sala de aula.**")
+    with st.expander("Explicação"):
+        st.write("O material principal do curso é prático, baseado nos códigos e exemplos desenvolvidos pelo professor durante as aulas.")
+        
+    st.markdown("2. **Géron, A. Mãos à Obra: Aprendizado de Máquina com Scikit-Learn, Keras e TensorFlow.**")
+    with st.expander("Explicação"):
+        st.write("Considerado um dos principais livros-texto práticos sobre Machine Learning. Cobre desde os fundamentos (Regressão, SVMs, Árvores de Decisão) até tópicos avançados de Deep Learning, com foco na implementação usando bibliotecas Python populares.")
+
+    st.markdown("---")
+    st.markdown("**Bibliografia Complementar**")
+    
+    st.markdown("1. **Coleman, C., Spencer Lyon, S., Jesse Perla, J. QuantEcon Data Science, Introduction to Economic Modeling and Data Science. (https://datascience.quantecon.org/)**")
+    with st.expander("Explicação"):
+        st.write("Um recurso online focado na aplicação de Ciência de Dados especificamente para modelagem econômica, alinhado com os objetivos da disciplina.")
+
+    st.markdown("2. **Sargent, T. J., Stachurski, J., Quantitative Economics with Python. (https://python.quantecon.org/)**")
+    with st.expander("Explicação"):
+        st.write("Outro projeto da QuantEcon, focado em métodos quantitativos e economia computacional usando Python. É uma referência padrão para economistas que programam.")
+    
+    st.markdown("---")
+    
+    st.markdown("### GRDECO203: Laboratório de Ciência de Dados Aplicados à Finanças (Prof. Diogo Tavares Robaina)")
+
+    st.markdown("**Bibliografia Básica**")
+    
+    st.markdown("1. **HILPISCH, Y. J. Python for finance: analyze big financial dat. O'Reilly Media, 2015.**")
+    with st.expander("Explicação"):
+        st.write("Uma referência clássica para finanças quantitativas em Python. Cobre manipulação de dados financeiros (séries temporais), análise de risco, e implementação de estratégias de trading e precificação de derivativos.")
+
+    st.markdown("2. **ARRATIA, A. Computational finance an introductory course with R. Atlantis, 2014.**")
+    with st.expander("Explicação"):
+        st.write("Focado em finanças computacionais usando a linguagem R, abordando conceitos introdutórios e modelagem.")
+    
+    st.markdown("3. **RASCHKA, S. Python machine learning: unlock deeper insights... Packt Publishing, 2015.**")
+    with st.expander("Explicação"):
+        st.write("Um guia popular focado na aplicação prática de algoritmos de Machine Learning com Scikit-Learn em Python, similar ao livro de Géron.")
+    
+    st.markdown("4. **MAINDONALD, J., and Braun, J. Data analysis and graphics using R: an example-based approach. Cambridge University Press, 2006.**")
+    with st.expander("Explicação"):
+        st.write("Livro focado em análise de dados e visualização gráfica utilizando a linguagem R.")
+    
+    st.markdown("5. **REYES, J. M. M. Introduction to Data Science for Social and Policy Research. Cambridge University Press, 2017.**")
+    with st.expander("Explicação"):
+        st.write("Aborda a aplicação de Ciência de Dados no contexto de ciências sociais e pesquisa de políticas públicas, relevante para a análise econômica.")
+    
+    st.markdown("---")
+    st.markdown("**Bibliografia Complementar**")
+
+    st.markdown("1. **TEAM, R. Core. 'R language definition.' R foundation for statistical computing (2000).**")
+    with st.expander("Explicação"):
+        st.write("A documentação oficial da linguagem R.")
+
+    st.markdown("2. **MISHRA, R.; RAM, B. Portfolio Selection Using R. Yugoslav Journal of Operations Research, 2020.**")
+    with st.expander("Explicação"):
+        st.write("Um artigo de pesquisa focado especificamente na aplicação da linguagem R para otimização e seleção de portfólios, muito relevante para a disciplina.")
+
+    st.markdown("3. **WICKHAM, H., et al. (dplyr, Tidy data, Advanced R, ggplot2, R for data science).**")
+    with st.expander("Explicação"):
+        st.write("Múltiplas referências de Hadley Wickham, o criador do 'Tidyverse' em R. São os pacotes e livros fundamentais para a manipulação de dados moderna (dplyr), organização (Tidy data) e visualização (ggplot2) na linguagem R.")
+
+def main():
+    if 'builder' not in st.session_state:
+        st.session_state.builder = None
+        st.session_state.builder_complete = False
+        st.session_state.profile = {}
+        st.session_state.ativos_para_analise = []
+        st.session_state.analisar_ativo_triggered = False
+        
+    configurar_pagina()
+    # Garante que st.session_state.debug_logs está inicializado para log_debug()
+    if 'debug_logs' not in st.session_state:
+        st.session_state.debug_logs = []
+    # REMOVIDO: A chamada mostrar_debug_panel() foi removida conforme solicitado.
+
+    st.markdown('<h1 class="main-header">Sistema de Otimização Quantitativa</h1>', unsafe_allow_html=True)
+    
+    # Esta linha foi simplificada no código de produção para uso das abas
+    tabs_list = ["📚 Metodologia", "🎯 Seleção de Ativos", "🏗️ Construtor de Portfólio", "🔍 Análise Individual", "📖 Referências"]
+    
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(tabs_list)
+    
+    with tab1: aba_introducao()
+    with tab2: aba_selecao_ativos()
+    with tab3: aba_construtor_portfolio()
+    with tab4: aba_analise_individual()
+    with tab5: aba_referencias()
+
+if __name__ == "__main__":
+    main()
