@@ -1977,7 +1977,7 @@ def aba_selecao_ativos():
         
         todos_tickers_ibov = sorted(list(ativos_com_setor.keys()))
         
-        # BARRA DE SELEÇÃO INDIVIDUAL
+        # BARRA DE SELECÇÃO INDIVIDUAL
         st.markdown("#### 📝 Selecione Tickers (Ibovespa)")
         ativos_selecionados = st.multiselect(
             "Pesquise e selecione os tickers:",
