@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Modelagem (V9.43): ML Restaurado para Estabilidade (Lógica 6.0.9) + GARCH Removido.
 
-Versão: 9.32.43 (Final Build: ML Estável, Vol. Histórica, UI Simplificada)
+Versão: 9.32.44 (Final Build: ML Estável, Vol. Histórica, UI Aprimorada)
 =============================================================================
 """
 
@@ -1695,6 +1695,12 @@ def configurar_pagina():
             width: 100%;
         }
 
+        /* Metrics (FORÇANDO ALTURA MÍNIMA para prevenir CLS por quebra de linha) */
+        [data-testid="stMetricValue"] {
+            min-height: 2.2rem; /* Garante que o valor da métrica tenha espaço */
+        }
+
+
         /* Tabs (centralizadas) */
         .stTabs [data-baseweb="tab-list"] { 
             border-bottom: 1px solid #eee; 
@@ -1814,25 +1820,60 @@ def aba_introducao():
 
 
     st.markdown("---")
-    with st.expander("2. Detalhamento Técnico e Gráficos de Exemplo"):
-        st.subheader("2.1. Exemplos de Componentes de Score")
-        st.write("A pontuação de um ativo é a agregação de diversos indicadores. Por exemplo, o Score Técnico considera a posição do ativo em relação à média móvel (Z-Score), o momentum (RSI/MACD) e a volatilidade (Vol20).")
+    st.subheader("2. Detalhamento do Pipeline Quantitativo")
+    st.markdown("O sistema executa um fluxo de trabalho em etapas, garantindo que o portfólio final seja robusto e estatisticamente fundamentado.")
 
-        # Exemplo de Gráfico de Contribuição de Score (Simulado)
-        # ALTERAÇÃO 5: Removido o pilar Performance do gráfico
-        fig_score_sim = go.Figure(data=[
-            go.Bar(name='Fatores', x=['Fundamental', 'Técnico', 'ML'], y=[40, 40, 20], marker_color=['#27AE60', '#3498DB', '#E67E22'])
-        ])
-        fig_score_sim.update_layout(title_text='Exemplo de Contribuição de Score por Pilar (Ativo X)', yaxis_title='Peso (%)', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=300)
-        st.plotly_chart(fig_score_sim, use_container_width=True)
-        
-        st.subheader("2.2. Mecanismo de Robustez e Fallback")
+    with st.expander("2.1. Etapa de Coleta e Enriquecimento de Dados"):
+        st.markdown("##### 📥 Módulos de Aquisição e Transformação")
         st.markdown("""
-        O sistema é resiliente a falhas de API de preço ou dados insuficientes:
+        * **Aquisição Híbrida:** Priorizamos fontes robustas (`YFinance`, `TvDatafeed`). O sistema executa um *fail-over* automático e, se falhar consecutivamente, ativa o **Modo Estático Global**.
+        * **Indicadores Técnicos:** São calculados: RSI (14), MACD (12/26/9), Momentum (10d), e Médias Móveis (50/200d).
+        * **Indicadores Fundamentalistas:** Mais de 50 métricas são coletadas (P/L, ROE, Dívida/PL, etc.) via `Pynvest` e tratadas.
+        """)
         
-        * **Modo Estático Global:** Ativado se a coleta de preços falhar consecutivamente para múltiplos ativos, impedindo que dados incompletos corrompam a análise de risco.
-        * **Fallback ML (Treinamento):** Se um ativo não tiver dados históricos de preço suficientes para treinar o modelo de Machine Learning, sua predição de ML é descartada (AUC=0). **No entanto, o ativo não é excluído da análise**, permitindo que ele seja classificado e selecionado apenas por seus fortes Fundamentos, Performance Histórica e Clusterização.
-        * **Clusterização e Fundamentos:** Os processos de Clusterização (K-Means + PCA) e a leitura dos Fundamentos são independentes do histórico de preços, garantindo que uma avaliação de **Qualidade** sempre esteja disponível.
+        st.markdown("##### Exemplo de Feature Engineering")
+        st.code("""
+# Cálculo de Momentum (10 dias)
+df['momentum_10d'] = df['close'] / df['close'].shift(10) - 1
+# Volatilidade Anualizada (20 dias)
+df['vol_20d'] = df["returns"].rolling(20).std() * np.sqrt(252) 
+        """)
+
+    with st.expander("2.2. Etapa de Machine Learning e Ranqueamento"):
+        st.markdown("##### 🧠 Modelagem de Previsão e Score")
+        st.markdown("""
+        * **Target:** A variável alvo (`Future_Direction`) é definida como a direção do preço (alta/baixa) nos próximos N dias (dias ajustados pelo perfil do usuário).
+        * **Feature Set:** O modelo utiliza uma combinação de **Indicadores Técnicos** e **Métricas Fundamentalistas** (P/L, ROE, etc.) como *features*.
+        * **Regressão Logística (Rápido):** Utiliza penalidade L2 (`LogisticRegression(penalty='l2')`) para seleção de features e regularização, garantindo velocidade e estabilidade.
+        * **Random Forest (Complexo):** Utiliza *ensemble* de árvores com profundidade limitada (`max_depth=5`) e balanceamento de classes para máxima precisão e mitigação de *overfitting* em séries temporais.
+        
+        * **Score ML Final:** É uma ponderação direta da **Probabilidade de Alta** e da **Confiança do Modelo (AUC-ROC)**, garantindo que previsões de modelos não confiáveis sejam neutralizadas.
+        """)
+        
+        st.markdown("##### Exemplo de Pipeline ML")
+        st.code("""
+# Preprocessador com normalização e One-Hot Encoding para o Cluster
+preprocessor = ColumnTransformer(
+    transformers=[('num', StandardScaler(), numeric_cols),
+                  ('cat', OneHotEncoder(handle_unknown='ignore'), categorical_cols)])
+
+# Pipeline final para treino e validação
+model_pipeline = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('classifier', RandomForestClassifier(...))
+])
+        """)
+
+
+    with st.expander("2.3. Etapa de Otimização e Alocação Final"):
+        st.markdown("##### 💼 Markowitz e Gestão de Capital")
+        st.markdown("""
+        * **Seleção por Score:** Os ativos são ranqueados pelo `Score Total` (soma ponderada dos pilares Fundamentos, Técnicos e ML). Apenas os ativos com score acima de um limite percentual (geralmente 85% do 15º melhor ativo) são considerados.
+        * **Clusterização Final:** O K-Means + PCA é aplicado nos scores finais para garantir a diversificação entre perfis de risco/retorno (clusters).
+        * **Otimização Markowitz:** Utiliza a matriz de covariância histórica para calcular a **Fronteira Eficiente**. A alocação final pode ser ajustada para:
+            1. **Maximização de Sharpe (MaxSharpe):** Para perfis mais arrojados.
+            2. **Minimização de Volatilidade (MinVolatility):** Para perfis mais conservadores.
+        * **Cálculo de Compra (Integridade Financeira):** O sistema calcula a quantidade exata de ações inteiras a serem compradas com o capital fornecido (`math.floor`), retornando o valor residual (*sobra*).
         """)
 
 def aba_selecao_ativos():
@@ -2299,7 +2340,8 @@ def aba_construtor_portfolio():
             
             # Condição para mostrar resultados ML: Se o score ML ponderado for > 0 ou se o modo geral foi forçado
             # A variável is_ml_actually_trained já foi corrigida (Alteração 3)
-            if has_price_data and st.session_state.get('pipeline_mode_radio', '').startswith('Modo Geral'):
+            # ALTERAÇÃO: Força a exibição da seção ML se houver dados de preço (has_price_data)
+            if has_price_data:
                  
                  if is_ml_actually_trained:
                      # ALTERAÇÃO 4: Nome do modelo atualizado para refletir o LogReg/RandomForest
@@ -2317,7 +2359,7 @@ def aba_construtor_portfolio():
                             'Modelo': ml_info.get('model_name', 'N/A')
                         })
                      
-                     df_ml = pd.DataFrame(ml_data).dropna(subset=['Score/Prob.'])
+                     df_ml = pd.DataFrame(ml_data).dropna(subset=['Confiança']) # Dropa se não houve treino ML
                 
                      if not df_ml.empty:
                         fig_ml = go.Figure()
@@ -2350,9 +2392,9 @@ def aba_construtor_portfolio():
                         df_ml_display['Confiança'] = df_ml_display['Confiança'].apply(lambda x: safe_format(x))
                         st.dataframe(df_ml_display, use_container_width=True, hide_index=True)
                      else:
-                         st.warning("Não há dados de ML para exibir.")
+                         st.info("ℹ️ **Modelo ML Não Treinado:** A pipeline de Machine Learning falhou para todos os ativos. A classificação se baseia puramente nos fatores Fundamentais e Técnicos.")
                  else:
-                     st.info("ℹ️ **Modelo ML Não Treinado:** A pipeline de Machine Learning falhou para todos os ativos no universo de análise. A classificação se baseia puramente nos fatores Fundamentais e Técnicos (Modo Geral com ML Desativado).")
+                      st.info("ℹ️ **Modelo ML Não Treinado:** A pipeline de Machine Learning falhou para todos os ativos. A classificação se baseia puramente nos fatores Fundamentais e Técnicos.")
 
 
             # Sempre mostra a análise de Fundamentos/Cluster (que é a base)
@@ -2698,7 +2740,7 @@ def aba_analise_individual():
     col_modes = st.columns(2) # Reduzido para 2 colunas para ML e GARCH
     
     with col_modes[0]:
-        st.markdown("##### Volatilidade (Condicional):") # Nome alterado
+        st.markdown("##### Volatilidade (Risco):") # Nome alterado
         # ALTERAÇÃO: Apenas GARCH(1,1) é permitido (para manter o layout, mas é apenas vol histórica)
         # REMOVIDO o radio button de seleção de volatilidade (Correção)
         st.info("Modelo de Risco: Volatilidade Histórica Anualizada")
@@ -2758,7 +2800,8 @@ def aba_analise_individual():
                 
             # Define a lista de abas, incluindo ML se foi treinado
             tabs_list_individual = ["📊 Visão Geral", "💼 Fundamentos", "🔧 Análise Técnica", "🔬 Clusterização Geral"]
-            if is_ml_trained: tabs_list_individual.insert(3, "🤖 Machine Learning") # Mantido o ML se funcionar
+            # ALTERAÇÃO: Mantém a aba ML sempre que houver dados de preço, para consistência da UI
+            if has_price_data and not static_mode: tabs_list_individual.insert(3, "🤖 Machine Learning") 
 
             tabs_map = st.tabs(tabs_list_individual)
             
@@ -2770,45 +2813,39 @@ def aba_analise_individual():
             tab5 = tabs_map[tab_map_index("🔬 Clusterização Geral")]
             
             # CORREÇÃO: Define tab_ml condicionalmente para evitar UnboundLocalError
-            tab_ml = tabs_map[tab_map_index("🤖 Machine Learning")] if is_ml_trained else None
+            tab_ml = tabs_map[tab_map_index("🤖 Machine Learning")] if "🤖 Machine Learning" in tabs_list_individual else None
             
             # Abas 1-4: Lógica Padrão de Exibição (igual à versão anterior)
             with tab1:
                 st.markdown(f"### {ativo_selecionado.replace('.SA', '')} - Resumo de Mercado")
+                # CORREÇÃO: Reorganizando as colunas para evitar duplicação e alinhar
                 col1, col2, col3, col4, col5 = st.columns(5)
+                
+                # Seção de Preço (sempre na coluna 1)
                 if not static_mode and 'Close' in df_completo.columns:
                     preco_atual = df_completo['Close'].iloc[-1]
                     variacao_dia = df_completo['returns'].iloc[-1] * 100 if 'returns' in df_completo.columns else 0.0
                     volume_medio = df_completo['Volume'].mean() if 'Volume' in df_completo.columns else 0.0
                     vol_anual = features_fund.get('annual_volatility', 0) * 100
-                    # GARCH removido, então usamos vol_anual sempre
                     garch_model_name = features_fund.get('garch_model', "Vol. Histórica") # Nome Hardcoded
                     
+                    # Exibição de Métricas (Ajuste para usar colunas 1, 2, 3, 4, 5)
                     col1.metric("Preço", f"R$ {preco_atual:.2f}", f"{variacao_dia:+.2f}%")
                     col2.metric("Volume Médio", f"{volume_medio:,.0f}")
-                    # REMOVIDO: O display Vol. Anualizada (Hist) para simplificar UI (Correção)
-                    # col3.metric("Vol. Anualizada (Hist)", f"{vol_anual:.2f}%") 
-                    
-                    # Exibe Vol Histórica
-                    col5.metric(f"Vol. Anualizada", f"{vol_anual:.2f}%")
-                    
-                    # Coluna 3 agora exibe Setor
+
+                    # CORREÇÃO: Removido duplicação. Usando colunas 3 e 4
                     col3.metric("Setor", features_fund.get('sector', 'N/A'))
-                    # Coluna 4 exibe Indústria
                     col4.metric("Indústria", features_fund.get('industry', 'N/A'))
                     
-
+                    # Coluna 5: Volatilidade (Vol Histórica)
+                    col5.metric(f"Vol. Anualizada", f"{vol_anual:.2f}%")
 
                 else:
-                    col1.metric("Preço", "N/A", "N/A"); col2.metric("Volume Médio", "N/A"); col5.metric("Volatilidade", "N/A")
+                    col1.metric("Preço", "N/A", "N/A"); col2.metric("Volume Médio", "N/A"); 
+                    col3.metric("Setor", features_fund.get('sector', 'N/A'));
+                    col4.metric("Indústria", features_fund.get('industry', 'N/A'));
+                    col5.metric("Volatilidade", "N/A")
                 
-                # Fallback para Setor se pynvest falhar
-                setor = features_fund.get('sector')
-                if setor == 'Unknown' or setor is None:
-                     setor = FALLBACK_SETORES.get(ativo_selecionado, 'N/A')
-
-                col3.metric("Setor", setor)
-                col4.metric("Indústria", features_fund.get('industry', 'N/A'))
                 
                 if not static_mode and not df_completo.empty and 'Open' in df_completo.columns:
                     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
@@ -2911,7 +2948,8 @@ def aba_analise_individual():
                     # --- Gráfico RSI ---
                     st.markdown('#### Índice de Força Relativa (RSI)')
                     fig_rsi = go.Figure(go.Scatter(x=df_completo.index, y=df_completo['rsi_14'], name='RSI', line=dict(color='#8E44AD')))
-                    fig_rsi.add_hline(y=70, line_dash="dash", line_color="red"); fig_rsi.add_hline(y=30, line_dash="dash", line_color="green")
+                    fig_rsi.add_hline(y=70, line_dash="dash", line_color="red", row=1, col=1); 
+                    fig_rsi.add_hline(y=30, line_dash="dash", line_color="green", row=1, col=1)
                     
                     template = obter_template_grafico()
                     fig_rsi.update_layout(**template)
@@ -2933,7 +2971,7 @@ def aba_analise_individual():
                         template = obter_template_grafico()
                         fig_macd.update_layout(**template)
                         # Remove título do template para evitar duplicação
-                        fig_macd.update_layout(title_text='Convergência/Divergência de Média Móvel (MACD)', height=300)
+                        fig_macd.update_layout(title_text='Converência/Divergência de Média Móvel (MACD)', height=300)
                         
                         st.plotly_chart(fig_macd, use_container_width=True)
                     else:
