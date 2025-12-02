@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.6 - REVERSÃO MARKOWITZ/DINÂMICO): Pesos Dinâmicos + Otimização Markowitz + Seleção por Score e Diversificação de Cluster.
 - Modelagem (V9.6): ML Restaurado para Estabilidade (Lógica 6.0.9) + GARCH Removido da UI/Lógica de Otimização.
 
-Versão: 9.6.5 (Fix: Implementação de Fallback ML em 3 Níveis (AutoML -> Analyzer -> Fundamentalista))
+Versão: 9.6.4 (Fix: Consistência do Pipeline ML na Construção e Ajustes na UI)
 =============================================================================
 """
 
@@ -1253,7 +1253,7 @@ class ConstrutorPortfolioAutoML:
         
         for i, ativo in enumerate(ativos_com_dados):
             # Inicializa com 0.5 (neutro) e AUC 0.0 (sem sucesso)
-            result_for_ativo = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': MODEL_NAME}
+            result_for_ativo = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': 'Not Run/Data Error'}
             
             try:
                 if progress_callback: progress_callback.progress(50 + int((i/len(ativos_com_dados))*20), text=f"Treinando {MODEL_NAME}: {ativo}...")
@@ -1379,142 +1379,21 @@ class ConstrutorPortfolioAutoML:
                     df_local.loc[df_local.index[-1], 'ML_Confidence'] = 0.0
                 
                 # O resultado no dictionary permanece neutro (0.5 prob, 0.0 AUC) para que o score ML ponderado seja 0
-                result_for_ativo = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': MODEL_NAME + ' Failed'}
+                result_for_ativo = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': 'Training Failed'}
                 
             all_ml_results[ativo] = result_for_ativo
 
 
         # Condição de Falha Total: Se todos os ativos falharem, forçamos o AUC=0 para desabilitar o score ML ponderado.
         if total_ml_success == 0 and len(ativos_com_dados) > 0:
-            log_debug(f"AVISO: Falha total no ML supervisionado primário ({MODEL_NAME}).")
-            
+            log_debug("AVISO: Falha total no ML supervisionado. Score ML será desabilitado/neutro.")
+            for ativo in ativos_com_dados:
+                all_ml_results[ativo]['auc_roc_score'] = 0.0
+                all_ml_results[ativo]['model_name'] = 'Total Fallback'
         
         self.predicoes_ml = all_ml_results
         log_debug("Pipeline de Treinamento ML/Clusterização concluído.")
 
-
-    def _fallback_ml_analyzer(self, ml_lookback_days: int) -> dict:
-        """
-        FALLBACK ML (Nível 2) - Usa lógica do portfolio_analyzer.py (RandomForest, features simplificadas).
-        (COPIADO E ADAPTADO DA LÓGICA DO portfolio_analyzer.py)
-        """
-        # Features usadas no portfolio_analyzer.py (V6.0.9)
-        ANALYZER_ML_FEATURES = [
-            'RSI', 'MACD', 'Volatility', 'Momentum', 'SMA_50', 'SMA_200',
-            'PE_Ratio', 'PB_Ratio', 'Div_Yield', 'ROE',
-            'pe_rel_sector', 'pb_rel_sector', 
-            # Note: 'Cluster' é ignorado aqui para evitar complexidade de re-clusterização
-        ]
-        
-        all_ml_results = {}
-        ativos_com_dados = [s for s in self.ativos_sucesso if s in self.dados_por_ativo]
-
-        log_debug(f"Iniciando FALLBACK ML (Analyzer V6.0.9) com lookback de {ml_lookback_days} dias.")
-
-        for symbol in ativos_com_dados:
-            # Inicializa resultado neutro/falha
-            result_for_ativo = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': 'RF Analyzer V6.0.9'}
-            
-            try:
-                df = self.dados_por_ativo[symbol].copy()
-                
-                # 1. Cria/Mapeia features necessárias (RSI, MACD, etc.)
-                df['Returns'] = df.get('returns', df['Close'].pct_change())
-                # Reutiliza rsi_14 (já calculado pelo CalculadoraTecnica), renomeando
-                df['RSI'] = df.get('rsi_14', np.nan) 
-                df['MACD'] = df.get('macd', np.nan) # Linha MACD (12-26)
-                df['MACD_Signal'] = df.get('macd_signal', np.nan)
-                
-                # Recalcula Momentum e SMAs para corresponder à lógica do Analyzer
-                df['Momentum'] = df['Close'] / df['Close'].shift(10) - 1 
-                df['SMA_50'] = df['Close'].rolling(window=50).mean()
-                df['SMA_200'] = df['Close'].rolling(window=200).mean()
-                # Reutiliza vol_20d (já calculado pelo CalculadoraTecnica), renomeando
-                df['Volatility'] = df.get('vol_20d', df['Returns'].rolling(window=20).std() * np.sqrt(252))
-
-                # 2. Cria target: 1 se preço subiu após N dias, 0 caso contrário (Target da V6.0.9)
-                df['Future_Direction'] = np.where(
-                    df['Close'].pct_change(ml_lookback_days).shift(-ml_lookback_days) > 0,
-                    1,
-                    0
-                )
-
-                # 3. Adiciona Fundamentos (mapeamento do Fundamentus para o Analyzer)
-                if symbol in self.dados_fundamentalistas.index:
-                    fund_data = self.dados_fundamentalistas.loc[symbol].to_dict()
-                    for col_analyzer in ANALYZER_ML_FEATURES:
-                        col_auto = col_analyzer.lower() # Ex: PE_Ratio -> pe_ratio
-                        if col_auto in fund_data and col_analyzer not in df.columns:
-                            df[col_analyzer] = fund_data[col_auto]
-                        elif col_analyzer in fund_data and col_analyzer not in df.columns: # Para as colunas setoriais
-                             df[col_analyzer] = fund_data[col_analyzer] 
-                
-                # --- PREPARAÇÃO ML ---
-                current_features = [f for f in ANALYZER_ML_FEATURES if f in df.columns and f != 'Cluster']
-                df.dropna(subset=current_features + ['Future_Direction'], inplace=True)
-
-                if len(df) < MIN_TRAIN_DAYS_ML:
-                    log_debug(f"FallBack ML {symbol}: Dados insuficientes ({len(df)}). Score Neutro.")
-                    all_ml_results[symbol] = result_for_ativo
-                    continue
-
-                try:
-                    X = df[current_features].iloc[:-ml_lookback_days].copy()
-                    y = df['Future_Direction'].iloc[:-ml_lookback_days]
-
-                    numeric_cols = X.select_dtypes(include=np.number).columns.tolist()
-
-                    # Preprocessor do Analyzer V6.0.9
-                    preprocessor = ColumnTransformer(
-                        transformers=[
-                            ('num', StandardScaler(), [f for f in numeric_cols if 'rel_sector' not in f]),
-                            ('rel', 'passthrough', [f for f in numeric_cols if 'rel_sector' in f]),
-                        ],
-                        remainder='passthrough'
-                    )
-                    
-                    # --- Usando RandomForestClassifier ---
-                    model = Pipeline(steps=[
-                        ('preprocessor', preprocessor),
-                        ('classifier', RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced'))
-                    ])
-                    
-                    if len(np.unique(y)) < 2:
-                        log_debug(f"FallBack ML {symbol}: Classe única. Predição neutra (0.5).")
-                        all_ml_results[symbol] = result_for_ativo
-                        continue
-                    
-                    # Treina o modelo
-                    model.fit(X, y)
-                    
-                    scores = cross_val_score(
-                        model, X, y,
-                        cv=TimeSeriesSplit(n_splits=5),
-                        scoring='roc_auc'
-                    )
-                    auc_roc_score = scores.mean()
-                    
-                    last_features = df[current_features].iloc[[-ml_lookback_days]].copy()
-                    proba = model.predict_proba(last_features)[0][1]
-                    
-                    # Armazena previsão (SUCESSO)
-                    result_for_ativo = {
-                        'predicted_proba_up': proba,
-                        'auc_roc_score': auc_roc_score,
-                        'model_name': 'RF Analyzer V6.0.9'
-                    }
-                    log_debug(f"FallBack ML {symbol}: Sucesso. Proba: {proba:.2f}, AUC: {auc_roc_score:.2f}")
-
-                except Exception as e:
-                    log_debug(f"FallBack ML {symbol}: Falha no treino do RF Analyzer. Erro: {str(e)[:50]}")
-                    # O resultado permanece neutro/falho
-                
-            except Exception as e:
-                log_debug(f"FallBack ML {symbol}: Erro Crítico no Pipeline Analyzer. Erro: {str(e)[:50]}")
-            
-            all_ml_results[symbol] = result_for_ativo
-
-        return all_ml_results
 
     def realizar_clusterizacao_final(self):
         if self.scores_combinados.empty: return
@@ -1878,8 +1757,7 @@ class ConstrutorPortfolioAutoML:
                 ml_score_weighted = score_row.get('ml_score_weighted', 0.0)
                 ml_prob = ml_data.get('predicted_proba_up', np.nan)
                 ml_auc = ml_data.get('auc_roc_score', np.nan)
-                ml_model_name = ml_data.get('model_name', 'N/A')
-                justification.append(f"Score ML: {ml_score_weighted:.3f} (Prob {ml_prob*100:.1f}%, Conf {ml_auc:.2f} - {ml_model_name})")
+                justification.append(f"Score ML: {ml_score_weighted:.3f} (Prob {ml_prob*100:.1f}%, Conf {ml_auc:.2f})")
             
             # Adiciona Cluster e Setor
             cluster = score_row.get('Final_Cluster', 'N/A')
@@ -1911,35 +1789,11 @@ class ConstrutorPortfolioAutoML:
             if progress_bar: progress_bar.progress(30, text="Calculando métricas setoriais e volatilidade...")
             self.calculate_cross_sectional_features(); self.calcular_volatilidades_garch()
             
-            # VARIÁVEL DE CONTROLE
-            total_ml_success = 0
-            
-            # Etapa 3.1: Pipeline ML Primário (LogReg/Ensemble do AutoML)
             if pipeline_mode == 'general':
-                if progress_bar: progress_bar.progress(50, text=f"Executando Pipeline ML Primário ({ml_mode.upper()})...")
+                if progress_bar: progress_bar.progress(50, text=f"Executando Pipeline ML ({ml_mode.upper()})...")
                 self.treinar_modelos_ensemble(ml_mode=ml_mode, progress_callback=progress_bar)
-                
-                # Verifica se o ML primário foi bem-sucedido (pelo menos um ativo com AUC > 0)
-                total_ml_success = sum(1 for res in self.predicoes_ml.values() if res.get('auc_roc_score', 0.0) > 0.0)
-                
-                # FALLBACK 1: Tenta ML do Analyzer se o primário falhou
-                if total_ml_success == 0:
-                    log_debug("AVISO: ML Primário falhou para todos os ativos. Ativando FALLBACK ML (Analyzer V6.0.9).")
-                    if progress_bar: progress_bar.progress(60, text="Executando FALLBACK ML (Analyzer V6.0.9)...")
-                    
-                    # O Fallback do Analyzer usa o lookback do perfil (Curto/Médio/Longo)
-                    ml_lookback_days = perfil_inputs.get('ml_lookback_days', 252)
-                    self.predicoes_ml = self._fallback_ml_analyzer(ml_lookback_days=ml_lookback_days)
-                    
-                    # Verifica o sucesso do Fallback ML
-                    total_ml_success = sum(1 for res in self.predicoes_ml.values() if res.get('auc_roc_score', 0.0) > 0.0)
-
-            # FALLBACK 2 (FINAL): Modo Fundamentalista
-            # Se o modo fundamentalista foi escolhido OU se ML Primário e Secundário falharam
-            if pipeline_mode == 'fundamentalista' or total_ml_success == 0:
-                 if total_ml_success == 0:
-                     log_debug("AVISO: ML Primário e Secundário falharam. Ativando FALLBACK FUNDAMENTALISTA (Score ML=0).")
-                 
+            else:
+                 # Simula o resultado de ML para que o score ML seja desativado, mas o processo continue.
                  for ativo in self.ativos_sucesso:
                     self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': 'Fundamental Mode Forced'}
                  if progress_bar: progress_bar.progress(60, text="Pulando ML (Modo Fundamentalista Ativo)...")
@@ -2227,11 +2081,7 @@ def aba_introducao():
         O sistema é resiliente a falhas de API de preço ou dados insuficientes:
         
         * **Modo Estático Global:** Ativado se a coleta de preços falhar consecutivamente para múltiplos ativos, impedindo que dados incompletos corrompam a análise de risco.
-        * **Fallback ML (3 Níveis):** O sistema tenta 3 modelos de ML sequencialmente: 
-          1. **Primário:** LogReg/Ensemble (AutoML).
-          2. **Secundário:** RandomForest (Lógica Analyzer V6.0.9).
-          3. **Final:** Fundamentalista (Score ML é desabilitado). 
-          Isso garante que a análise use a melhor previsão de movimento futuro disponível ou, na pior das hipóteses, priorize Fundamentos/Técnicos se o ML falhar completamente.
+        * **Fallback ML (Treinamento):** Se um ativo não tiver dados históricos de preço suficientes para treinar o modelo de Machine Learning, sua predição de ML é descartada (**o Score ML é zerado pelo Fator Confiança AUC=0**). No entanto, o ativo não é excluído da análise, permitindo que ele seja classificado e selecionado apenas por seus fortes Fundamentos e Fatores Técnicos/Performance.
         * **Clusterização e Fundamentos:** Os processos de Clusterização (K-Means + PCA) e a leitura dos Fundamentos são independentes do histórico de preços, garantindo que uma avaliação de **Qualidade** sempre esteja disponível.
         """)
 
