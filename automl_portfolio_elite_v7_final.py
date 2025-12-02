@@ -148,11 +148,6 @@ LGBM_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel"]
 
 # =============================================================================
 # 4. LISTAS DE ATIVOS E SETORES (AJUSTADAS SOMENTE PARA IBOVESPA)
-#
-# ATUALIZAÇÃO: Inclusão da nova lista completa de ativos e setores fornecida
-# pelo usuário. Tickers da B3 (Ações, FIIs, Fiagros, ETFs) recebem .SA. BDRs
-# (final 31, 33, 34, 35) permanecem sem sufixo. Tickers não-padrão/placeholders
-# (com 'F' no início, como FRENT3) foram removidos para garantir a colega.
 # =============================================================================
 
 ATIVOS_POR_SETOR_IBOV = {
@@ -305,9 +300,6 @@ ATIVOS_POR_SETOR = {
 # =============================================================================
 # 5. MAPEAMENTOS DE PONTUAÇÃO DO QUESTIONÁRIO (Design Original)
 # =============================================================================
-# ... Rest of the file remains unchanged from here ...
-# (The code below this point is identical to the original file)
-# ...
 
 SCORE_MAP_ORIGINAL = {
     'CT: Concordo Totalmente': 5, 'C: Concordo': 4, 'N: Neutro': 3, 'D: Discordo': 2, 'DT: Discordo Totalmente': 1
@@ -2275,7 +2267,7 @@ def aba_introducao():
         st.write("""
         A MPT é a espinha dorsal da nossa fase de alocação de capital. Ela se baseia no princípio de que o risco de um portfólio não é a mera soma dos riscos individuais dos ativos, mas sim o risco resultante da **combinação** desses ativos, considerando a correlação entre eles.
         
-        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente** , que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
+        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente** [Image of Efficient Frontier], que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
         """)
         
         col_mpt_1, col_mpt_2 = st.columns(2)
@@ -2321,7 +2313,7 @@ def aba_introducao():
         
         st.markdown("##### 4.2. Random Forest (Floresta Aleatória)")
         st.write("""
-        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão .
+        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão [Image of Random Forest structure].
         
         **Funcionamento:** Cada árvore na floresta é treinada em uma subamostra diferente do conjunto de dados e em um subconjunto aleatório de *features*. A previsão final é determinada pela maioria dos votos das árvores (o que o chamamos de *bagging*).
         
@@ -2461,6 +2453,27 @@ def aba_construtor_portfolio():
     if 'profile' not in st.session_state: st.session_state.profile = {}
     if 'builder_complete' not in st.session_state: st.session_state.builder_complete = False
     
+    # *** ALTERAÇÃO SOLICITADA: Remoção do Log de Debug ***
+    # if st.session_state.builder_complete:
+    #     builder = st.session_state.builder
+    #     with st.expander("🐛 LOG DE DEBUG AVANÇADO (Entradas, Scores e Pesos)", expanded=False):
+    #         st.markdown("##### 1. Inputs do Perfil")
+    #         st.json(st.session_state.profile)
+    #         st.markdown("##### 2. Pesos Finais Utilizados na Pontuação")
+    #         st.json(builder.pesos_atuais)
+    #         st.markdown("##### 3. Ranqueamento e Scores Combinados (Head)")
+    #         debug_cols = ['total_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 'sharpe', 'retorno_anual']
+    #         debug_df = builder.scores_combinados[[c for c in debug_cols if c in builder.scores_combinados.columns]]
+    #         st.dataframe(debug_df.head(10).style.format('{:.4f}'), use_container_width=True)
+    #         st.markdown("##### 4. Resultados da Otimização Markowitz/Alocação")
+    #         st.json({
+    #             "Método": builder.metodo_alocacao_atual,
+    #             "Métricas Portfólio": builder.metricas_portfolio,
+    #             "Alocação Final": {k: f"{v['weight']:.4f}" for k, v in builder.alocacao_portfolio.items()}
+    #         })
+    #         st.markdown("##### 5. Predições ML por Ativo")
+    #         st.dataframe(pd.DataFrame(builder.predicoes_ml).T.reset_index().rename(columns={'index': 'Ticker'}), use_container_width=True)
+    # *** FIM DA ALTERAÇÃO SOLICITADA ***
 
     if not st.session_state.builder_complete:
         st.markdown('## 📋 Calibração do Perfil de Risco')
@@ -3490,3 +3503,12 @@ def main():
     tabs_list = ["📚 Metodologia", "🎯 Seleção de Ativos", "🏗️ Construtor de Portfólio", "🔍 Análise Individual", "📖 Referências"]
     
     tab1, tab2, tab3, tab4, tab5 = st.tabs(tabs_list)
+    
+    with tab1: aba_introducao()
+    with tab2: aba_selecao_ativos()
+    with tab3: aba_construtor_portfolio()
+    with tab4: aba_analise_individual()
+    with tab5: aba_referencias()
+
+if __name__ == "__main__":
+    main()
