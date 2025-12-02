@@ -138,7 +138,7 @@ LOOKBACK_ML_DAYS_MAP = {
 # FEATURES DE ML (LÓGICA DO ARQUIVO PORTFOLIO_ANALYZER.PY - RENOMEADA PARA CONSISTÊNCIA)
 ML_FEATURES = [
     'rsi_14', 'macd_diff', 'vol_20d', 'momentum_10d', 'sma_50d', 'sma_200d', # Technical (Renomeado)
-    'pe_ratio', 'pb_ratio', 'div_yield', 'roe', # Fundamental (Removidos pe_rel_sector e pb_rel_sector)
+    'pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', # Fundamental
     # 'Cluster' # REMOVIDO: Clusterização não é consistente no pipeline ML, especialmente para ativo único.
 ]
 ML_CATEGORICAL_FEATURES = [] # Apenas se houver colunas categóricas no ML_FEATURES
@@ -148,163 +148,36 @@ LGBM_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel"]
 
 # =============================================================================
 # 4. LISTAS DE ATIVOS E SETORES (AJUSTADAS SOMENTE PARA IBOVESPA)
-#
-# ATUALIZAÇÃO: Inclusão da nova lista completa de ativos e setores fornecida
-# pelo usuário. Tickers da B3 (Ações, FIIs, Fiagros, ETFs) recebem .SA. BDRs
-# (final 31, 33, 34, 35) permanecem sem sufixo. Tickers não-padrão/placeholders
-# (com 'F' no início, como FRENT3) foram removidos para garantir a colega.
 # =============================================================================
 
-ATIVOS_POR_SETOR_IBOV = {
-    'Consumo Cíclico': [
-        'AZZA3.SA', 'ALOS3.SA', 'VIIA3.SA', 'CEDO4.SA', 'NFLX34', 'NIKE34', 'MCDC34', 
-        'HOME34', 'FDMO34', 'CMCS34', 'AMZO34', 'RDNI3.SA', 'SLED4.SA', 'SLED3.SA', 
-        'RSID3.SA', 'MNDL3.SA', 'LEVE3.SA', 'CTKA4.SA', 'CTKA3.SA', 'MYPK3.SA', 
-        'GRND3.SA', 'LCAM3.SA', 'CEAB3.SA', 'VSTE3.SA', 'CGRA3.SA', 'ESTR4.SA', 
-        'ESTR3.SA', 'DIRR3.SA', 'CTNM3.SA', 'ANIM3.SA', 'EVEN3.SA', 'AMAR3.SA', 
-        'MOVI3.SA', 'JHSF3.SA', 'HBOR3.SA', 'PDGR3.SA', 'ARZZ3.SA', 'EZTC3.SA', 
-        'ALPA3.SA', 'RENT3.SA', 'MRVE3.SA', 'MGLU3.SA', 'LREN3.SA', 'COGN3.SA', 
-        'WHRL4.SA', 'WHRL3.SA', 'TCSA3.SA', 'SBUB34', 'SMLS3.SA', 'SEER3.SA', 
-        'HOOT4.SA', 'GFSA3.SA', 'YDUQ3.SA', 'CYRE3.SA', 'CVCB3.SA', 'SBFG3.SA',
-        # Novos ativos incluídos
-        'MOTV3.SA', 'AMOB3.SA', 'BHIA3.SA', 'ZAMP3.SA', 'WEST3.SA', 'CSED3.SA', 
-        'TOKY3.SA', 'ESPA3.SA', 'ENJU3.SA', 'CASH3.SA', 'TFCO4.SA', 'CONX3.SA',
-        'GMAT3.SA', 'SEQL3.SA', 'LJQQ3.SA', 'DMVF3.SA', 'SOMA3.SA', 'RIVA3.SA'
-    ],
-    'Consumo não Cíclico': [
-        'PRVA3.SA', 'WALM34', 'SBUB34', 'SMTO3.SA', 'MDIA3.SA', 'CAML3.SA', 'AGRO3.SA', 
-        'BEEF3.SA', 'BEEF11.SA', 'VIVA3.SA', 'CRFB3.SA', 'PCAR3.SA', 'NTCO3.SA', 
-        'MRFG3.SA', 'JBSS3.SA', 'PGCO34', 'MBRF3.SA',
-        # Novos ativos incluídos
-        'NATU3.SA', 'VITT3.SA', 'PGMN3.SA', 'PETZ3.SA', 'ASAI3.SA', 'JALL3.SA'
-    ],
-    'Financeiro': [
-        'NDIV11.SA', 'CSUD3.SA', 'INBR31', 'BIDI3.SA', 'BIDI11.SA', 'BIDI4.SA', 'STOC31', 
-        'NUBR33', 'IGTI11.SA', 'IGTI3.SA', 'XPBR31', 'TRAD3.SA', 'BSLI4.SA', 'BSLI3.SA', 
-        'BTTL3.SA', 'BPAR3.SA', 'WFCO34', 'VISA34', 'MSBR34', 'MSCD34', 'JPMC34', 
-        'HONB34', 'GEOO34', 'GSGI34', 'CTGP34', 'BOAC34', '3MMMC34', 'SCAR3.SA', 
-        'LPSB3.SA', 'BMGB11.SA', 'BMGB4.SA', 'IGBR3.SA', 'GSHP3.SA', 'PSSA3.SA', 
-        'CARD3.SA', 'BBRK3.SA', 'BRPR3.SA', 'BRSR6.SA', 'BRSR5.SA', 'BRSR3.SA', 
-        'SANB4.SA', 'SANB3.SA', 'SANB11.SA', 'MULT3.SA', 'ITUB3.SA', 'ITUB4.SA', 
-        'ALSO3.SA', 'BMIN3.SA', 'MERC4.SA', 'LOGG3.SA', 'ITSA4.SA', 'ITSA3.SA', 
-        'IRBR3.SA', 'PDTC3.SA', 'SYNE3.SA', 'BBDC4.SA', 'BBDC3.SA', 'BRML3.SA', 
-        'APER3.SA', 'BBSE3.SA', 'BPAN4.SA', 'BBAS3.SA', 'BBAS12.SA', 'BBAS11.SA', 
-        'AXPB34',
-        # Novos ativos incluídos (FIIs, Fiagros e Ações)
-        'BRBI11.SA', 'MODL4.SA', 'MODL11.SA', 'MODL3.SA', 'CXSE3.SA', 'BOAS3.SA', 
-        'HGAG11.SA', 'REAG3.SA', 'CJCT11.SA', 'BMLC11.SA', 'RECR11.SA', 'URPR11.SA', 
-        'DEVA11.SA', 'MFAI11.SA', 'HODL11.SA', 'FOOD11.SA', 'RZAT11.SA', 'GRWA11.SA', 
-        'CRAA11.SA', 'BBGO11.SA', 'AGRX11.SA', 'PLCA11.SA', 'RURA11.SA', 'SNAG11.SA', 
-        'GCRA11.SA', 'VCRA11.SA', 'KNCA11.SA', 'NCRA11.SA', 'CPTR11.SA', 'FGAA11.SA', 
-        'EGAF11.SA', 'VGIA11.SA', 'LSAG11.SA'
-    ],
-    'Materiais Básicos': [
-        'LAND3.SA', 'DEXP4.SA', 'DEXP3.SA', 'RANI3.SA', 'FCXO34', 'PMAM3.SA', 'FESA4.SA', 
-        'FESA3.SA', 'EUCA3.SA', 'SUZB3.SA', 'KLBN4.SA', 'KLBN3.SA', 'KLBN11.SA', 
-        'VALE5.SA', 'UNIP6.SA', 'UNIP5.SA', 'UNIP3.SA', 'NEMO6.SA', 'NEMO5.SA', 
-        'NEMO3.SA', 'MMXM3.SA', 'MMXM11.SA', 'GOAU4.SA', 'DXCO3.SA', 'CSNA3.SA', 
-        'BRKM6.SA', 'BRKM5.SA', 'BRKM3.SA', 'BRAP4.SA', 'BRAP3.SA', 'ARMT34',
-        # Novos ativos incluídos
-        'CMIN3.SA', 'ORVR3.SA', 'SOJA3.SA', 'BOAS3.SA'
-    ],
-    'Outros': [
-        'BDOM11.SA', 'VTRU3.SA', 'RBIV11.SA', 'CPLE11.SA', 'GTLG11.SA', 'PPLA11.SA', 
-        'BTLT39', 'HY39', 'SHV39', 'IEI39', 'IYT39', 'BGOV39', 'ALUG11.SA', 'WRLD11.SA', 
-        'CXAG11.SA', 'ROOF11.SA', 'JGPX11.SA', 'PURB11.SA', 'BIME11.SA', 'JSAF11.SA', 
-        'TELD11.SA', 'MORC11.SA', 'HUSI11.SA', 'CYCR11.SA', 'EQIR11.SA', 'CACR11.SA', 
-        'RZAG11.SA', 'PORT3.SA', 'GETT11.SA', 'GETT4.SA', 'GETT3.SA', 'BIYE39', 
-        'BSCZ39', 'BUSA39', 'BERU39', 'BSOX39', 'BFCG39', 'BFXH39', 'BFTA39', 'BKYY39', 
-        'BQTC39', 'BFDN39', 'BFDA39', 'BFPI39', 'BQQW39', 'BFPX39', 'BCIR39', 'BFDL39', 
-        'BFBI39', 'BOEF39', 'BURT39', 'BICL39', 'BIXG39', 'C2OI34', 'S2TO34', 'MILA.SA', 
-        'CSMO.SA', 'IYDRO11.SA', 'ISPXB11.SA', 'CISMAB11.SA', 'W2ST34', 'S2QS34', 
-        'P2AT34', 'G2DD34', 'D2AS34', 'C2PT34', 'BIVW39', 'BIVE39', 'BCWV39', 'A2VL34', 
-        'A2MC34', 'AFHI11.SA', 'HSRE11.SA', 'VSEC11.SA', 'GRAO3.SA', 'USTK11.SA', 
-        'AGXY3.SA', 'CRPG6.SA', 'CRPG5.SA', 'CRPG3.SA', 'SMFT3.SA', 'SOJA3.SA', 
-        'Z2NG34', 'T2TD34', 'T2DH34', 'S2UI34', 'S2QU34', 'S2NW34', 'S2HO34', 'C2ZR34', 
-        'U2ST34', 'S2EA34', 'P2EN34', 'M2PW34', 'K2CG34', 'D2KN34', 'C2ON34', 'C2HD34', 
-        'B2YN34',
-        # Novos ativos incluídos
-        'ALLD3.SA', 'ATMP3.SA', 'BMOB3.SA', 'ELMD3.SA', 'OPCT3.SA', 'TOKY3.SA',
-        'LAVV3.SA', 'PLPL3.SA', 'MELK3.SA', 'AVLL3.SA', 'CBAV33.SA', 'DOTZ3.SA',
-        'GGPS3.SA', 'HBSA3.SA', 'SIMH3.SA', 'PASS3.SA', 'TTEN3.SA', 'CURY3.SA'
-    ],
-    'Petróleo, Gás e Biocombustíveis': [
-        'SRNA3.SA', 'VBBR3.SA', 'RAIZ4.SA', 'RECV3.SA', 'SLBG34', 'HALI34', 'COPH34', 
-        'CHVX34', 'PRIO3.SA', 'OSXB3.SA', 'DMMO11.SA', 'DMMO3.SA', 'RPMG3.SA', 
-        'UGPA3.SA', 'PETR4.SA', 'PETR3.SA', 'EXXO34', 'ENAT3.SA',
-        # Novos ativos incluídos
-        'RRRP3.SA'
-    ],
-    'Saúde': [
-        'ONCO3.SA', 'VVEO3.SA', 'PARD3.SA', 'BIOM3.SA', 'BALM3.SA', 'PFIZ34', 
-        'MRCK34', 'GBIO33', 'PNVL3.SA', 'AALR3.SA', 'ODPV3.SA', 'RADL3.SA', 
-        'QUAL3.SA', 'OFSA3.SA', 'JNJB34', 'HYPE3.SA', 'FLRY3.SA', 'BMYB34', 
-        'ABTT34',
-        # Novos ativos incluídos
-        'ATEA3.SA', 'KRSA3.SA', 'HCAR3.SA', 'MATD3.SA', 'BLAU3.SA'
-    ],
-    'Tecnologia da Informação': [
-        'CLSA3.SA', 'LVTC3.SA', 'G2DI33', 'IFCM3.SA', 'GOGL35', 'LWSA3.SA', 'TOTS3.SA', 
-        'XRXB34', 'QCOM34', 'ORCL34', 'MSFT34', 'IBMB34', 'ITLC34', 'HPQB34', 
-        'EBAY34', 'CSCO34', 'ATTB34', 'AAPL34', 'LINX3.SA', 'POSI3.SA',
-        # Novos ativos incluídos
-        'ET34', 'M1TA34', 'NGRD3.SA', 'BMOB3.SA'
-    ],
-    'Telecomunicações': [
-        'BRIT3.SA', 'FIQE3.SA', 'DESK3.SA', 'VERZ34', 'OIBR4.SA', 'OIBR3.SA', 
-        'TIMS3.SA', 'VIVT3.SA', 'TELB4.SA', 'TELB3.SA', 'ATTB34'
-    ],
-    'Utilidade Pública': [
-        'AXIA5.SA', 'AXIA3.SA', 'AXIA6.SA', 'BRAV3.SA', 'AURE3.SA', 'MEGA3.SA', 
-        'CEPE6.SA', 'CEPE5.SA', 'CEPE3.SA', 'CEED3.SA', 'EEEL4.SA', 'EEEL3.SA', 
-        'CASN4.SA', 'CASN3.SA', 'CEGR3.SA', 'CEBR3.SA', 'CEBR5.SA', 'CEBR6.SA', 
-        'RNEW11.SA', 'RNEW4.SA', 'RNEW3.SA', 'COCE6.SA', 'COCE5.SA', 'COCE3.SA', 
-        'CLSC4.SA', 'CLSC3.SA', 'ALUP4.SA', 'ALUP3.SA', 'ALUP11.SA', 'SAPR11.SA', 
-        'SAPR4.SA', 'SAPR3.SA', 'CPRE3.SA', 'CPLE5.SA', 'CPLE3.SA', 'CPFE3.SA', 
-        'CGAS3.SA', 'AESB3.SA', 'NEOE3.SA', 'TRPL4.SA', 'TRPL3.SA', 'EGIE3.SA', 
-        'TAEE4.SA', 'TAEE3.SA', 'TAEE11.SA', 'SBSP3.SA', 'GEPA4.SA', 'GEPA3.SA', 
-        'CESP6.SA', 'CESP5.SA', 'CESP3.SA', 'CMIG4.SA', 'CMIG3.SA', 'AFLT3.SA',
-        # Novos ativos incluídos
-        'ISAE4.SA', 'RIOS3.SA'
-    ],
-    'Bens Industriais': [
-        'EMBR3.SA', 'VAMO3.SA', 'WEGE3.SA', 'VIVA3.SA', 'ASAI3.SA', 'SMFT3.SA', 
-        'CMIN3.SA', 'SLCE3.SA', 
-        # Novos ativos incluídos
-        'AERI3.SA', 'ICBR3.SA', 'GOLL3.SA', 'ARML3.SA', 'JSLG3.SA', 'OPCT3.SA', 
-        'SAINTB3.SA', 'HBSA3.SA', 'PASS3.SA', 'TTEN3.SA'
-    ]
-}
-
-# -----------------------------------------------------------------------------
-# Reconstrução da lista principal ATIVOS_IBOVESPA e FALLBACK_SETORES
-# -----------------------------------------------------------------------------
-
-# Cria a lista de todos os ativos únicos a partir do novo dicionário setorial
-TODOS_ATIVOS_SET = set()
-for ativos in ATIVOS_POR_SETOR_IBOV.values():
-    for ativo in ativos:
-        TODOS_ATIVOS_SET.add(ativo)
-
-ATIVOS_B3 = sorted(list(TODOS_ATIVOS_SET))
-
-# ATIVOS_IBOVESPA é um subconjunto de ATIVOS_B3. 
-# O Ibovespa padrão (IBOV) geralmente inclui ações mais líquidas.
-# Vamos definir um subconjunto IBOVESPA para propósitos de filtro, usando o conjunto original.
-ATIVOS_IBOVESPA_SUBSET = [
-    'ALOS3.SA', 'AZZA3.SA', 'B3SA3.SA', 'BBSE3.SA', 'BBDC3.SA', 'BBDC4.SA', 'BRAP4.SA', 
-    'BBAS3.SA', 'BPAC11.SA', 'CXSE3.SA', 'CMIG4.SA', 'COGN3.SA', 'CPLE6.SA', 
-    'CSAN3.SA', 'CPFE3.SA', 'CMIN3.SA', 'CVCB3.SA', 'CYRE3.SA', 'ELET3.SA', 
-    'EMBR3.SA', 'EGIE3.SA', 'FLRY3.SA', 'GGBR4.SA', 'GOAU4.SA', 'HAPV3.SA', 
-    'HYPE3.SA', 'IGTI11.SA', 'IRBR3.SA', 'ISAE4.SA', 'ITSA4.SA', 'ITUB4.SA', 
-    'KLBN11.SA', 'RENT3.SA', 'LREN3.SA', 'MGLU3.SA', 'BEEF3.SA', 'MRVE3.SA', 
-    'MULT3.SA', 'NATU3.SA', 'PCAR3.SA', 'PETR3.SA', 'PETR4.SA', 'PRIO3.SA', 
-    'PSSA3.SA', 'RADL3.SA', 'RAIZ4.SA', 'RDOR3.SA', 'SBSP3.SA', 'SANB11.SA', 
-    'CSNA3.SA', 'SLCE3.SA', 'SMFT3.SA', 'SUZB3.SA', 'TAEE11.SA', 'VIVT3.SA', 
-    'TIMS3.SA', 'TOTS3.SA', 'UGPA3.SA', 'VALE3.SA', 'VAMO3.SA', 'VBBR3.SA', 
-    'VIVA3.SA', 'WEGE3.SA', 'YDUQ3.SA'
+ATIVOS_IBOVESPA = [
+    'ALOS3.SA', 'ABEV3.SA', 'ASAI3.SA', 'AESB3.SA', 'AZZA3.SA',
+    'BRAP4.SA', 'BRKM5.SA',
+    'BRAV3.SA', 'CEAB3.SA', 'CMIG4.SA', 'COGN3.SA',
+    'CPLE6.SA', 'CSAN3.SA', 'CPFE3.SA', 'CMIN3.SA', 'CURY3.SA', 'CVCB3.SA',
+    'CYRE3.SA', 'DIRR3.SA', 'ELET3.SA', 'ELET6.SA', 'EMBR3.SA', 'ENGI11.SA',
+    'ENEV3.SA', 'EGIE3.SA', 'EQTL3.SA', 'FLRY3.SA', 'GGBR4.SA', 'GOAU4.SA',
+    'HAPV3.SA', 'ISAE4.SA',
+    'KLBN11.SA', 'RENT3.SA', 'LREN3.SA', 'MGLU3.SA', 'POMO4.SA',
+    'BEEF3.SA', 'MRVE3.SA', 'NATU3.SA',
+    'PCAR3.SA', 'PETR3.SA', 'PETR4.SA', 'RECV3.SA', 'PRIO3.SA',
+    'RADL3.SA', 'RAIZ4.SA', 'RAIL3.SA', 'SBSP3.SA',
+    'CSNA3.SA', 'SLCE3.SA', 'SMFT3.SA', 'SUZB3.SA', 'TAEE11.SA', 'VIVT3.SA',
+    'TIMS3.SA', 'TOTS3.SA', 'UGPA3.SA', 'USIM5.SA', 'VALE3.SA', 'VAMO3.SA',
+    'VBBR3.SA', 'VIVA3.SA', 'WEGE3.SA', 'YDUQ3.SA'
 ]
-TODOS_ATIVOS = ATIVOS_B3.copy() # Mantém o nome 'TODOS_ATIVOS' referenciando o conjunto B3 completo
+
+ATIVOS_POR_SETOR_IBOV = {
+    'Bens Industriais': ['EMBR3.SA', 'VAMO3.SA', 'WEGE3.SA', 'VIVA3.SA', 'ASAI3.SA', 'SMFT3.SA', 'CMIN3.SA', 'SLCE3.SA'],
+    'Consumo Cíclico': ['AZZA3.SA', 'ALOS3.SA', 'CEAB3.SA', 'COGN3.SA', 'CURY3.SA', 'CVCB3.SA', 'CYRE3.SA', 'DIRR3.SA', 'LREN3.SA', 'MGLU3.SA', 'MRVE3.SA', 'MULT3.SA', 'NATU3.SA', 'PCAR3.SA', 'RENT3.SA', 'YDUQ3.SA'],
+    'Consumo não Cíclico': ['BEEF3.SA', 'NATU3.SA', 'PCAR3.SA', 'VIVA3.SA'],
+    'Materiais Básicos': ['BRAP4.SA', 'BRKM5.SA', 'CSNA3.SA', 'GGBR4.SA', 'GOAU4.SA', 'KLBN11.SA', 'POMO4.SA', 'SUZB3.SA', 'USIM5.SA', 'VALE3.SA'],
+    'Petróleo, Gás e Biocombustíveis': ['ENEV3.SA', 'PETR3.SA', 'PETR4.SA', 'PRIO3.SA', 'RAIZ4.SA', 'RECV3.SA', 'UGPA3.SA', 'VBBR3.SA'],
+    'Saúde': ['FLRY3.SA', 'HAPV3.SA', 'RADL3.SA'],
+    'Tecnologia da Informação': ['TOTS3.SA'],
+    'Telecomunicações': ['TIMS3.SA', 'VIVT3.SA'],
+    'Utilidade Pública': ['AESB3.SA', 'AURE3.SA', 'BRAV3.SA', 'CMIG4.SA', 'CPLE6.SA', 'CPFE3.SA', 'EGIE3.SA', 'ELET3.SA', 'ELET6.SA', 'ENGI11.SA', 'EQTL3.SA', 'ISAE4.SA', 'RAIL3.SA', 'SBSP3.SA', 'TAEE11.SA']
+}
 
 # Dicionário Fallback Invertido (Ticker -> Setor)
 FALLBACK_SETORES = {}
@@ -312,10 +185,12 @@ for setor, tickers in ATIVOS_POR_SETOR_IBOV.items():
     for t in tickers:
         FALLBACK_SETORES[t] = setor
 
+TODOS_ATIVOS = sorted(list(set(ATIVOS_IBOVESPA)))
+
 ATIVOS_POR_SETOR = {
-    setor: [ativo for ativo in ativos if ativo in ATIVOS_B3] 
+    setor: [ativo for ativo in ativos if ativo in ATIVOS_IBOVESPA] 
     for setor, ativos in ATIVOS_POR_SETOR_IBOV.items()
-    if any(ativo in ATIVOS_B3 for ativo in ativos)
+    if any(ativo in ATIVOS_IBOVESPA for ativo in ativos)
 }
 
 # =============================================================================
@@ -1058,27 +933,292 @@ class ColetorDadosLive(object):
         log_debug(f"Coleta de dados finalizada com sucesso. {len(self.ativos_sucesso)} ativos processados.")
         return True
 
-    def calculate_cross_sectional_features(self):
+    def coletar_ativo_unico_gcs(self, ativo_selecionado: str):
         """
-        ATENÇÃO: A lógica original calculava métricas setoriais relativas
-        (pe_rel_sector, pb_rel_sector). Foi desativada para que a informação
-        setorial seja estritamente informativa e não um fator de otimização.
+        Função para coletar e processar um único ativo para a aba de análise individual,
+        incluindo o pipeline LightGBM.
         """
-        df_fund = self.dados_fundamentalistas.copy()
-        if df_fund.empty: return
+        log_debug(f"Iniciando coleta e análise de ativo único: {ativo_selecionado}")
         
-        log_debug("Cálculo de features cross-sectional (setoriais) DESATIVADO conforme solicitação.")
+        # Define o modo GARCH para a coleta individual (usamos o modo fast como padrão)
+        st.session_state['garch_mode'] = st.session_state.get('individual_garch_mode', 'GARCH(1,1)')
         
-        # Garante que as colunas 'pe_rel_sector' e 'pb_rel_sector' existam, 
-        # mas com valores neutros/NaN, para evitar quebra no pipeline do ML caso ele as busque.
-        if 'pe_rel_sector' not in df_fund.columns:
-             df_fund['pe_rel_sector'] = np.nan
-        if 'pb_rel_sector' not in df_fund.columns:
-             df_fund['pb_rel_sector'] = np.nan
+        # NOTE: Passamos check_min_ativos=False, mas se falhar a coleta, o ativo não estará em self.dados_por_ativo
+        self.coletar_e_processar_dados([ativo_selecionado], check_min_ativos=False)
         
-        self.dados_fundamentalistas = df_fund
-        log_debug("Features cross-sectional: Valores neutros aplicados.")
+        # *** ALTERAÇÃO 1.2: Verifica se o ativo existe em dados_por_ativo, se não, falha imediatamente ***
+        if ativo_selecionado not in self.dados_por_ativo:
+            log_debug(f"ERRO: Ativo {ativo_selecionado} pulado na coleta (sem dados históricos de preço/fundamental).")
+            # Retorna None para que a UI saiba que falhou
+            return None, None, None
+        # *** FIM ALTERAÇÃO 1.2 ***
 
+
+        df_tec = self.dados_por_ativo[ativo_selecionado]
+        fund_row = {}
+        if ativo_selecionado in self.dados_fundamentalistas.index:
+            fund_row = self.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
+        
+        df_ml_meta = pd.DataFrame()
+        
+        # Features do modelo
+        # LGBM_FEATURES é globalmente definido no escopo do módulo
+        ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
+        
+        is_price_data_available = 'Close' in df_tec.columns and not df_tec['Close'].isnull().all() and len(df_tec.dropna(subset=['Close'])) > 60
+        
+        # Assume modo FAST para análise individual se a seleção não foi feita
+        ml_mode_for_individual = st.session_state.get('individual_ml_mode', 'fast') 
+
+        # Configura o Classificador e Features baseado no modo selecionado
+        if ml_mode_for_individual == 'fast':
+            MODEL_FEATURES = LGBM_FEATURES
+            CLASSIFIER = LogisticRegression # Mudado para LogReg (Modelo mais rápido)
+            MODEL_PARAMS = dict(penalty='l2', solver='liblinear', class_weight='balanced', random_state=42)
+            MODEL_NAME = 'Regressão Logística Rápida'
+        else:
+            # MODEL_FEATURES ajustado para não incluir 'Cluster'
+            MODEL_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel", 'rsi_14', 'macd_diff', 'vol_20d'] # Usamos features descorrelacionados
+            CLASSIFIER = RandomForestClassifier
+            MODEL_PARAMS = dict(n_estimators=150, max_depth=7, random_state=42, class_weight='balanced', n_jobs=-1)
+            MODEL_NAME = 'Full Ensemble (RF/XGB)'
+
+        # CORREÇÃO CRÍTICA: Inicializa is_ml_trained antes do bloco try/except
+        is_ml_trained = False
+        ensemble_proba = 0.5
+        conf_final = 0.0
+        
+        if is_price_data_available and CLASSIFIER is not None:
+            log_debug(f"Análise Individual ML: Iniciando modelo {MODEL_NAME} para {ativo_selecionado}.")
+            try:
+                df = df_tec.copy()
+                
+                # Obtendo os Horizons adaptativos (embora o lookback do perfil não seja fornecido aqui, usamos um padrão)
+                # Tenta usar a seleção da UI, senão usa o padrão do perfil (252)
+                ml_lookback_days_input = st.session_state.profile.get('ml_lookback_days', 252) 
+                     
+                ML_HORIZONS_IND = get_ml_horizons(ml_lookback_days_input)
+                
+                # REFORÇANDO: Garante que os features fundamentais estão na última linha (para a predição)
+                last_idx = df.index[-1] if not df.empty else None
+                if last_idx:
+                    # Atenção: 'Cluster' agora é ignorado aqui
+                    for f_col in ALL_FUND_FEATURES:
+                        if f_col == 'Cluster': continue # Ignora o cluster no input do ML de ativo único
+                        if f_col in fund_row and f_col not in df.columns:
+                            df.loc[last_idx, f_col] = fund_row[f_col]
+                        elif f_col not in df.columns:
+                            df[f_col] = np.nan
+                            
+                # Targets Futuros (make_targets logic)
+                for d in ML_HORIZONS_IND:
+                    df[f"t_{d}"] = (df["Close"].shift(-d) > df["Close"]).astype(int)
+
+                # Remove NaNs da parte de treino e predição
+                df_model = df.dropna(subset=MODEL_FEATURES + [f"t_{ML_HORIZONS_IND[-1]}"]) # Usa o maior horizonte para filtrar NaNs
+                
+                if len(df_model) > 200: # Mínimo de pontos para treino (70% de 200 = 140)
+                    X_full = df_model[MODEL_FEATURES]
+                    
+                    # Split para treino (70%)
+                    split_idx = int(len(X_full) * 0.7)
+                    X_train = X_full.iloc[:split_idx]
+                    
+                    probabilities = []
+                    auc_scores = []
+                    
+                    # --- TREINAMENTO PARA CADA HORIZONTE ---
+                    for tgt_d in ML_HORIZONS_IND:
+                        tgt = f"t_{tgt_d}"
+                        y = df_model[tgt].values
+                        y_train = y[:split_idx]
+                        X_test = X_full.iloc[split_idx:]
+                        y_test = y[split_idx:] 
+                        
+                        model = CLASSIFIER(**MODEL_PARAMS)
+                        
+                        # Fix para classes desbalanceadas ou únicas no treino
+                        if len(np.unique(y_train)) < 2:
+                             log_debug(f"ML Individual: {ativo_selecionado} - Target {tgt} tem apenas uma classe no treino. Pulando Target.")
+                             continue
+                             
+                        # Aplica Scaling para modelos lineares/LogReg
+                        if CLASSIFIER is LogisticRegression:
+                             scaler = StandardScaler().fit(X_train)
+                             X_train_scaled = scaler.transform(X_train)
+                             X_test_scaled = scaler.transform(X_test)
+                             X_predict_scaled = scaler.transform(X_full.iloc[[-1]].copy())
+                        else:
+                             X_train_scaled = X_train
+                             X_test_scaled = X_test
+                             X_predict_scaled = X_full.iloc[[-1]].copy()
+
+                        model.fit(X_train_scaled, y_train)
+                        
+                        # --- VERIFICAÇÃO PARA PREDICAO ---
+                        
+                        if not X_full.iloc[[-1]].isnull().any().any():
+                            prob_now = model.predict_proba(X_predict_scaled)[0, 1]
+                            probabilities.append(prob_now)
+
+                        # Cálculo de AUC no conjunto de teste (para confiança)
+                        if len(y_test) > 0 and len(np.unique(y_test)) >= 2:
+                             prob_test = model.predict_proba(X_test_scaled)[:, 1]
+                             auc_scores.append(roc_auc_score(y_test, prob_test))
+                             
+                    # Score final ML = Média das 3 probabilidades
+                    ensemble_proba = np.mean(probabilities) if probabilities else 0.5
+                    
+                    # Confiança final = Média dos AUCs de teste
+                    conf_final = np.mean(auc_scores) if auc_scores else 0.0
+                    
+                    log_debug(f"ML Individual: Sucesso {MODEL_NAME}. Prob Média: {ensemble_proba:.2f}, AUC Teste Média: {conf_final:.2f}.")
+
+                    # Importância das features
+                    try:
+                         if CLASSIFIER is LogisticRegression:
+                             # Usa coeficientes para LogReg
+                             importances_data = np.abs(model.coef_[0])
+                         else:
+                             # Usa feature_importances_ para RF/XGB
+                             importances_data = model.feature_importances_
+
+                         importances = pd.DataFrame({
+                            'feature': MODEL_FEATURES,
+                            'importance': importances_data
+                         }).sort_values('importance', ascending=False)
+                    except:
+                         importances = pd.DataFrame({'feature': MODEL_FEATURES, 'importance': [1/len(MODEL_FEATURES)]*len(MODEL_FEATURES)})
+
+
+                    df_tec['ML_Proba'] = ensemble_proba
+                    df_tec['ML_Confidence'] = conf_final
+                    df_ml_meta = importances
+                    is_ml_trained = True # SUCESSO NO TREINAMENTO
+                    
+                else:
+                    log_debug(f"ML Individual: Dados insuficientes ({len(df_model)}). Pulando modelo supervisionado.")
+                    
+            except Exception as e:
+                log_debug(f"ML Individual: ERRO no modelo {MODEL_NAME}: {str(e)[:50]}. {traceback.format_exc()[:100]}")
+                
+            
+        # 2. Fallback: Se ML falhou no cálculo ou não foi treinado
+        if not is_ml_trained:
+            log_debug("ML Individual: Modelo supervisionado não foi treinado. Excluindo ML_Proba/Confidence.")
+            
+            # NOVO: Apenas remove as colunas se existirem para que o Fallback de exibição funcione.
+            if 'ML_Proba' in df_tec.columns:
+                df_tec.drop(columns=['ML_Proba', 'ML_Confidence'], errors='ignore', inplace=True)
+            
+            # Garante que a probabilidade e confiança são neutras/zero
+            ensemble_proba = 0.5
+            conf_final = 0.0
+            
+            # Gera uma tabela de importância de fallback se a original não foi gerada
+            if df_ml_meta.empty:
+                df_ml_meta = pd.DataFrame({
+                    'feature': ['Qualidade (ROE/PL)', 'Estabilidade'],
+                    'importance': [0.8, 0.2]
+                })
+            
+        # *** ALTERAÇÃO 2.1: Incluir score ML ponderado na análise individual para consistência ***
+        # A pontuação na análise individual não é usada no construtor, mas é útil para debug/exibição
+        
+        # Fator Confiança AUC
+        # ml_weight_factor = (ml_conf - 0.5).clip(lower=0) * 2 
+        # Score ML Ponderado = Probabilidade * Confiança (AUC). Se AUC for 0.5, o score é Prob / 2.
+        # Se AUC for 0.0, o score é 0.0. (Usando a AUC real)
+        ml_score_weighted_display = ensemble_proba * conf_final 
+        
+        # Adiciona o score ponderado (final) ao dataframe técnico para exibição/debug
+        df_tec['ML_Score_Weighted'] = ml_score_weighted_display
+        # *** FIM ALTERAÇÃO 2.1 ***
+        
+        return df_tec, fund_row, df_ml_meta
+
+# =============================================================================
+# 11. CLASSE PRINCIPAL: CONSTRUTOR DE PORTFÓLIO AUTOML
+# =============================================================================
+
+class ConstrutorPortfolioAutoML:
+    def __init__(self, valor_investimento: float, periodo: str = PERIODO_DADOS):
+        self.valor_investimento = valor_investimento
+        self.periodo = periodo
+        self.dados_por_ativo = {}
+        self.dados_fundamentalistas = pd.DataFrame()
+        self.metricas_performance = pd.DataFrame()
+        self.volatilidades_garch = {}
+        self.predicoes_ml = {}
+        self.ativos_sucesso = []
+        self.ativos_selecionados = []
+        self.alocacao_portfolio = {}
+        self.metricas_portfolio = {}
+        self.metodo_alocacao_atual = "Não Aplicado"
+        self.justificativas_selecao = {}
+        self.perfil_dashboard = {} 
+        self.pesos_atuais = {}
+        self.scores_combinados = pd.DataFrame()
+        
+    def coletar_e_processar_dados(self, simbolos: list) -> bool:
+        # Passa o modo GARCH selecionado para o coletor
+        garch_mode_select = st.session_state.get('ml_model_mode_select', 'fast')
+        # Determina o modo GARCH para o construtor: GARCH(1,1) para fast, Auto-Search para full
+        garch_mode = 'Auto-Search GARCH' if garch_mode_select == 'full' else 'GARCH(1,1)'
+        
+        # Seta o modo GARCH na sessão para ser usado dentro do coletor
+        st.session_state['garch_mode'] = garch_mode
+        
+        coletor = ColetorDadosLive(periodo=self.periodo)
+        simbolos_filtrados = [s for s in simbolos if s in TODOS_ATIVOS]
+        if not simbolos_filtrados: return False
+        
+        # Inicia a coleta
+        # O coletor agora filtra automaticamente ativos sem preço, se check_min_ativos=True
+        if not coletor.coletar_e_processar_dados(simbolos_filtrados, check_min_ativos=True):
+            # Se o check_min_ativos falhar, pode ser por insuficiência de ativos ou falha geral
+            self.dados_por_ativo = coletor.dados_por_ativo
+            self.dados_fundamentalistas = coletor.dados_fundamentalistas
+            self.ativos_sucesso = coletor.ativos_sucesso
+            self.metricas_performance = coletor.metricas_performance
+            self.volatilidades_garch = coletor.volatilidades_garch_raw
+            
+            # Se a coleta falhou, mas ativos_sucesso tem dados, retornamos True para continuar o pipeline
+            if self.ativos_sucesso:
+                 log_debug("AVISO: Coleta parcial. Prosseguindo com ranqueamento.")
+                 return True
+            return False
+            
+        self.dados_por_ativo = coletor.dados_por_ativo
+        self.dados_fundamentalistas = coletor.dados_fundamentalistas
+        self.ativos_sucesso = coletor.ativos_sucesso
+        self.metricas_performance = coletor.metricas_performance
+        self.volatilidades_garch = coletor.volatilidades_garch_raw 
+        return True
+
+    def calculate_cross_sectional_features(self):
+        df_fund = self.dados_fundamentalistas.copy()
+        if 'sector' not in df_fund.columns or 'pe_ratio' not in df_fund.columns: return
+        
+        log_debug("Calculando features cross-sectional (P/L e P/VP relativos ao setor).")
+        
+        cols_numeric = ['pe_ratio', 'pb_ratio']
+        for col in cols_numeric:
+             if col in df_fund.columns:
+                 df_fund[col] = pd.to_numeric(df_fund[col], errors='coerce')
+
+        # Substitui a média setorial por 1.0 se a média for zero ou NaN para evitar divisão por zero
+        sector_means = df_fund.groupby('sector')[['pe_ratio', 'pb_ratio']].transform('mean')
+        
+        valid_pe_mean = sector_means['pe_ratio'].replace(0, np.nan).fillna(1.0)
+        valid_pb_mean = sector_means['pb_ratio'].replace(0, np.nan).fillna(1.0)
+
+        df_fund['pe_rel_sector'] = df_fund['pe_ratio'] / valid_pe_mean
+        df_fund['pb_rel_sector'] = df_fund['pb_ratio'] / valid_pb_mean
+        
+        df_fund = df_fund.replace([np.inf, -np.inf], np.nan).fillna(1.0)
+        self.dados_fundamentalistas = df_fund
+        log_debug("Features cross-sectional concluídas.")
 
     def calcular_volatilidades_garch(self):
         valid_vols = len([k for k, v in self.volatilidades_garch.items() if not np.isnan(v)])
@@ -1093,8 +1233,7 @@ class ColetorDadosLive(object):
         ativos_com_dados = [s for s in self.ativos_sucesso if s in self.dados_por_ativo]
         log_debug(f"Iniciando Pipeline de Treinamento ML/Clusterização (Modo: {ml_mode}).")
         
-        # ATENÇÃO: ALL_FUND_FEATURES ajustada para não incluir os fatores setoriais relativos
-        ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
+        ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
         
         # --- Seleção de Feature Set com base no Modo ML ---
         if ml_mode == 'fast':
@@ -1176,7 +1315,6 @@ class ColetorDadosLive(object):
                     for f_col in ALL_FUND_FEATURES:
                         if f_col == 'Cluster': # Ignora 'Cluster' no ML supervisionado
                             continue
-                        # Note: pe_rel_sector e pb_rel_sector não estão mais no ALL_FUND_FEATURES
                         if f_col in fund_data and f_col not in df.columns:
                             df.loc[last_idx, f_col] = fund_data[f_col]
                         elif f_col not in df.columns:
@@ -1776,7 +1914,7 @@ class AnalisadorIndividualAtivos:
         
         # Usa um subset menor de ativos (os da lista do Ibovespa) para não demorar muito
         # Mas compara com todos eles, independente de setor
-        ativos_comparacao = TODOS_ATIVOS # Usa o conjunto B3 completo, pois IBOVESPA_SUBSET é para filtragem
+        ativos_comparacao = ATIVOS_IBOVESPA 
         
         # Coleta dados de TODOS os ativos (apenas fundamentos)
         df_fund_geral = coletor.coletar_fundamentos_em_lote(ativos_comparacao)
@@ -2025,7 +2163,7 @@ def aba_introducao():
         st.write("""
         A MPT é a espinha dorsal da nossa fase de alocação de capital. Ela se baseia no princípio de que o risco de um portfólio não é a mera soma dos riscos individuais dos ativos, mas sim o risco resultante da **combinação** desses ativos, considerando a correlação entre eles.
         
-        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente** , que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
+        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente** [Image of Efficient Frontier], que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
         """)
         
         col_mpt_1, col_mpt_2 = st.columns(2)
@@ -2071,7 +2209,7 @@ def aba_introducao():
         
         st.markdown("##### 4.2. Random Forest (Floresta Aleatória)")
         st.write("""
-        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão .
+        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão [Image of Random Forest structure].
         
         **Funcionamento:** Cada árvore na floresta é treinada em uma subamostra diferente do conjunto de dados e em um subconjunto aleatório de *features*. A previsão final é determinada pela maioria dos votos das árvores (o que o chamamos de *bagging*).
         
@@ -2090,49 +2228,20 @@ def aba_introducao():
         """)
         
 def aba_selecao_ativos():
-    """Aba 2: Seleção de Ativos (Design Original Restaurado com filtro de Índice)"""
+    """Aba 2: Seleção de Ativos (Design Original Restaurado)"""
     
     st.markdown("## 🎯 Definição do Universo de Análise")
     
     st.markdown("""
     <div class="info-box">
-    <p>O universo de análise serve como base para o ranqueamento multi-fatorial. Ativos fora do universo selecionado não serão considerados na otimização.</p>
+    <p>O universo de análise está restrito ao <b>Índice Ibovespa</b>. O sistema utiliza todos os ativos selecionados para realizar o ranqueamento multi-fatorial e otimizar a carteira.</p>
     </div>
     """, unsafe_allow_html=True)
-
-    # NOVO: SELEÇÃO DO ÍNDICE BASE
-    st.markdown("### 📝 Seleção do Índice Base")
-    st.markdown("""
-    * **B3 (Geral):** Inclui todas as Ações (ON, PN, UNIT), FIIs, Fiagros, BDRs e ETFs disponíveis no nosso universo de dados.
-    * **IBOVESPA (Subconjunto):** Restringe a análise apenas aos ativos que fazem parte do Índice Bovespa (IBOV).
-    """)
     
-    indice_selecionado = st.radio(
-        "**Índice de Ativos:**",
-        [
-            "B3 (Geral)", 
-            "IBOVESPA (Subconjunto)"
-        ],
-        index=0,
-        key='index_selection_radio_v9'
-    )
-
-    # 1. DEFINE O UNIVERSO BASE COM BASE NA SELEÇÃO
-    if indice_selecionado == "IBOVESPA (Subconjunto)":
-        universo_base = ATIVOS_IBOVESPA_SUBSET
-        universo_base_nome = "IBOVESPA"
-    else:
-        universo_base = ATIVOS_B3
-        universo_base_nome = "B3"
-
-    st.markdown("---")
-    st.markdown(f"## 🔎 Universo Selecionado: **{universo_base_nome}** ({len(universo_base)} ativos)")
-    
-    # 2. SELEÇÃO DO MODO DE FILTRO
     modo_selecao = st.radio(
         "**Modo de Seleção:**",
         [
-            f"📊 Índice de Referência (Todos do {universo_base_nome})",
+            "📊 Índice de Referência (Todos do Ibovespa)",
             "🏢 Seleção Setorial",
             "✍️ Seleção Individual"
         ],
@@ -2142,22 +2251,16 @@ def aba_selecao_ativos():
     
     ativos_selecionados = []
     
-    if f"Índice de Referência (Todos do {universo_base_nome})" in modo_selecao:
-        ativos_selecionados = universo_base.copy()
-        st.success(f"✔️ **{len(ativos_selecionados)} ativos** ({universo_base_nome} completo) definidos para análise.")
+    if "Índice de Referência" in modo_selecao:
+        ativos_selecionados = TODOS_ATIVOS.copy()
+        st.success(f"✔️ **{len(ativos_selecionados)} ativos** (Ibovespa completo) definidos para análise.")
         
         with st.expander("📋 Visualizar Tickers"):
             st.write(", ".join([a.replace('.SA', '') for a in ativos_selecionados]))
     
     elif "Seleção Setorial" in modo_selecao:
         st.markdown("### 🏢 Seleção por Setor")
-        
-        # Filtra os ativos setoriais para corresponder ao universo_base
-        ativos_por_setor_filtrado = {
-            setor: [ativo for ativo in ativos if ativo in universo_base]
-            for setor, ativos in ATIVOS_POR_SETOR.items()
-        }
-        setores_disponiveis = sorted([s for s, a in ativos_por_setor_filtrado.items() if a])
+        setores_disponiveis = sorted(list(ATIVOS_POR_SETOR.keys()))
         
         # BARRA DE SELEÇÃO SETORIAL
         setores_selecionados = st.multiselect(
@@ -2168,8 +2271,7 @@ def aba_selecao_ativos():
         )
         
         if setores_selecionados:
-            for setor in setores_selecionados: 
-                ativos_selecionados.extend(ativos_por_setor_filtrado[setor])
+            for setor in setores_selecionados: ativos_selecionados.extend(ATIVOS_POR_SETOR[setor])
             ativos_selecionados = list(set(ativos_selecionados))
             
             # NOVO: Centraliza e expande as métricas abaixo do multiselect (lateralidade total)
@@ -2183,11 +2285,12 @@ def aba_selecao_ativos():
                 st.metric("Total de Ativos", len(ativos_selecionados))
             with col_metrics_s[2]:
                  # Placeholder para manter o layout lateralizado (pode ser ajustado se houver mais métricas)
-                 st.metric("Índice Base", universo_base_nome) 
+                 st.metric("Tickers/Setor (Visual)", "OK") 
             
-            with st.expander(f"📋 Visualizar Ativos por Setor (Filtrados por {universo_base_nome})"):
+            with st.expander("📋 Visualizar Ativos por Setor"):
                 for setor in setores_selecionados:
-                    ativos_do_setor = ativos_por_setor_filtrado.get(setor, []) 
+                    # CORREÇÃO DO ERRO: ATIVOS_POR_POR_SETOR -> ATIVOS_POR_SETOR
+                    ativos_do_setor = ATIVOS_POR_SETOR.get(setor, []) 
                     st.markdown(f"**{setor}** ({len(ativos_do_setor)} ativos)")
                     st.write(", ".join([a.replace('.SA', '') for a in ativos_do_setor]))
         else:
@@ -2200,14 +2303,13 @@ def aba_selecao_ativos():
         for setor, ativos in ATIVOS_POR_SETOR.items():
             for ativo in ativos: ativos_com_setor[ativo] = setor
         
-        # Filtra a lista de tickers para exibir apenas os do universo_base
-        todos_tickers_filtrados = sorted([t for t in ativos_com_setor.keys() if t in universo_base])
+        todos_tickers_ibov = sorted(list(ativos_com_setor.keys()))
         
         # BARRA DE SELEÇÃO INDIVIDUAL
-        st.markdown(f"#### 📝 Selecione Tickers ({universo_base_nome})")
+        st.markdown("#### 📝 Selecione Tickers (Ibovespa)")
         ativos_selecionados = st.multiselect(
             "Pesquise e selecione os tickers:",
-            options=todos_tickers_filtrados,
+            options=todos_tickers_ibov,
             format_func=lambda x: f"{x.replace('.SA', '')} - {ativos_com_setor.get(x, 'Desconhecido')}",
             key='ativos_individuais_multiselect_v8'
         )
@@ -2247,6 +2349,27 @@ def aba_construtor_portfolio():
     if 'profile' not in st.session_state: st.session_state.profile = {}
     if 'builder_complete' not in st.session_state: st.session_state.builder_complete = False
     
+    # *** ALTERAÇÃO SOLICITADA: Remoção do Log de Debug ***
+    # if st.session_state.builder_complete:
+    #     builder = st.session_state.builder
+    #     with st.expander("🐛 LOG DE DEBUG AVANÇADO (Entradas, Scores e Pesos)", expanded=False):
+    #         st.markdown("##### 1. Inputs do Perfil")
+    #         st.json(st.session_state.profile)
+    #         st.markdown("##### 2. Pesos Finais Utilizados na Pontuação")
+    #         st.json(builder.pesos_atuais)
+    #         st.markdown("##### 3. Ranqueamento e Scores Combinados (Head)")
+    #         debug_cols = ['total_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 'sharpe', 'retorno_anual']
+    #         debug_df = builder.scores_combinados[[c for c in debug_cols if c in builder.scores_combinados.columns]]
+    #         st.dataframe(debug_df.head(10).style.format('{:.4f}'), use_container_width=True)
+    #         st.markdown("##### 4. Resultados da Otimização Markowitz/Alocação")
+    #         st.json({
+    #             "Método": builder.metodo_alocacao_atual,
+    #             "Métricas Portfólio": builder.metricas_portfolio,
+    #             "Alocação Final": {k: f"{v['weight']:.4f}" for k, v in builder.alocacao_portfolio.items()}
+    #         })
+    #         st.markdown("##### 5. Predições ML por Ativo")
+    #         st.dataframe(pd.DataFrame(builder.predicoes_ml).T.reset_index().rename(columns={'index': 'Ticker'}), use_container_width=True)
+    # *** FIM DA ALTERAÇÃO SOLICITADA ***
 
     if not st.session_state.builder_complete:
         st.markdown('## 📋 Calibração do Perfil de Risco')
