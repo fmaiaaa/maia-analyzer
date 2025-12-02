@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.6 - REVERSÃO MARKOWITZ/DINÂMICO): Pesos Dinâmicos + Otimização Markowitz + Seleção por Score e Diversificação de Cluster.
 - Modelagem (V9.6): ML Restaurado para Estabilidade (Lógica 6.0.9) + GARCH Removido da UI/Lógica de Otimização.
 
-Versão: 9.6.6 (Fix: Consistência do Pipeline ML com Fallback do Modelo Antigo (Risco) e Ajustes na UI/GARCH)
+Versão: 9.6.4 (Fix: Consistência do Pipeline ML na Construção e Ajustes na UI)
 =============================================================================
 """
 
@@ -144,13 +144,6 @@ ML_FEATURES = [
 ML_CATEGORICAL_FEATURES = [] # Apenas se houver colunas categóricas no ML_FEATURES
 # Variáveis usadas para display e feature engineering
 LGBM_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel"] 
-
-# NOVAS FEATURES DO MODELO FALLBACK (CÓDIGO ENVIADO PELO USUÁRIO)
-MODELO_FALLBACK_FEATURES = [
-    'RSI', 'MACD', 'Volatility', 'Momentum', 'SMA_50', 'SMA_200',
-    'PE_Ratio', 'PB_Ratio', 'Div_Yield', 'ROE',
-    'pe_rel_sector', 'pb_rel_sector', 'Cluster'
-]
 
 
 # =============================================================================
@@ -380,16 +373,6 @@ class CalculadoraTecnica:
         df['bb_upper'] = rolling_mean_20 + (rolling_std_20 * 2)
         df['bb_lower'] = rolling_mean_20 - (rolling_std_20 * 2)
 
-        # --- NOVOS FEATURES (PARA O MODELO FALLBACK) ---
-        # Estes são os nomes que o modelo fallback espera.
-        df['RSI'] = df['rsi_14'].copy()
-        df['MACD'] = df['macd'].copy()
-        df['Volatility'] = df['vol_20d'].copy() # Usa a vol anualizada de 20d
-        df['Momentum'] = df['close'] / df['close'].shift(10) - 1 # Momentum (10 períodos)
-        df['SMA_50'] = df['close'].rolling(window=50).mean()
-        df['SMA_200'] = df['close'].rolling(window=200).mean()
-        # --- FIM NOVOS FEATURES ---
-
 
         # Renomeia de volta para o padrão Streamlit
         df.rename(columns={'close': 'Close', 'high': 'High', 'low': 'Low', 'open': 'Open', 'volume': 'Volume'}, inplace=True)
@@ -397,9 +380,7 @@ class CalculadoraTecnica:
         # Remove colunas duplicadas ou temporárias não essenciais (Média móvel e outros features antigos)
         cols_to_keep = ['Close', 'High', 'Low', 'Open', 'Volume', 'returns', 
                         'ret', 'vol20', 'ma20', 'z20', 'trend', 'volrel', # LGBM Features
-                        'vol_20d', 'macd_diff', 'rsi_14', 'macd', 'macd_signal', 'bb_upper', 'bb_lower', # Scoring/Display Features
-                        'RSI', 'MACD', 'Volatility', 'Momentum', 'SMA_50', 'SMA_200' # Fallback Features
-                       ] 
+                        'vol_20d', 'macd_diff', 'rsi_14', 'macd', 'macd_signal', 'bb_upper', 'bb_lower'] # Scoring/Display Features
         
         cols_to_drop = [c for c in df.columns if c not in cols_to_keep and c not in ['Close', 'High', 'Low', 'Open', 'Volume', 'returns']]
         df.drop(columns=cols_to_drop, errors='ignore', inplace=True)
@@ -488,7 +469,6 @@ class OtimizadorPortfolioAvancado:
 
         if valid_garch_vols:
             try:
-                # Otimização usa o retorno histórico e volatilidade condicional (GARCH/Fallback)
                 self.cov_matrix = self._construir_matriz_cov_garch(returns_df, valid_garch_vols)
             except Exception:
                 # Fallback total para matriz de covariância histórica
@@ -507,10 +487,6 @@ class OtimizadorPortfolioAvancado:
             # Usa GARCH vol se disponível e válida, senão cai para vol histórica
             vol = garch_vols.get(ativo)
             if pd.isna(vol) or vol <= 0:
-                # CORREÇÃO: Remove a dependência da volatilidade GARCH/Condicional no cálculo da matriz de covariância.
-                # Como GARCH foi desabilitado, dependemos apenas da volatilidade histórica.
-                # Mantemos esta função para compatibilidade, mas o self.cov_matrix já é setado no __init__
-                # com a volatilidade histórica se valid_garch_vols for None/Vazio.
                 vol = returns_df[ativo].std() * np.sqrt(252) # Fallback histórico
             vol_array.append(vol)
             
@@ -890,10 +866,14 @@ class ColetorDadosLive(object):
                 
                 if len(retornos) > 60: 
                     try:
-                        # CORREÇÃO: Remove a lógica de GARCH e usa Volatilidade Histórica como Vol Condicional
-                        # (Mantendo a estrutura de variáveis para Markowitz)
-                        garch_vol = vol_anual
-                        garch_model_name = "Vol. Histórica (GARCH Desativado)"
+                        if 'Auto-Search GARCH' in garch_mode:
+                            # REMOVIDO: arch_model é None. Apenas para compatibilidade da estrutura
+                            garch_vol = vol_anual
+                            garch_model_name = "Vol. Histórica (GARCH Desativado)"
+                        else:
+                            # MODO RÁPIDO: GARCH(1,1) padrão (Desativado)
+                            garch_vol = vol_anual
+                            garch_model_name = "Vol. Histórica (GARCH Desativado)"
                             
                     except Exception as e:
                         garch_vol = vol_anual 
@@ -992,46 +972,125 @@ class ColetorDadosLive(object):
             MODEL_PARAMS = dict(n_estimators=150, max_depth=7, random_state=42, class_weight='balanced', n_jobs=-1)
             MODEL_NAME = 'Full Ensemble (RF/XGB)'
 
-        # MODELO DE FALLBACK CASO CLASSIFIER FALHE
-        MODEL_FALLBACK = RandomForestClassifier
-        MODEL_FALLBACK_PARAMS = dict(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced')
-        MODEL_FALLBACK_NAME = 'RandomForest (Fallback Risco)'
-
-
         # CORREÇÃO CRÍTICA: Inicializa is_ml_trained antes do bloco try/except
         is_ml_trained = False
         
         if is_price_data_available and CLASSIFIER is not None:
             log_debug(f"Análise Individual ML: Iniciando modelo {MODEL_NAME} para {ativo_selecionado}.")
-            
-            # Tenta o modelo primário/secundário (fast/full)
-            proba_up, conf_final, importances, is_trained = self._run_ml_model_pipeline(
-                df_tec, fund_row, MODEL_FEATURES, CLASSIFIER, MODEL_PARAMS, MODEL_NAME
-            )
-            
-            if not is_trained:
-                log_debug(f"Análise Individual ML: Modelo Primário/Secundário falhou. Tentando Fallback ({MODEL_FALLBACK_NAME}).")
-                # Tenta o modelo de fallback (RandomForest do usuário)
-                proba_up, conf_final, importances, is_trained = self._run_ml_model_pipeline(
-                    df_tec, fund_row, MODELO_FALLBACK_FEATURES, MODEL_FALLBACK, MODEL_FALLBACK_PARAMS, MODEL_FALLBACK_NAME
-                )
+            try:
+                df = df_tec.copy()
+                
+                # Obtendo os Horizons adaptativos (embora o lookback do perfil não seja fornecido aqui, usamos um padrão)
+                # Tenta usar a seleção da UI, senão usa o padrão do perfil (252)
+                ml_lookback_days_input = st.session_state.profile.get('ml_lookback_days', 252) 
+                     
+                ML_HORIZONS_IND = get_ml_horizons(ml_lookback_days_input)
+                
+                # REFORÇANDO: Garante que os features fundamentais estão na última linha (para a predição)
+                last_idx = df.index[-1] if not df.empty else None
+                if last_idx:
+                    # Atenção: 'Cluster' agora é ignorado aqui
+                    for f_col in ALL_FUND_FEATURES:
+                        if f_col == 'Cluster': continue # Ignora o cluster no input do ML de ativo único
+                        if f_col in fund_row and f_col not in df.columns:
+                            df.loc[last_idx, f_col] = fund_row[f_col]
+                        elif f_col not in df.columns:
+                            df[f_col] = np.nan
+                            
+                # Targets Futuros (make_targets logic)
+                for d in ML_HORIZONS_IND:
+                    df[f"t_{d}"] = (df["Close"].shift(-d) > df["Close"]).astype(int)
 
-            # Define os resultados finais
-            if is_trained:
-                df_tec['ML_Proba'] = proba_up
-                df_tec['ML_Confidence'] = conf_final
-                df_ml_meta = importances
-                is_ml_trained = True
+                # Remove NaNs da parte de treino e predição
+                df_model = df.dropna(subset=MODEL_FEATURES + [f"t_{ML_HORIZONS_IND[-1]}"]) # Usa o maior horizonte para filtrar NaNs
+                
+                if len(df_model) > 200: # Mínimo de pontos para treino (70% de 200 = 140)
+                    X_full = df_model[MODEL_FEATURES]
+                    
+                    # Split para treino (70%)
+                    split_idx = int(len(X_full) * 0.7)
+                    X_train = X_full.iloc[:split_idx]
+                    
+                    probabilities = []
+                    auc_scores = []
+                    
+                    # --- TREINAMENTO PARA CADA HORIZONTE ---
+                    for tgt_d in ML_HORIZONS_IND:
+                        tgt = f"t_{tgt_d}"
+                        y = df_model[tgt].values
+                        y_train = y[:split_idx]
+                        X_test = X_full.iloc[split_idx:]
+                        y_test = y[split_idx:] 
+                        
+                        model = CLASSIFIER(**MODEL_PARAMS)
+                        
+                        # Fix para classes desbalanceadas ou únicas no treino
+                        if len(np.unique(y_train)) < 2:
+                             log_debug(f"ML Individual: {ativo_selecionado} - Target {tgt} tem apenas uma classe no treino. Pulando Target.")
+                             continue
+                             
+                        # Aplica Scaling para modelos lineares/LogReg
+                        if CLASSIFIER is LogisticRegression:
+                             scaler = StandardScaler().fit(X_train)
+                             X_train_scaled = scaler.transform(X_train)
+                             X_test_scaled = scaler.transform(X_test)
+                             X_predict_scaled = scaler.transform(X_full.iloc[[-1]].copy())
+                        else:
+                             X_train_scaled = X_train
+                             X_test_scaled = X_test
+                             X_predict_scaled = X_full.iloc[[-1]].copy()
+
+                        model.fit(X_train_scaled, y_train)
+                        
+                        # --- VERIFICAÇÃO PARA PREDICAO ---
+                        
+                        if not X_full.iloc[[-1]].isnull().any().any():
+                            prob_now = model.predict_proba(X_predict_scaled)[0, 1]
+                            probabilities.append(prob_now)
+
+                        # Cálculo de AUC no conjunto de teste (para confiança)
+                        if len(y_test) > 0 and len(np.unique(y_test)) >= 2:
+                             prob_test = model.predict_proba(X_test_scaled)[:, 1]
+                             auc_scores.append(roc_auc_score(y_test, prob_test))
+                             
+                    # Score final ML = Média das 3 probabilidades
+                    ensemble_proba = np.mean(probabilities) if probabilities else 0.5
+                    
+                    # Confiança final = Média dos AUCs de teste
+                    conf_final = np.mean(auc_scores) if auc_scores else 0.5
+                    
+                    log_debug(f"ML Individual: Sucesso {MODEL_NAME}. Prob Média: {ensemble_proba:.2f}, AUC Teste Média: {conf_final:.2f}.")
+
+                    # Importância das features
+                    try:
+                         if CLASSIFIER is LogisticRegression:
+                             # Usa coeficientes para LogReg
+                             importances_data = np.abs(model.coef_[0])
+                         else:
+                             # Usa feature_importances_ para RF/XGB
+                             importances_data = model.feature_importances_
+
+                         importances = pd.DataFrame({
+                            'feature': MODEL_FEATURES,
+                            'importance': importances_data
+                         }).sort_values('importance', ascending=False)
+                    except:
+                         importances = pd.DataFrame({'feature': MODEL_FEATURES, 'importance': [1/len(MODEL_FEATURES)]*len(MODEL_FEATURES)})
+
+
+                    df_tec['ML_Proba'] = ensemble_proba
+                    df_tec['ML_Confidence'] = conf_final
+                    df_ml_meta = importances
+                    is_ml_trained = True # SUCESSO NO TREINAMENTO
+                    
+                else:
+                    log_debug(f"ML Individual: Dados insuficientes ({len(df_model)}). Pulando modelo supervisionado.")
+                    
+            except Exception as e:
+                log_debug(f"ML Individual: ERRO no modelo {MODEL_NAME}: {str(e)[:50]}. {traceback.format_exc()[:100]}")
+                
             
-            last_idx = df_tec.index[-1] if not df_tec.empty else None
-            # Se a última linha de df_tec estiver vazia (modo estático), as colunas serão perdidas. 
-            # Reassegura que a última linha tem os dados ML se o treino foi bem sucedido.
-            if is_ml_trained and last_idx is not None:
-                df_tec.loc[last_idx, 'ML_Proba'] = proba_up
-                df_tec.loc[last_idx, 'ML_Confidence'] = conf_final
-
-
-        # 2. Fallback Final: Se ML falhou no cálculo ou não foi treinado
+        # 2. Fallback: Se ML falhou no cálculo ou não foi treinado
         if not is_ml_trained:
             log_debug("ML Individual: Modelo supervisionado não foi treinado. Excluindo ML_Proba/Confidence.")
             
@@ -1047,139 +1106,117 @@ class ColetorDadosLive(object):
                 })
             
         return df_tec, fund_row, df_ml_meta
+        return None, None, None
 
-    def _run_ml_model_pipeline(self, df_tec, fund_row, model_features, classifier, model_params, model_name):
-        """Método helper para executar um pipeline ML unificado (usado por Constutor e Individual)."""
-        is_trained = False
-        ensemble_proba = 0.5
-        conf_final = 0.0
-        importances = pd.DataFrame()
+# =============================================================================
+# 11. CLASSE PRINCIPAL: CONSTRUTOR DE PORTFÓLIO AUTOML
+# =============================================================================
+
+class ConstrutorPortfolioAutoML:
+    def __init__(self, valor_investimento: float, periodo: str = PERIODO_DADOS):
+        self.valor_investimento = valor_investimento
+        self.periodo = periodo
+        self.dados_por_ativo = {}
+        self.dados_fundamentalistas = pd.DataFrame()
+        self.metricas_performance = pd.DataFrame()
+        self.volatilidades_garch = {}
+        self.predicoes_ml = {}
+        self.ativos_sucesso = []
+        self.ativos_selecionados = []
+        self.alocacao_portfolio = {}
+        self.metricas_portfolio = {}
+        self.metodo_alocacao_atual = "Não Aplicado"
+        self.justificativas_selecao = {}
+        self.perfil_dashboard = {} 
+        self.pesos_atuais = {}
+        self.scores_combinados = pd.DataFrame()
         
-        ML_HORIZONS_IND = get_ml_horizons(st.session_state.profile.get('ml_lookback_days', 252))
-        ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
-
-        try:
-            df = df_tec.copy()
-            last_idx = df.index[-1] if not df.empty else None
-
-            # 1. Injeção de Fundamentos (para features que o modelo espera)
-            if last_idx is not None:
-                for f_col in ALL_FUND_FEATURES:
-                    # Verifica se o feature faz parte do modelo atual (model_features)
-                    if f_col in model_features: 
-                        if f_col in fund_row and f_col not in df.columns:
-                            df.loc[last_idx, f_col] = fund_row[f_col]
-                        elif f_col not in df.columns:
-                            df[f_col] = np.nan
-
-            # 2. Geração dos Targets
-            if 'Close' in df.columns and len(df) > ML_HORIZONS_IND[-1]:
-                for d in ML_HORIZONS_IND:
-                    df[f"t_{d}"] = (df["Close"].shift(-d) > df["Close"]).astype(int)
-            else:
-                raise ValueError("Dados de preço insuficientes para targets.")
-
-            model_targets = [f"t_{d}" for d in ML_HORIZONS_IND if f"t_{d}" in df.columns]
-            df_model = df.dropna(subset=model_features + model_targets).copy()
-
-            if len(df_model) < MIN_TRAIN_DAYS_ML:
-                raise ValueError(f"Apenas {len(df_model)} pontos válidos para treino.")
-
-            X_full = df_model[model_features]
-            split_idx = int(len(X_full) * 0.7)
-            X_train = X_full.iloc[:split_idx]
+    def coletar_e_processar_dados(self, simbolos: list) -> bool:
+        # Passa o modo GARCH selecionado para o coletor
+        garch_mode_select = st.session_state.get('ml_model_mode_select', 'fast')
+        # Determina o modo GARCH para o construtor: GARCH(1,1) para fast, Auto-Search para full
+        garch_mode = 'Auto-Search GARCH' if garch_mode_select == 'full' else 'GARCH(1,1)'
+        
+        # Seta o modo GARCH na sessão para ser usado dentro do coletor
+        st.session_state['garch_mode'] = garch_mode
+        
+        coletor = ColetorDadosLive(periodo=self.periodo)
+        simbolos_filtrados = [s for s in simbolos if s in TODOS_ATIVOS]
+        if not simbolos_filtrados: return False
+        
+        # Inicia a coleta
+        if not coletor.coletar_e_processar_dados(simbolos_filtrados):
+            # Mesmo se falhar, preenche com o que foi coletado (pode ser útil para debug ou fallback)
+            self.dados_por_ativo = coletor.dados_por_ativo
+            self.dados_fundamentalistas = coletor.dados_fundamentalistas
+            self.ativos_sucesso = coletor.ativos_sucesso
+            self.metricas_performance = coletor.metricas_performance
+            self.volatilidades_garch = coletor.volatilidades_garch_raw
+            return False
             
-            probabilities = []
-            auc_scores = []
-            
-            # 3. Treinamento
-            for tgt_d in ML_HORIZONS_IND:
-                tgt = f"t_{tgt_d}"
-                if tgt not in df_model.columns: continue
+        self.dados_por_ativo = coletor.dados_por_ativo
+        self.dados_fundamentalistas = coletor.dados_fundamentalistas
+        self.ativos_sucesso = coletor.ativos_sucesso
+        self.metricas_performance = coletor.metricas_performance
+        self.volatilidades_garch = coletor.volatilidades_garch_raw 
+        return True
 
-                y = df_model[tgt].values
-                y_train = y[:split_idx]
-                X_test = X_full.iloc[split_idx:]
-                y_test = y[split_idx:] 
-                
-                model = classifier(**model_params)
-                
-                if len(np.unique(y_train)) < 2: continue # Classe única no treino
+    def calculate_cross_sectional_features(self):
+        df_fund = self.dados_fundamentalistas.copy()
+        if 'sector' not in df_fund.columns or 'pe_ratio' not in df_fund.columns: return
+        
+        log_debug("Calculando features cross-sectional (P/L e P/VP relativos ao setor).")
+        
+        cols_numeric = ['pe_ratio', 'pb_ratio']
+        for col in cols_numeric:
+             if col in df_fund.columns:
+                 df_fund[col] = pd.to_numeric(df_fund[col], errors='coerce')
 
-                # Scaling
-                numeric_cols_all = X_train.select_dtypes(include=np.number).columns
-                X_train_numeric = X_train[numeric_cols_all].fillna(0)
-                X_test_numeric = X_test[numeric_cols_all].fillna(0)
-                X_predict_numeric = X_full.iloc[[-1]][numeric_cols_all].fillna(0)
+        # Substitui a média setorial por 1.0 se a média for zero ou NaN para evitar divisão por zero
+        sector_means = df_fund.groupby('sector')[['pe_ratio', 'pb_ratio']].transform('mean')
+        
+        valid_pe_mean = sector_means['pe_ratio'].replace(0, np.nan).fillna(1.0)
+        valid_pb_mean = sector_means['pb_ratio'].replace(0, np.nan).fillna(1.0)
 
-                scaler = StandardScaler().fit(X_train_numeric)
-                
-                X_train_scaled = scaler.transform(X_train_numeric)
-                X_test_scaled = scaler.transform(X_test_numeric)
-                X_predict_scaled = scaler.transform(X_predict_numeric)
+        df_fund['pe_rel_sector'] = df_fund['pe_ratio'] / valid_pe_mean
+        df_fund['pb_rel_sector'] = df_fund['pb_ratio'] / valid_pb_mean
+        
+        df_fund = df_fund.replace([np.inf, -np.inf], np.nan).fillna(1.0)
+        self.dados_fundamentalistas = df_fund
+        log_debug("Features cross-sectional concluídas.")
 
-                # Treina o modelo (usando apenas dados numéricos)
-                model.fit(X_train_scaled, y_train)
-
-                # Predição e AUC
-                if X_predict_numeric.shape[0] == 1:
-                    prob_now = model.predict_proba(X_predict_scaled)[0, 1]
-                    probabilities.append(prob_now)
-
-                if len(y_test) > 0 and len(np.unique(y_test)) >= 2:
-                     prob_test = model.predict_proba(X_test_scaled)[:, 1]
-                     auc_scores.append(roc_auc_score(y_test, prob_test))
-            
-            # 4. Consolidação
-            ensemble_proba = np.mean(probabilities) if probabilities else 0.5
-            conf_final = np.mean(auc_scores) if auc_scores else 0.0
-            
-            # 5. Importância
-            try:
-                 if classifier is LogisticRegression:
-                     importances_data = np.abs(model.coef_[0])
-                 else:
-                     importances_data = model.feature_importances_
-
-                 importances = pd.DataFrame({
-                    'feature': numeric_cols_all.tolist(),
-                    'importance': importances_data
-                 }).sort_values('importance', ascending=False)
-            except Exception as e:
-                 log_debug(f"Erro ao calcular feature importance: {e}")
-                 importances = pd.DataFrame()
-
-
-            log_debug(f"ML Pipeline ({model_name}): Sucesso. Prob Média: {ensemble_proba:.2f}, AUC Teste Média: {conf_final:.2f}.")
-            is_trained = True
-
-        except Exception as e:
-            log_debug(f"ML Pipeline ({model_name}): ERRO ou Dados Insuficientes: {str(e)[:50]}.")
-            
-        return ensemble_proba, conf_final, importances, is_trained
-
+    def calcular_volatilidades_garch(self):
+        valid_vols = len([k for k, v in self.volatilidades_garch.items() if not np.isnan(v)])
+        if valid_vols == 0:
+             log_debug("AVISO: Todas as volatilidades GARCH são nulas. Substituindo por volatilidade histórica.")
+             for ativo in self.ativos_sucesso:
+                 if ativo in self.metricas_performance.index and 'volatilidade_anual' in self.metricas_performance.columns:
+                      self.volatilidades_garch[ativo] = self.metricas_performance.loc[ativo, 'volatilidade_anual']
+        log_debug("Verificando volatilidades GARCH. Aplicando fallback histórico onde necessário.")
+        
     def treinar_modelos_ensemble(self, ml_mode: str = 'fast', progress_callback=None):
         ativos_com_dados = [s for s in self.ativos_sucesso if s in self.dados_por_ativo]
         log_debug(f"Iniciando Pipeline de Treinamento ML/Clusterização (Modo: {ml_mode}).")
         
+        ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
+        
         # --- Seleção de Feature Set com base no Modo ML ---
         if ml_mode == 'fast':
             MODEL_FEATURES = LGBM_FEATURES
-            CLASSIFIER = LogisticRegression 
+            CLASSIFIER = LogisticRegression # Mudado para LogReg (Modelo mais rápido)
             MODEL_PARAMS = dict(penalty='l2', solver='liblinear', class_weight='balanced', random_state=42)
             MODEL_NAME = 'Regressão Logística Rápida'
-        else:
-            MODEL_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel", 'rsi_14', 'macd_diff', 'vol_20d']
+        else: # ml_mode == 'full' (RF/XGB Ensemble)
+            # MODEL_FEATURES ajustado para não incluir 'Cluster'
+            MODEL_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel", 'rsi_14', 'macd_diff', 'vol_20d'] # Usamos features descorrelacionados
             CLASSIFIER = RandomForestClassifier
             MODEL_PARAMS = dict(n_estimators=150, max_depth=7, random_state=42, class_weight='balanced', n_jobs=-1)
             MODEL_NAME = 'Full Ensemble (RF/XGB)'
             
-        # MODELO DE FALLBACK CASO CLASSIFIER FALHE
-        MODEL_FALLBACK = RandomForestClassifier
-        MODEL_FALLBACK_PARAMS = dict(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced')
-        MODEL_FALLBACK_NAME = 'RandomForest (Fallback Risco)'
         
         # --- Clusterização Inicial (Fundamentos) ---
+        # Mantém a lógica de clusterização inicial para popular a coluna 'Cluster' nos dados fundamentais,
+        # mesmo que ela não seja usada no ML supervisionado.
         required_cols_cluster = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe']
         available_fund_cols = [col for col in required_cols_cluster if col in self.dados_fundamentalistas.columns]
         
@@ -1198,47 +1235,163 @@ class ColetorDadosLive(object):
                 kmeans = KMeans(n_clusters=min(len(data_pca), 5), random_state=42, n_init=10)
                 clusters = kmeans.fit_predict(data_pca)
                 self.dados_fundamentalistas['Cluster'] = pd.Series(clusters, index=clustering_df.index).fillna(-1).astype(int)
+                log_debug(f"Clusterização inicial concluída. {self.dados_fundamentalistas['Cluster'].nunique()} clusters formados.")
             else:
                 self.dados_fundamentalistas['Cluster'] = 0
+                log_debug("AVISO: Dados insuficientes após o JOIN. Clusterização inicial ignorada.")
+        
         else:
             self.dados_fundamentalistas['Cluster'] = 0
+            log_debug("AVISO: Falha na coleta de dados fundamentais (P/L, ROE, etc.). Usando Cluster = 0.")
         
+        # --- Pipeline ML ---
+        ml_lookback_days = self.perfil_dashboard.get('ml_lookback_days', 252) 
+        ML_HORIZONS_CONST = get_ml_horizons(ml_lookback_days)
         
-        # --- Pipeline ML de Execução ---
+        all_ml_results = {}
+        total_ml_success = 0
+        
         for i, ativo in enumerate(ativos_com_dados):
+            # Inicializa com 0.5 (neutro) e AUC 0.0 (sem sucesso)
             result_for_ativo = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': 'Not Run/Data Error'}
             
-            if progress_callback: progress_callback.progress(50 + int((i/len(ativos_com_dados))*20), text=f"Treinando {MODEL_NAME}: {ativo}...")
-            
-            df_tec = self.dados_por_ativo[ativo]
-            fund_row = self.dados_fundamentalistas.loc[ativo].to_dict() if ativo in self.dados_fundamentalistas.index else {}
-            
-            # Tenta o modelo primário/secundário (fast/full)
-            proba_up, conf_final, _, is_trained = self._run_ml_model_pipeline(
-                df_tec, fund_row, MODEL_FEATURES, CLASSIFIER, MODEL_PARAMS, MODEL_NAME
-            )
-            
-            if not is_trained:
-                # Tenta o modelo de fallback (RandomForest do usuário)
-                proba_up, conf_final, _, is_trained = self._run_ml_model_pipeline(
-                    df_tec, fund_row, MODELO_FALLBACK_FEATURES, MODEL_FALLBACK, MODEL_FALLBACK_PARAMS, MODEL_FALLBACK_NAME
-                )
+            try:
+                if progress_callback: progress_callback.progress(50 + int((i/len(ativos_com_dados))*20), text=f"Treinando {MODEL_NAME}: {ativo}...")
+                df = self.dados_por_ativo[ativo].copy()
+                
+                if ativo in self.dados_fundamentalistas.index:
+                    fund_data = self.dados_fundamentalistas.loc[ativo].to_dict()
+                else:
+                    fund_data = {} 
 
-            # Define os resultados finais
-            result_for_ativo = {
-                'predicted_proba_up': proba_up, 
-                'auc_roc_score': conf_final, 
-                'model_name': MODEL_NAME if is_trained else 'Training Failed'
-            }
-            
-            if is_trained:
-                last_idx = df_tec.index[-1]
-                df_tec.loc[last_idx, 'ML_Proba'] = proba_up
-                df_tec.loc[last_idx, 'ML_Confidence'] = conf_final
-            
-            self.predicoes_ml[ativo] = result_for_ativo
+                # Targets Futuros 
+                if 'Close' in df.columns and len(df) > ML_HORIZONS_CONST[-1]:
+                    for d in ML_HORIZONS_CONST:
+                        df[f"t_{d}"] = (df["Close"].shift(-d) > df["Close"]).astype(int)
+
+                # Condição de desvio para o FALLBACK
+                if CLASSIFIER is None or f"t_{ML_HORIZONS_CONST[-1]}" not in df.columns or df[f"t_{ML_HORIZONS_CONST[-1]}"].isnull().all() or len(df.dropna(subset=MODEL_FEATURES)) < 200:
+                    # Permite o uso da lógica de ML, mas com retorno neutro/falha
+                    raise ValueError("Dados insuficientes para treinamento supervisionado.")
+
+                # --- Construção do Dataset de Treino/Predição ---
+                last_idx = df.index[-1] if not df.empty else None
+                if last_idx:
+                    for f_col in ALL_FUND_FEATURES:
+                        if f_col == 'Cluster': # Ignora 'Cluster' no ML supervisionado
+                            continue
+                        if f_col in fund_data and f_col not in df.columns:
+                            df.loc[last_idx, f_col] = fund_data[f_col]
+                        elif f_col not in df.columns:
+                             df[f_col] = np.nan
+
+                model_targets = [f"t_{d}" for d in ML_HORIZONS_CONST]
+                df_model = df.dropna(subset=MODEL_FEATURES + model_targets).copy() 
+
+                if len(df_model) < 200: 
+                    raise ValueError(f"Apenas {len(df_model)} pontos válidos para treino.")
+                
+                X_full = df_model[MODEL_FEATURES]
+                split_idx = int(len(X_full) * 0.7)
+                X_train = X_full.iloc[:split_idx]
+                
+                probabilities = []
+                auc_scores = []
+                
+                # --- TREINAMENTO PARA CADA HORIZONTE (MANTIDO IDÊNTICO À LÓGICA INDIVIDUAL) ---
+                for tgt_d in ML_HORIZONS_CONST:
+                    tgt = f"t_{tgt_d}"
+                    y = df_model[tgt].values
+                    y_train = y[:split_idx]
+                    X_test = X_full.iloc[split_idx:]
+                    y_test = y[split_idx:] 
+                    
+                    model = CLASSIFIER(**MODEL_PARAMS)
+                    
+                    if len(np.unique(y_train)) < 2:
+                             log_debug(f"ML Pipeline: {ativo} - Target {tgt} tem apenas uma classe no treino. Pulando Target.")
+                             continue
+                             
+                    # Aplica Scaling para modelos lineares/LogReg
+                    if CLASSIFIER is LogisticRegression:
+                         scaler = StandardScaler().fit(X_train)
+                         X_train_scaled = scaler.transform(X_train)
+                         X_test_scaled = scaler.transform(X_test)
+                         X_predict_scaled = scaler.transform(X_full.iloc[[-1]].copy())
+                    else:
+                         X_train_scaled = X_train
+                         X_test_scaled = X_test
+                         X_predict_scaled = X_full.iloc[[-1]].copy()
+
+                    model.fit(X_train_scaled, y_train)
+                    
+                    # --- VERIFICAÇÃO PARA PREDICAO ---
+                    
+                    if not X_full.iloc[[-1]].isnull().any().any():
+                        prob_now = model.predict_proba(X_predict_scaled)[0, 1]
+                        probabilities.append(prob_now)
+
+                    # Cálculo de AUC no conjunto de teste (para confiança)
+                    if len(y_test) > 0 and len(np.unique(y_test)) >= 2:
+                         prob_test = model.predict_proba(X_test_scaled)[:, 1]
+                         auc_scores.append(roc_auc_score(y_test, prob_test))
+                             
+                ensemble_proba = np.mean(probabilities) if probabilities else 0.5
+                
+                # Confiança final = Média dos AUCs de teste
+                conf_final = np.mean(auc_scores) if auc_scores else 0.5
+                
+                result_for_ativo = {
+                    'predicted_proba_up': ensemble_proba, 
+                    'auc_roc_score': conf_final, 
+                    'model_name': MODEL_NAME
+                }
+                
+                # Importância das features (Usamos o último modelo treinado como proxy)
+                try:
+                    if CLASSIFIER is LogisticRegression:
+                        importances_data = np.abs(model.coef_[0])
+                    else:
+                        importances_data = model.feature_importances_
+                        
+                    importances = pd.DataFrame({
+                        'feature': MODEL_FEATURES,
+                        'importance': importances_data
+                    }).sort_values('importance', ascending=False)
+                except:
+                     importances = pd.DataFrame({'feature': MODEL_FEATURES, 'importance': [1/len(MODEL_FEATURES)]*len(MODEL_FEATURES)})
+                
+                # Os dados ML (Proba/Confidence) são injetados na última linha do DF técnico local (para debug)
+                self.dados_por_ativo[ativo].loc[last_idx, 'ML_Proba'] = ensemble_proba
+                self.dados_por_ativo[ativo].loc[last_idx, 'ML_Confidence'] = conf_final
+                log_debug(f"ML (Supervisionado): Ativo {ativo} sucesso. Prob: {ensemble_proba:.2f}, AUC: {conf_final:.2f}.")
+                total_ml_success += 1
+
+            except Exception as e:
+                # O erro de Valor (dados insuficientes) é tratado aqui, resultando em ML neutro/falho
+                log_debug(f"ML (Fallback): Ativo {ativo} falhou no treinamento ({str(e)[:20]}). Aplicando Score Neutro.")
+                
+                if ativo in self.dados_por_ativo and not self.dados_por_ativo[ativo].empty:
+                    df_local = self.dados_por_ativo[ativo]
+                    # Adiciona valores neutros para manter a consistência do DF técnico (para debug),
+                    # mas o dicionário `result_for_ativo` define a pontuação real (AUC=0.0)
+                    df_local.loc[df_local.index[-1], 'ML_Proba'] = 0.5
+                    df_local.loc[df_local.index[-1], 'ML_Confidence'] = 0.0
+                
+                # O resultado no dictionary permanece neutro (0.5 prob, 0.0 AUC) para que o score ML ponderado seja 0
+                result_for_ativo = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': 'Training Failed'}
+                
+            all_ml_results[ativo] = result_for_ativo
 
 
+        # Condição de Falha Total: Se todos os ativos falharem, forçamos o AUC=0 para desabilitar o score ML ponderado.
+        if total_ml_success == 0 and len(ativos_com_dados) > 0:
+            log_debug("AVISO: Falha total no ML supervisionado. Score ML será desabilitado/neutro.")
+            for ativo in ativos_com_dados:
+                all_ml_results[ativo]['auc_roc_score'] = 0.0
+                all_ml_results[ativo]['model_name'] = 'Total Fallback'
+        
+        self.predicoes_ml = all_ml_results
         log_debug("Pipeline de Treinamento ML/Clusterização concluído.")
 
 
@@ -1928,7 +2081,7 @@ def aba_introducao():
         O sistema é resiliente a falhas de API de preço ou dados insuficientes:
         
         * **Modo Estático Global:** Ativado se a coleta de preços falhar consecutivamente para múltiplos ativos, impedindo que dados incompletos corrompam a análise de risco.
-        * **Fallback ML (Hierarquia):** O sistema tenta o **Modelo Rápido/Lento** (conforme sua escolha). Se falhar (dados insuficientes, classe única, ou erro), ele tenta o **Modelo Fallback (Risco)**. Se este também falhar, o **Score ML é zerado**, resultando em uma análise puramente **Fundamentalista/Performance**.
+        * **Fallback ML (Treinamento):** Se um ativo não tiver dados históricos de preço suficientes para treinar o modelo de Machine Learning, sua predição de ML é descartada (**o Score ML é zerado pelo Fator Confiança AUC=0**). No entanto, o ativo não é excluído da análise, permitindo que ele seja classificado e selecionado apenas por seus fortes Fundamentos e Fatores Técnicos/Performance.
         * **Clusterização e Fundamentos:** Os processos de Clusterização (K-Means + PCA) e a leitura dos Fundamentos são independentes do histórico de preços, garantindo que uma avaliação de **Qualidade** sempre esteja disponível.
         """)
 
@@ -2050,19 +2203,13 @@ def aba_construtor_portfolio():
         st.warning("⚠️ Por favor, defina o universo de análise na aba **'Seleção de Ativos'** primeiro.")
         return
     
-    # CORREÇÃO: Usar o nome correto da classe ConstrutorPortfolioAutoML
-    # Adicionado o try/except para garantir que o builder exista.
-    if 'builder' in st.session_state and st.session_state.builder is not None and isinstance(st.session_state.builder, ConstrutorPortfolioAutoML):
-        builder = st.session_state.builder
-    else:
-        builder = None
-        st.session_state.builder_complete = False
-
+    if 'builder' not in st.session_state: st.session_state.builder = None
     if 'profile' not in st.session_state: st.session_state.profile = {}
     if 'builder_complete' not in st.session_state: st.session_state.builder_complete = False
     
     # Exibe o debug avançado no topo da aba (CORREÇÃO DE POSICIONAMENTO)
-    if st.session_state.builder_complete and builder is not None:
+    if st.session_state.builder_complete:
+        builder = st.session_state.builder
         with st.expander("🐛 LOG DE DEBUG AVANÇADO (Entradas, Scores e Pesos)", expanded=False):
             st.markdown("##### 1. Inputs do Perfil")
             st.json(st.session_state.profile)
@@ -2082,7 +2229,7 @@ def aba_construtor_portfolio():
             st.dataframe(pd.DataFrame(builder.predicoes_ml).T.reset_index().rename(columns={'index': 'Ticker'}), use_container_width=True)
 
 
-    if not st.session_state.builder_complete or builder is None:
+    if not st.session_state.builder_complete:
         st.markdown('## 📋 Calibração do Perfil de Risco')
         
         st.info(f"✔️ **{len(st.session_state.ativos_para_analise)} ativos** prontos. Responda o questionário para calibrar a otimização.")
@@ -2196,7 +2343,6 @@ def aba_construtor_portfolio():
                 log_debug(f"Perfil calculado: {risk_level} (Score {score}). Horizonte ML: {lookback} dias.")
                 
                 try:
-                    # CORREÇÃO: Renomeado para a classe correta
                     builder_local = ConstrutorPortfolioAutoML(investment)
                     st.session_state.builder = builder_local
                 except Exception as e:
@@ -2226,9 +2372,9 @@ def aba_construtor_portfolio():
                 st.rerun()
     
     else:
-        # Garante que builder está definido
         builder = st.session_state.builder
-        
+        if builder is None: st.error("Objeto construtor não encontrado. Recomece a análise."); st.session_state.builder_complete = False; return
+            
         profile = st.session_state.profile
         assets = builder.ativos_selecionados
         allocation = builder.alocacao_portfolio
@@ -2757,8 +2903,6 @@ def aba_analise_individual():
     )
 
     # Armazena o lookback day (numérico) no profile para ser usado pela coleta
-    # CORREÇÃO: Inicializa st.session_state.profile se não existir
-    if 'profile' not in st.session_state: st.session_state.profile = {}
     st.session_state.profile['ml_lookback_days'] = horizon_map_individual.get(
         horizon_selection_desc, 252
     )
@@ -2784,7 +2928,6 @@ def aba_analise_individual():
     
     with col_modes[1]:
         st.markdown("##### Volatilidade (Risco):") 
-        # Apenas a informação da Volatilidade Histórica é mantida (GARCH removido)
         st.info("Modelo de Risco: Volatilidade Histórica Anualizada")
         st.session_state['individual_garch_mode'] = 'GARCH(1,1)' # Mantido apenas para fallback de variável, sem efeito real
         
