@@ -495,7 +495,7 @@ class OtimizadorPortfolioAvancado:
         cov_matrix = corr_matrix.values * np.outer(vol_array, vol_array)
         return pd.DataFrame(cov_matrix, index=returns_df.columns, columns=returns_df.columns)
     
-    def estatisticas_portfolio(self, pesos: np.ndarray) -> tuple[float, float]:
+    def estatisticas_portfolio(self, pesos: np.ndarray) -> float:
         p_retorno = np.dot(pesos, self.mean_returns)
         p_vol = np.sqrt(np.dot(pesos.T, np.dot(self.cov_matrix, pesos)))
         return p_retorno, p_vol
@@ -2132,7 +2132,7 @@ def aba_introducao():
             'Pilar': ['Performance', 'Machine Learning', 'Fundamentos', 'Técnicos'],
             'Peso Base': ['20%', '20%', 'Varia (30%-50%)', 'Varia (30%-50%)'],
             'Foco': ['Risco/Retorno Histórico', 'Predição Direcional', 'Qualidade/Valuation', 'Momento/Tendência']
-        }), use_container_width=True, hide_index=True)
+        }, index=['1', '2', '3', '4']).rename_axis('ID')), use_container_width=True, hide_index=False)
     
     st.markdown("---")
     
@@ -2143,7 +2143,9 @@ def aba_introducao():
     with st.expander("3. Análise Exaustiva da Teoria de Portfólio Moderna (MPT)"):
         st.subheader("A Otimização de Markowitz para Alocação de Capital")
         st.write("""
-        A MPT é a espinha dorsal da nossa fase de alocação de capital. Depois que os ativos são ranqueados e selecionados pelo Scorecard, a Otimização de Markowitz é aplicada para determinar os pesos ideais que devem ser alocados em cada ativo, visando o melhor equilíbrio entre risco e retorno.
+        A MPT é a espinha dorsal da nossa fase de alocação de capital. Ela se baseia no princípio de que o risco de um portfólio não é a mera soma dos riscos individuais dos ativos, mas sim o risco resultante da **combinação** desses ativos, considerando a correlação entre eles.
+        
+        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente** , que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
         """)
         
         col_mpt_1, col_mpt_2 = st.columns(2)
@@ -2181,14 +2183,15 @@ def aba_introducao():
         **Natureza:** Algoritmo linear fundamental, utilizado principalmente para classificação binária. Embora seja "Regressão", ele estima a probabilidade de um evento, o que o torna ideal para prever a probabilidade de alta.
         
         **Funcionamento:** Utiliza a função logística (sigmoide) para mapear qualquer valor real entre 0 e 1.
-        $$P(Y=1|X) = \frac{1}{1 + e^{-( \beta_0 + \beta_1 x_1 + \dots + \beta_n x_n )}}$$
+        
+        $$P(Y=1|X) = \frac{1}{1 + e^{-(\beta_0 + \beta_1 x_1 + \dots + \beta_n x_n)}}$$
         
         **Vantagens na Bolsa:** Extremamente rápido para treinar e prever (ideal para o modo 'fast'). Sua linearidade facilita a interpretação da influência de cada *feature* (peso $\beta_n$). É a base do nosso modo rápido de ML.
         """)
         
         st.markdown("##### 4.2. Random Forest (Floresta Aleatória)")
         st.write("""
-        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão.
+        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão .
         
         **Funcionamento:** Cada árvore na floresta é treinada em uma subamostra diferente do conjunto de dados e em um subconjunto aleatório de *features*. A previsão final é determinada pela maioria dos votos das árvores (o que o chamamos de *bagging*).
         
@@ -2328,27 +2331,27 @@ def aba_construtor_portfolio():
     if 'profile' not in st.session_state: st.session_state.profile = {}
     if 'builder_complete' not in st.session_state: st.session_state.builder_complete = False
     
-    # Exibe o debug avançado no topo da aba (CORREÇÃO DE POSICIONAMENTO)
-    if st.session_state.builder_complete:
-        builder = st.session_state.builder
-        with st.expander("🐛 LOG DE DEBUG AVANÇADO (Entradas, Scores e Pesos)", expanded=False):
-            st.markdown("##### 1. Inputs do Perfil")
-            st.json(st.session_state.profile)
-            st.markdown("##### 2. Pesos Finais Utilizados na Pontuação")
-            st.json(builder.pesos_atuais)
-            st.markdown("##### 3. Ranqueamento e Scores Combinados (Head)")
-            debug_cols = ['total_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 'sharpe', 'retorno_anual']
-            debug_df = builder.scores_combinados[[c for c in debug_cols if c in builder.scores_combinados.columns]]
-            st.dataframe(debug_df.head(10).style.format('{:.4f}'), use_container_width=True)
-            st.markdown("##### 4. Resultados da Otimização Markowitz/Alocação")
-            st.json({
-                "Método": builder.metodo_alocacao_atual,
-                "Métricas Portfólio": builder.metricas_portfolio,
-                "Alocação Final": {k: f"{v['weight']:.4f}" for k, v in builder.alocacao_portfolio.items()}
-            })
-            st.markdown("##### 5. Predições ML por Ativo")
-            st.dataframe(pd.DataFrame(builder.predicoes_ml).T.reset_index().rename(columns={'index': 'Ticker'}), use_container_width=True)
-
+    # *** ALTERAÇÃO SOLICITADA: Remoção do Log de Debug ***
+    # if st.session_state.builder_complete:
+    #     builder = st.session_state.builder
+    #     with st.expander("🐛 LOG DE DEBUG AVANÇADO (Entradas, Scores e Pesos)", expanded=False):
+    #         st.markdown("##### 1. Inputs do Perfil")
+    #         st.json(st.session_state.profile)
+    #         st.markdown("##### 2. Pesos Finais Utilizados na Pontuação")
+    #         st.json(builder.pesos_atuais)
+    #         st.markdown("##### 3. Ranqueamento e Scores Combinados (Head)")
+    #         debug_cols = ['total_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 'sharpe', 'retorno_anual']
+    #         debug_df = builder.scores_combinados[[c for c in debug_cols if c in builder.scores_combinados.columns]]
+    #         st.dataframe(debug_df.head(10).style.format('{:.4f}'), use_container_width=True)
+    #         st.markdown("##### 4. Resultados da Otimização Markowitz/Alocação")
+    #         st.json({
+    #             "Método": builder.metodo_alocacao_atual,
+    #             "Métricas Portfólio": builder.metricas_portfolio,
+    #             "Alocação Final": {k: f"{v['weight']:.4f}" for k, v in builder.alocacao_portfolio.items()}
+    #         })
+    #         st.markdown("##### 5. Predições ML por Ativo")
+    #         st.dataframe(pd.DataFrame(builder.predicoes_ml).T.reset_index().rename(columns={'index': 'Ticker'}), use_container_width=True)
+    # *** FIM DA ALTERAÇÃO SOLICITADA ***
 
     if not st.session_state.builder_complete:
         st.markdown('## 📋 Calibração do Perfil de Risco')
@@ -2902,13 +2905,16 @@ def aba_analise_individual():
         )
         st.session_state['individual_ml_mode'] = ml_mode_select
     
-    with col_modes[1]:
-        st.markdown("##### Volatilidade (Risco):") 
-        st.info("Modelo de Risco: Volatilidade Histórica Anualizada")
-        st.session_state['individual_garch_mode'] = 'GARCH(1,1)' # Mantido apenas para fallback de variável, sem efeito real
-        
+    # *** ALTERAÇÃO SOLICITADA: Remoção da seção de Volatilidade da Análise Individual ***
+    # with col_modes[1]:
+    #     st.markdown("##### Volatilidade (Risco):") 
+    #     st.info("Modelo de Risco: Volatilidade Histórica Anualizada")
+    #     st.session_state['individual_garch_mode'] = 'GARCH(1,1)' # Mantido apenas para fallback de variável, sem efeito real
+    # *** FIM DA ALTERAÇÃO SOLICITADA ***
+    
     
     # NOVO: Botões Centralizados (Executar Análise e Limpar Análise)
+    st.markdown("---")
     col_btn_start, col_btn_center, col_btn_end = st.columns([1, 2, 1])
     with col_btn_center:
         col_exec, col_clear = st.columns(2)
