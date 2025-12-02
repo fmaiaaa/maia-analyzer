@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.6 - REVERSÃO MARKOWITZ/DINÂMICO): Pesos Dinâmicos + Otimização Markowitz + Seleção por Score e Diversificação de Cluster.
 - Modelagem (V9.6): ML Restaurado para Estabilidade (Lógica 6.0.9) + GARCH Removido da UI/Lógica de Otimização.
 
-Versão: 9.6.0 (Final Build: Reversão Lógica Dinâmica + Markowitz + Fix Bugs)
+Versão: 9.6.1 (Fix: Erros de Index/Markowitz Fallback)
 =============================================================================
 """
 
@@ -524,8 +524,12 @@ class OtimizadorPortfolioAvancado:
                 final_weights = resultado.x / np.sum(resultado.x)
                 return {ativo: peso for ativo, peso in zip(self.returns.columns, final_weights)}
             else:
+                # === ALTERAÇÃO 1: Fallback para pesos iguais se otimização falhar ===
+                log_debug(f"AVISO: Otimizador Markowitz falhou ({estrategia}). Usando PESOS IGUAIS como fallback.")
                 return {ativo: 1.0 / self.num_ativos for ativo in self.returns.columns}
-        except Exception:
+                # ==================================================================
+        except Exception as e:
+            log_debug(f"ERRO: Markowitz falhou criticamente ({str(e)}). Usando PESOS IGUAIS como fallback.")
             return {ativo: 1.0 / self.num_ativos for ativo in self.returns.columns}
 
 # =============================================================================
@@ -603,7 +607,6 @@ class ColetorDadosLive(object):
 
         # Selecionar melhor modelo por BIC
         best_row = results_df.loc[results_df["bic"].idxmin()]
-        best_model_name = best_row["model"]
         best_fit = fitted_models[best_model_name]
         
         final_vol_daily = best_fit.conditional_volatility.iloc[-1] / 100
@@ -1591,12 +1594,19 @@ class ConstrutorPortfolioAutoML:
             
             valid_selection = [a for a in self.ativos_selecionados if a in self.scores_combinados.index]
             
+            # === ALTERAÇÃO 2: Implementando o Fallback para 20% se o Markowitz falhar ===
+            # (Já tratamos a lógica interna do optimizer, aqui é o fallback para Markowitz ignorada)
             if valid_selection:
                  scores = self.scores_combinados.loc[valid_selection, 'total_score']
                  total_score = scores.sum()
-                 if total_score > 0:
+                 
+                 # Alocação 20% para cada (para 5 ativos, é 100%)
+                 if len(valid_selection) == NUM_ATIVOS_PORTFOLIO:
+                    weights = {asset: 1.0 / NUM_ATIVOS_PORTFOLIO for asset in valid_selection}
+                    self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Markowitz: 20% cada)'
+                 elif total_score > 0:
                      weights = (scores / total_score).to_dict()
-                     self.metodo_alocacao_atual = 'PONDERAÇÃO POR SCORE (Fallback)'
+                     self.metodo_alocacao_atual = 'PONDERAÇÃO POR SCORE (Fallback Markowitz)'
                  else:
                      weights = {asset: 1.0 / len(valid_selection) for asset in valid_selection}
                      self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
@@ -1617,10 +1627,16 @@ class ConstrutorPortfolioAutoML:
         log_debug(f"Otimizando Markowitz. Estratégia: {self.metodo_alocacao_atual} (Risco: {nivel_risco}).")
             
         weights = optimizer.otimizar(estrategia=strategy)
-        if not weights:
-             log_debug("AVISO: Otimizador falhou. Usando PESOS IGUAIS como fallback total.")
-             weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
-             self.metodo_alocacao_atual += " (FALLBACK)"
+        
+        # O optimizer.otimizar agora retorna pesos iguais se falhar internamente (Alteração 1)
+        if not weights or sum(weights.values()) == 0:
+            # Deve ser o fallback por pesos iguais (20% se houver 5 ativos)
+            if len(self.ativos_selecionados) == NUM_ATIVOS_PORTFOLIO:
+                 weights = {asset: 1.0 / NUM_ATIVOS_PORTFOLIO for asset in self.ativos_selecionados}
+                 self.metodo_alocacao_atual = 'PESOS IGUAIS (Markowitz Fallback: 20% cada)'
+            else:
+                 weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
+                 self.metodo_alocacao_atual += " (FALLBACK)"
         
         total_weight = sum(weights.values())
         log_debug(f"Otimização Markowitz finalizada. Peso total: {total_weight:.2f}")
