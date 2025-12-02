@@ -1816,10 +1816,8 @@ class ConstrutorPortfolioAutoML:
             sharpe_crude = score_row.get('sharpe', np.nan)
             justification.append(f"Sharpe (Hist.): {sharpe_crude:.3f}" if not np.isnan(sharpe_crude) else "Sharpe (Hist.): N/A")
             
-            if is_ml_failed:
-                justification.append("Score ML: N/A (Falha de Treinamento)")
-                justification.append("✅ Selecionado por Fundamentos/Técnicos (ML não disponível)")
-            else:
+            # *** ALTERAÇÃO SOLICITADA: Remoção das mensagens de fallback do ML ***
+            if not is_ml_failed:
                 ml_score_weighted = score_row.get('ml_score_weighted', 0.0)
                 ml_prob = ml_data.get('predicted_proba_up', np.nan)
                 ml_auc = ml_data.get('auc_roc_score', np.nan)
@@ -1881,7 +1879,7 @@ class ConstrutorPortfolioAutoML:
             self.calcular_metricas_portfolio(); self.gerar_justificativas()
             if progress_bar: progress_bar.progress(100, text="Pipeline concluído!"); time.sleep(1) 
         except Exception as e:
-            st.error(f"Erro durante a execução do pipeline: {e}"); st.code(traceback.format_exc()); return False
+            st.error(f"Erro durante a execução do pipeline: {e}"); st.code(tracebox.format_exc()); return False
         return True
 
 # =============================================================================
@@ -2094,68 +2092,108 @@ def configurar_pagina():
     """, unsafe_allow_html=True)
 
 def aba_introducao():
-    """Aba 1: Introdução Metodológica Didática e Exaustiva (Estilo Manual Completo)"""
+    """Aba 1: Introdução Metodológica Didática e Exaustiva (Estilo Profissional e Firme)"""
     
-    st.markdown("## 📚 Visão Geral do Sistema de Otimização Quantitativa")
+    st.markdown("## 📚 Metodologia de Otimização Quantitativa do Portfólio")
     
     st.markdown("""
     <div class="info-box" style="text-align: center;">
-    <h3>📈 Modelo de Alocação de Ativos Adaptativo (Markowitz + Scorecard Dinâmico)</h3>
-    <p>Este sistema utiliza uma metodologia híbrida para construir portfólios. A seleção dos ativos é feita através de um Scorecard Multi-Fatorial com pesos ajustados pelo seu perfil de risco (dinâmico). A alocação final do capital é determinada pelo modelo clássico de Otimização de Markowitz, utilizando a volatilidade histórica como medida de risco.</p>
+    <h3>📈 Modelo de Alocação de Ativos Adaptativo e Otimizado</h3>
+    <p>Este sistema emprega uma metodologia de última geração para a construção de portfólios, integrando a robustez da Teoria de Portfólio Moderna (Markowitz) com técnicas avançadas de Machine Learning e ranqueamento dinâmico. O objetivo é maximizar o retorno ajustado ao risco, alinhado estritamente com o perfil do investidor.</p>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("---")
-    st.subheader("1. Arquitetura do Motor de Decisão Multicritério")
-    st.write("A avaliação de cada ativo é realizada sob quatro pilares independentes. A ponderação de cada pilar é ajustada dinamicamente com base nas respostas do questionário de perfil (Ex: Curto Prazo prioriza Fatores Técnicos e ML; Longo Prazo prioriza Fundamentos).")
-
-    col_p1, col_p2, col_p3 = st.columns(3)
     
-    with col_p1:
-        st.markdown("#### Fatores de Decisão")
-        st.markdown("""
-        | Pilar | Peso Base | Foco Principal |
-        | :--- | :--- | :--- |
-        | **Performance** | **20%** | Índice Sharpe e Retorno Histórico. |
-        | **Machine Learning** | **20%** | Probabilidade de Movimento Direcional Futuro. |
-        | **Fundamentos** | **Varia** | Qualidade e Saúde Financeira (P/L, ROE, Dívida). |
-        | **Técnicos** | **Varia** | Momentum e Tendência (RSI, MACD, Volatilidade). |
-        """)
-
-    with col_p2:
-        st.markdown("#### 🧠 Lógica de Ponderação (Dinâmica)")
-        st.markdown("O Score Total é a base para o ranqueamento. O peso total restante (60%) é distribuído entre Fundamentos e Técnicos com base no seu horizonte de tempo.")
-        st.markdown("""
-        $$Score_{Total} = W_{Fund} + W_{Tec} + W_{ML} + W_{Perf}$$
-        Onde $W_{Fund}$ e $W_{Tec}$ são ajustados pelo horizonte de tempo (Ex: Longo Prazo $\\rightarrow$ Mais peso em $W_{Fund}$).
+    # -----------------------------------------------------
+    # SEÇÃO 1: TEORIA DE MARKOWITZ E ALOCAÇÃO
+    # -----------------------------------------------------
+    with st.expander("1. Otimização de Markowitz e a Fronteira Eficiente", expanded=True):
+        st.subheader("Fundamentos da Teoria de Portfólio Moderna (MPT)")
+        st.write("""
+        A MPT, desenvolvida por Harry Markowitz, é o pilar de nossa alocação. Ela se baseia no princípio de que o risco de um portfólio não é a mera soma dos riscos individuais dos ativos, mas sim o risco resultante da **combinação** desses ativos, considerando a correlação entre eles.
+        
+        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente**, que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
         """)
         
-    with col_p3:
-        st.markdown("#### 🛡️ Seleção e Otimização (Markowitz)")
-        st.markdown("Os ativos com maior Score Total são selecionados, e a alocação de capital é feita através da otimização de **Markowitz** (para Máximo Sharpe ou Mínima Volatilidade), baseada no seu Perfil de Risco e dados de Volatilidade Histórica.")
+        col_markowitz_img, col_markowitz_eq = st.columns([1, 1])
+        with col_markowitz_img:
+            st.markdown("")
+        
+        with col_markowitz_eq:
+            st.markdown("##### Variância do Portfólio (Medida de Risco)")
+            st.markdown(r"$$\sigma_p^2 = \sum_{i=1}^{N}\sum_{j=1}^{N} w_i w_j \sigma_{ij}$$")
+            st.markdown("""
+            Onde:
+            * $\sigma_p^2$: Variância do portfólio (Risco).
+            * $w_i, w_j$: Pesos (alocação) dos ativos $i$ e $j$.
+            * $\sigma_{ij}$: Covariância entre os retornos dos ativos $i$ e $j$.
+            """)
+            st.markdown("##### Função de Utilidade (Sharpe Ratio)")
+            st.markdown(r"$$Sharpe Ratio = \frac{E(R_p) - R_f}{\sigma_p}$$")
+            st.write("A otimização busca o ponto com o maior **Sharpe Ratio**, que representa a melhor relação entre o retorno excedente ($E(R_p) - R_f$) e o risco ($\sigma_p$).")
+        
+        st.markdown("---")
 
+    # -----------------------------------------------------
+    # SEÇÃO 2: ARQUITETURA DO SCORECARD E ML
+    # -----------------------------------------------------
+    with st.expander("2. Seleção de Ativos por Scorecard Dinâmico e Machine Learning"):
+        st.subheader("Metodologia de Ranqueamento Multi-Fatorial")
+        st.write("""
+        O sistema adota um Scorecard de quatro pilares, cujos pesos são calibrados pelo perfil de risco e horizonte de tempo do investidor (por exemplo, um perfil de longo prazo prioriza Fundamentos; um de curto prazo, Fatores Técnicos e ML).
+        """)
 
+        col_score_1, col_score_2 = st.columns(2)
+        with col_score_1:
+             st.markdown("##### Pilares de Ranqueamento")
+             st.markdown("""
+             | Pilar | Peso Base | Foco de Avaliação |
+             | :--- | :--- | :--- |
+             | **Performance** | 20% | Risco/Retorno Histórico (Sharpe, Retorno Anualizado). |
+             | **Machine Learning** | 20% | Predição de Movimento Direcional Futuro. |
+             | **Fundamentos** | Variável | Qualidade, Valuation e Saúde Financeira. |
+             | **Técnicos** | Variável | Momentum, Posição Relativa e Volatilidade. |
+             """)
+             
+        with col_score_2:
+            st.markdown("##### Exemplo de Ponderação (Médio Prazo)")
+            
+            # Gráfico de Contribuição de Score (Simulado)
+            fig_score_sim = go.Figure(data=[
+                go.Bar(name='Fatores', x=['Fundamental', 'Técnico', 'Performance', 'ML'], y=[27, 33, 20, 20], marker_color=['#27AE60', '#3498DB', '#9B59B6', '#E67E22'])
+            ])
+            fig_score_sim.update_layout(title_text='Ponderação Média (Soma = 100%)', yaxis_title='Peso (%)', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=300)
+            st.plotly_chart(fig_score_sim, use_container_width=True)
+
+        
+        st.markdown("---")
+        with st.expander("2.1. Detalhamento do Modelo de Machine Learning (ML)"):
+            st.write("""
+            O componente de Machine Learning atua como um filtro preditivo, estimando a probabilidade de um ativo superar seu preço atual em múltiplos horizontes futuros (curto, médio e longo prazo).
+            """)
+            st.markdown("##### Regressão Logística (Modo Rápido)")
+            st.write("""
+            Utilizada para a análise 'rápida' devido à sua alta eficiência computacional e interpretabilidade. A Regressão Logística modela a probabilidade de um evento binário (alta vs. baixa) usando uma função sigmoide. O modelo é treinado com features técnicos (momento, volatilidade) e fundamentais do ativo.
+            """)
+            st.markdown("##### Random Forest / XGBoost (Modo Completo)")
+            st.write("""
+            Para a análise 'completa', empregamos um Ensemble de Árvores de Decisão (Random Forest ou XGBoost). Estes são modelos não-lineares, capazes de capturar interações complexas entre os fatores que a Regressão Logística pode ignorar. Eles fornecem uma previsão mais robusta do movimento de preços, mas exigem maior custo computacional.
+            """)
+            
+            st.markdown("##### Score ML Ponderado (Probabilidade x AUC)")
+            st.write("""
+            Para garantir que apenas predições confiáveis influenciem a alocação, o Score ML final é **ponderado pela Confiança (AUC-ROC)** do modelo. Um modelo com AUC baixo (próximo a 0.5) tem sua probabilidade de alta neutralizada, enquanto um modelo com AUC alto (próximo a 1.0) tem sua previsão plenamente considerada.
+            """)
+            st.markdown(r"$$Score_{ML} \propto Probabilidade_{Alta} \times AUC$$")
+            
+        with st.expander("2.2. Otimização Final e Filtro de Diversificação"):
+            st.write("""
+            Após o ranqueamento pelo Score Total, o sistema aplica um filtro de diversificação (Clusterização via K-Means e PCA) para garantir que os ativos selecionados representem perfis de risco-retorno e setores distintos. A alocação final de capital é calculada pela otimização de Markowitz (Max Sharpe ou Min Volatilidade), baseada no nível de risco determinado pelo seu questionário.
+            """)
+    
     st.markdown("---")
-    with st.expander("2. Detalhamento Técnico e Gráficos de Exemplo"):
-        st.subheader("2.1. Exemplos de Componentes de Score")
-        st.write("A pontuação de um ativo é a agregação de diversos indicadores. Por exemplo, o Score Técnico considera a posição do ativo em relação à média móvel (Z-Score), o momentum (RSI/MACD) e a volatilidade (Vol20).")
-
-        # Exemplo de Gráfico de Contribuição de Score (Simulado)
-        fig_score_sim = go.Figure(data=[
-            go.Bar(name='Fatores', x=['Fundamental', 'Técnico', 'Performance', 'ML'], y=[30, 30, 20, 20], marker_color=['#27AE60', '#3498DB', '#9B59B6', '#E67E22'])
-        ])
-        fig_score_sim.update_layout(title_text='Exemplo de Contribuição de Score por Pilar (Ativo X)', yaxis_title='Peso (%)', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=300)
-        st.plotly_chart(fig_score_sim, use_container_width=True)
-        
-        st.subheader("2.2. Mecanismo de Robustez e Fallback")
-        st.markdown("""
-        O sistema é resiliente a falhas de API de preço ou dados insuficientes:
-        
-        * **Modo Estático Global:** Ativado se a coleta de preços falhar consecutivamente para múltiplos ativos, impedindo que dados incompletos corrompam a análise de risco.
-        * **Fallback ML (Treinamento):** Se um ativo não tiver dados históricos de preço suficientes para treinar o modelo de Machine Learning, sua predição de ML é descartada (**o Score ML é zerado pelo Fator Confiança AUC=0**). No entanto, o ativo não é excluído da análise, permitindo que ele seja classificado e selecionado apenas por seus fortes Fundamentos e Fatores Técnicos/Performance.
-        * **Clusterização e Fundamentos:** Os processos de Clusterização (K-Means + PCA) e a leitura dos Fundamentos são independentes do histórico de preços, garantindo que uma avaliação de **Qualidade** sempre esteja disponível.
-        """)
-
+    
 def aba_selecao_ativos():
     """Aba 2: Seleção de Ativos (Design Original Restaurado)"""
     
@@ -2487,21 +2525,15 @@ def aba_construtor_portfolio():
         is_garch_redundant = True 
         # --- FIM NOVO ---
         
-        # Define as abas (agora consolidada)
-        tabs_list = ["📊 Alocação de Capital", "📈 Performance e Retornos", "🔬 Análise de Fatores e Clusterização"]
-        
-        # REMOVENDO ABA GARCH DEDICADA
-        # if has_price_data and has_garch_data and not is_garch_redundant:
-        #      tabs_list.append("📉 Fator Volatilidade GARCH")
-             
-        tabs_list.append("❓ Justificativas e Ranqueamento")
+        # *** ALTERAÇÃO SOLICITADA: Remoção da aba "Análise de Fatores e Clusterização" ***
+        tabs_list = ["📊 Alocação de Capital", "📈 Performance e Retornos", "❓ Justificativas e Ranqueamento"]
+        # *** FIM ALTERAÇÃO SOLICITADA ***
 
         # Mapeia os índices das abas
         tabs_map = st.tabs(tabs_list)
         tab1 = tabs_map[0] # Alocação
         tab2 = tabs_map[1] # Performance/Retornos
-        tab_fator_cluster = tabs_map[2] # Aba consolidada de ML/Clusters
-        tab_justificativas = tabs_map[3] # Justificativas
+        tab_justificativas = tabs_map[2] # Justificativas
 
         
         with tab1:
@@ -2594,145 +2626,7 @@ def aba_construtor_portfolio():
             else:
                 st.info("Gráfico de retorno indisponível (Modo Estático Ativo - Sem histórico de preços).")
         
-        with tab_fator_cluster:
-            st.markdown('#### 🔬 Análise Consolidada de Fatores e Clusterização')
-
-            # --- PARTE 1: FATOR ML/FUNDAMENTOS (Conteúdo da Antiga tab3) ---
-            
-            # Condição para mostrar resultados ML: Se o score ML ponderado for > 0 ou se o modo geral foi forçado
-            # FIX: Adiciona a verificação se a lista de assets não está vazia (evita IndexError)
-            if assets and has_price_data and st.session_state.get('pipeline_mode_radio', '').startswith('Modo Geral'):
-                 
-                 # Recalcula a flag de ML treinado (já que o proxy não é mais salvo no df_tec)
-                 is_ml_actually_trained = builder.predicoes_ml.get(assets[0], {}).get('auc_roc_score', 0.0) > 0.0
-
-                 if is_ml_actually_trained:
-                     st.markdown(f"##### 🤖 Predição de Movimento Direcional ({builder.predicoes_ml.get(assets[0], {}).get('model_name', 'Modelo ML')})")
-                     st.markdown("O modelo utiliza histórico de preços para prever a probabilidade de alta no curto prazo. **O Score Total é ponderado pela Confiança (AUC) do modelo.**")
-                     title_text_plot = "Probabilidade de Alta (0-100%)"
-                     
-                     ml_data = []
-                     for asset in assets:
-                        ml_info = builder.predicoes_ml.get(asset, {})
-                        ml_data.append({
-                            'Ticker': asset.replace('.SA', ''),
-                            'Score/Prob.': ml_info.get('predicted_proba_up', 0.5) * 100,
-                            'Confiança': ml_info.get('auc_roc_score', np.nan),
-                            'Score Ponderado': ml_info.get('ml_score_weighted', np.nan) * 100, # Adicionado
-                            'Modelo': ml_info.get('model_name', 'N/A')
-                        })
-                     
-                     df_ml = pd.DataFrame(ml_data)
-                
-                     if not df_ml.empty:
-                        fig_ml = go.Figure()
-                        plot_df_ml = df_ml.sort_values('Score Ponderado', ascending=False)
-                        
-                        # Plota o Score Ponderado (Prob * AUC)
-                        fig_ml.add_trace(go.Bar(
-                            x=plot_df_ml['Ticker'],
-                            y=plot_df_ml['Score Ponderado'],
-                            marker=dict(
-                                color=plot_df_ml['Score Ponderado'],
-                                colorscale='Viridis', # Cor profissional
-                                showscale=True,
-                                colorbar=dict(title="Score Ponderado")
-                            ),
-                            text=plot_df_ml['Score Ponderado'].round(1),
-                                textposition='outside'
-                        ))
-                        
-                        template = obter_template_grafico()
-                        fig_ml.update_layout(**template)
-                        
-                        fig_ml.update_layout(title_text=title_text_plot, yaxis_title="Score (Ponderado pelo AUC)", xaxis_title="Ticker", height=400)
-                        
-                        st.plotly_chart(fig_ml, use_container_width=True)
-                        
-                        st.markdown("---")
-                        st.markdown('##### Detalhamento Predição ML')
-                        df_ml_display = df_ml.copy()
-                        df_ml_display['Score/Prob.'] = df_ml_display['Score/Prob.'].round(2)
-                        df_ml_display['Confiança'] = df_ml_display['Confiança'].apply(lambda x: safe_format(x))
-                        df_ml_display['Score Ponderado'] = df_ml_display['Score Ponderado'].round(3)
-                        
-                        st.dataframe(df_ml_display, use_container_width=True, hide_index=True)
-                     else:
-                         st.info("ℹ️ **Modelo ML Não Treinado:** A pipeline de Machine Learning falhou para todos os ativos. A classificação se baseia puramente nos fatores Fundamentais e Técnicos.")
-                 else:
-                      st.info("ℹ️ **Modelo ML Não Treinado:** A pipeline de Machine Learning falhou para todos os ativos. A classificação se baseia puramente nos fatores Fundamentais e Técnicos.")
-
-
-            # Sempre mostra a análise de Fundamentos/Cluster (que é a base)
-            st.markdown("---")
-            st.markdown('##### 🔬 Análise de Qualidade Fundamentalista (Unsupervised Learning)')
-            
-            if st.session_state.get('pipeline_mode_radio', '').startswith('Modo Fundamentalista'):
-                 st.info("ℹ️ **Modo Fundamentalista Ativo:** A classificação se baseia EXCLUSIVAMENTE nos fatores Fundamentais e Clusterização.")
-                 
-            st.markdown("###### Score Fundamentalista e Cluster por Ativo")
-            
-            if not builder.scores_combinados.empty:
-                 df_cluster_display = builder.scores_combinados[['fundamental_score', 'Final_Cluster', 'pe_ratio', 'roe']].copy()
-                 df_cluster_display.rename(columns={'fundamental_score': 'Score Fund.', 'Final_Cluster': 'Cluster', 'pe_ratio': 'P/L', 'roe': 'ROE'}, inplace=True)
-                 
-                 st.dataframe(df_cluster_display.style.format({
-                     'Score Fund.': '{:.3f}', 'P/L': '{:.2f}', 'ROE': '{:.2f}'
-                 }).background_gradient(cmap='Blues', subset=['Score Fund.']), use_container_width=True)
-            else:
-                 st.warning("Dados de fundamentos insuficientes para exibir clusters.")
-            
-            st.markdown("---")
-            # --- PARTE 2: ANÁLISE DE CLUSTERS (Conteúdo da Antiga tab_portfolio_cluster) ---
-            st.markdown('#### 🔭 Visualização da Diversificação e Clusters')
-            st.info("Esta análise utiliza PCA sobre os scores para visualizar a distribuição dos ativos selecionados no 'espaço de risco/retorno' e confirmar a diversificação entre os clusters.")
-            
-            if 'Final_Cluster' in builder.scores_combinados.columns and len(builder.scores_combinados) >= 2:
-                assets = builder.ativos_selecionados # Garante que 'assets' está definido
-                df_viz = builder.scores_combinados.loc[assets].copy().reset_index().rename(columns={'index': 'Ticker'})
-                
-                # Prepara dados para PCA (apenas scores)
-                # Clusterização foi feita nas métricas fundamentais/perf (sharpe, vol, p/l, p/vp, roe)
-                # Para visualização, usamos os scores ponderados (Fund, Tec, ML, Perf)
-                features_for_pca = ['fundamental_score', 'technical_score', 'ml_score_weighted', 'performance_score_weighted']
-                
-                features_for_pca = [f for f in features_for_pca if f in df_viz.columns] # Garante que as colunas existem
-                data_pca_input = df_viz[features_for_pca].fillna(50)
-                
-                scaler = StandardScaler()
-                data_scaled = scaler.fit_transform(data_pca_input)
-                pca = PCA(n_components=2)
-                pca_result = pca.fit_transform(data_scaled)
-                
-                df_viz['PC1'] = pca_result[:, 0]
-                df_viz['PC2'] = pca_result[:, 1]
-                
-                # Gráfico de Dispersão 2D dos Clusters
-                fig_cluster_scatter = px.scatter(
-                    df_viz, 
-                    x='PC1', 
-                    y='PC2', 
-                    color=df_viz['Final_Cluster'].astype(str),
-                    size=df_viz['total_score'] / df_viz['total_score'].max() * 20, # Tamanho pela pontuação
-                    hover_data={'Ticker': True, 'total_score': ':.2f', 'Final_Cluster': True},
-                    text=df_viz['Ticker'].str.replace('.SA', ''),
-                    title="Distribuição do Portfólio no Espaço PCA (Scores Finais)"
-                )
-                
-                template = obter_template_grafico()
-                fig_cluster_scatter.update_layout(**template)
-                fig_cluster_scatter.update_traces(textposition='top center')
-                fig_cluster_scatter.update_layout(height=600)
-                
-                st.plotly_chart(fig_cluster_scatter, use_container_width=True)
-                
-            else:
-                 st.warning("Dados de scores insuficientes para análise de Clusterização do Portfólio.")
-        
-        # REMOVIDA A ABA GARCH DEDICADA
-        # if tab_garch is not None:
-        #     with tab_garch: 
-        #         ... (Conteúdo removido) ...
+        # *** ABA DE FATOR E CLUSTER FOI REMOVIDA ***
             
         with tab_justificativas:
             st.markdown('#### Ranqueamento Final e Justificativas Detalhadas')
@@ -2798,19 +2692,12 @@ def aba_construtor_portfolio():
 
                 # **********************************************
                 # CORREÇÃO DO KEYERROR (FINAL): Remove as colunas duplicadas antes do rename final.
-                # A sobreposição ocorre porque LGBM_FEATURES (ret, vol20, etc.) já está em df_full_data
-                # e também no df_last_data_clean (que foi renomeado com _LATEST). 
-                # Solução: Remova a versão original que veio do scores_combinados (df_full_data) 
-                # antes de renomear as versões _LATEST.
                 # **********************************************
                 
                 # 1. Lista de colunas duplicadas que DEVEM ser removidas (versão não-_LATEST)
                 cols_to_remove = [col for col in LGBM_FEATURES if col in df_full_data.columns]
                 
                 # 2. Faz o JOIN com sufixo na DIREITA, mantendo a versão 'LATEST' para ser exibida.
-                # Não é necessário renomear df_last_data_clean previamente se usarmos rsuffix.
-                
-                # Remove o df_last_data_clean original e refaz a preparação para o join
                 data_at_last_idx = {}
                 for ticker in df_full_data.index:
                     df_tec = builder.dados_por_ativo.get(ticker)
@@ -2833,10 +2720,6 @@ def aba_construtor_portfolio():
                 df_scores_display = df_full_data.join(df_last_data_clean, how='left', rsuffix='_LATEST')
                 
                 # Renomeio das colunas de exibição
-                # As colunas originais (sem _LATEST) estão no dataframe, mas as que foram trazidas 
-                # do LGBM_FEATURES devem ser renomeadas para usar a versão _LATEST.
-                
-                # Mapeamento para renomear colunas LATEST e RAW
                 rename_dict_final = {}
                 
                 # Colunas do LGBM_FEATURES (agora com _LATEST)
@@ -2868,6 +2751,12 @@ def aba_construtor_portfolio():
                 
                 # Filtra colunas finais (usando os nomes de exibição)
                 final_display_names = list(set(rename_map.values()) & set(df_scores_display.columns))
+                
+                # *** ALTERAÇÃO SOLICITADA: Remover Score ML da tabela de ranqueamento ***
+                if 'Score ML' in final_display_names:
+                    final_display_names.remove('Score ML')
+                # *** FIM ALTERAÇÃO SOLICITADA ***
+
                 df_scores_display = df_scores_display[final_display_names].copy()
                 
                 # **********************************************
