@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.6 - REVERSÃO MARKOWITZ/DINÂMICO): Pesos Dinâmicos + Otimização Markowitz + Seleção por Score e Diversificação de Cluster.
 - Modelagem (V9.6): ML Restaurado para Estabilidade (Lógica 6.0.9) + GARCH Removido da UI/Lógica de Otimização.
 
-Versão: 9.6.5 (Fix: Consistência do Pipeline ML com Fallback do Modelo Antigo (Risco) e Ajustes na UI/GARCH)
+Versão: 9.6.6 (Fix: Consistência do Pipeline ML com Fallback do Modelo Antigo (Risco) e Ajustes na UI/GARCH)
 =============================================================================
 """
 
@@ -1023,215 +1023,10 @@ class ColetorDadosLive(object):
                 df_ml_meta = importances
                 is_ml_trained = True
             
-            # Se a última linha de df_tec estiver vazia (modo estático), as colunas serão perdidas. 
-            # Reassegura que a última linha tem os dados ML se o treino foi bem sucedido.
-            if is_ml_trained and last_idx:
-                df_tec.loc[last_idx, 'ML_Proba'] = proba_up
-                df_tec.loc[last_idx, 'ML_Confidence'] = conf_final
-
-
-        # 2. Fallback Final: Se ML falhou no cálculo ou não foi treinado
-        if not is_ml_trained:
-            log_debug("ML Individual: Modelo supervisionado não foi treinado. Excluindo ML_Proba/Confidence.")
-            
-            # NOVO: Apenas remove as colunas se existirem para que o Fallback de exibição funcione.
-            if 'ML_Proba' in df_tec.columns:
-                df_tec.drop(columns=['ML_Proba', 'ML_Confidence'], errors='ignore', inplace=True)
-            
-            # Gera uma tabela de importância de fallback se a original não foi gerada
-            if df_ml_meta.empty:
-                df_ml_meta = pd.DataFrame({
-                    'feature': ['Qualidade (ROE/PL)', 'Estabilidade'],
-                    'importance': [0.8, 0.2]
-                })
-            
-        return df_tec, fund_row, df_ml_meta
-
-    def _run_ml_model_pipeline(self, df_tec, fund_row, model_features, classifier, model_params, model_name):
-        """Método helper para executar um pipeline ML unificado (usado por Constutor e Individual)."""
-        is_trained = False
-        ensemble_proba = 0.5
-        conf_final = 0.0
-        importances = pd.DataFrame()
-        
-        ML_HORIZONS_IND = get_ml_horizons(st.session_state.profile.get('ml_lookback_days', 252))
-        ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
-
-        try:
-            df = df_tec.copy()
-            last_idx = df.index[-1] if not df.empty else None
-
-            # 1. Injeção de Fundamentos (para features que o modelo espera)
-            if last_idx:
-                for f_col in ALL_FUND_FEATURES:
-                    # Verifica se o feature faz parte do modelo atual (model_features)
-                    if f_col in model_features: 
-                        if f_col in fund_row and f_col not in df.columns:
-                            df.loc[last_idx, f_col] = fund_row[f_col]
-                        elif f_col not in df.columns:
-                            df[f_col] = np.nan
-
-            # 2. Geração dos Targets
-            if 'Close' in df.columns and len(df) > ML_HORIZONS_IND[-1]:
-                for d in ML_HORIZONS_IND:
-                    df[f"t_{d}"] = (df["Close"].shift(-d) > df["Close"]).astype(int)
-            else:
-                raise ValueError("Dados de preço insuficientes para targets.")
-
-            model_targets = [f"t_{d}" for d in ML_HORIZONS_IND if f"t_{d}" in df.columns]
-            df_model = df.dropna(subset=model_features + model_targets).copy()
-
-            if len(df_model) < MIN_TRAIN_DAYS_ML:
-                raise ValueError(f"Apenas {len(df_model)} pontos válidos para treino.")
-
-            X_full = df_model[model_features]
-            split_idx = int(len(X_full) * 0.7)
-            X_train = X_full.iloc[:split_idx]
-            
-            probabilities = []
-            auc_scores = []
-            
-            # 3. Treinamento
-            for tgt_d in ML_HORIZONS_IND:
-                tgt = f"t_{tgt_d}"
-                if tgt not in df_model.columns: continue
-
-                y = df_model[tgt].values
-                y_train = y[:split_idx]
-                X_test = X_full.iloc[split_idx:]
-                y_test = y[split_idx:] 
-                
-                model = classifier(**model_params)
-                
-                if len(np.unique(y_train)) < 2: continue # Classe única no treino
-
-                # Scaling
-                scaler = StandardScaler().fit(X_train.select_dtypes(include=np.number))
-                X_train_scaled = X_train.copy()
-                X_test_scaled = X_test.copy()
-                X_predict_scaled = X_full.iloc[[-1]].copy()
-
-                numeric_cols = X_train.select_dtypes(include=np.number).columns
-                X_train_scaled[numeric_cols] = scaler.transform(X_train[numeric_cols])
-                X_test_scaled[numeric_cols] = scaler.transform(X_test[numeric_cols])
-                X_predict_scaled[numeric_cols] = scaler.transform(X_predict_scaled[numeric_cols])
-
-                model.fit(X_train_scaled.select_dtypes(include=np.number).fillna(0), y_train) # Simplificado para aceitar apenas numéricos limpos
-
-                # Predição e AUC
-                if not X_full.iloc[[-1]].isnull().any().any():
-                    prob_now = model.predict_proba(X_predict_scaled.select_dtypes(include=np.number).fillna(0))[0, 1]
-                    probabilities.append(prob_now)
-
-                if len(y_test) > 0 and len(np.unique(y_test)) >= 2:
-                     prob_test = model.predict_proba(X_test_scaled.select_dtypes(include=np.number).fillna(0))[:, 1]
-                     auc_scores.append(roc_auc_score(y_test, prob_test))
-            
-            # 4. Consolidação
-            ensemble_proba = np.mean(probabilities) if probabilities else 0.5
-            conf_final = np.mean(auc_scores) if auc_scores else 0.0
-            
-            # 5. Importância
-            try:
-                 if classifier is LogisticRegression:
-                     importances_data = np.abs(model.coef_[0])
-                 else:
-                     importances_data = model.feature_importances_
-
-                 importances = pd.DataFrame({
-                    'feature': model_features,
-                    'importance': importances_data
-                 }).sort_values('importance', ascending=False)
-            except:
-                 importances = pd.DataFrame({'feature': model_features, 'importance': [1/len(model_features)]*len(model_features)})
-
-            log_debug(f"ML Pipeline ({model_name}): Sucesso. Prob Média: {ensemble_proba:.2f}, AUC Teste Média: {conf_final:.2f}.")
-            is_trained = True
-
-        except Exception as e:
-            log_debug(f"ML Pipeline ({model_name}): ERRO ou Dados Insuficientes: {str(e)[:50]}.")
-            
-        return ensemble_proba, conf_final, importances, is_trained
-
-
-    def coletar_ativo_unico_gcs(self, ativo_selecionado: str):
-        """
-        Função para coletar e processar um único ativo para a aba de análise individual,
-        incluindo o pipeline LightGBM.
-        """
-        log_debug(f"Iniciando coleta e análise de ativo único: {ativo_selecionado}")
-        
-        # Define o modo GARCH para a coleta individual (usamos o modo fast como padrão)
-        st.session_state['garch_mode'] = st.session_state.get('individual_garch_mode', 'GARCH(1,1)')
-        
-        self.coletar_e_processar_dados([ativo_selecionado], check_min_ativos=False)
-        
-        if ativo_selecionado not in self.dados_por_ativo:
-            log_debug(f"ERRO: Dados não encontrados após coleta para {ativo_selecionado}.")
-            return None, None, None
-
-        df_tec = self.dados_por_ativo[ativo_selecionado]
-        fund_row = {}
-        if ativo_selecionado in self.dados_fundamentalistas.index:
-            fund_row = self.dados_fundamentalistas.loc[ativo_selecionado].to_dict()
-        
-        df_ml_meta = pd.DataFrame()
-        
-        # Features do modelo
-        # LGBM_FEATURES é globalmente definido no escopo do módulo
-        ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
-        
-        is_price_data_available = 'Close' in df_tec.columns and not df_tec['Close'].isnull().all() and len(df_tec.dropna(subset=['Close'])) > 60
-        
-        # Assume modo FAST para análise individual se a seleção não foi feita
-        ml_mode_for_individual = st.session_state.get('individual_ml_mode', 'fast') 
-
-        # Configura o Classificador e Features baseado no modo selecionado
-        if ml_mode_for_individual == 'fast':
-            MODEL_FEATURES = LGBM_FEATURES
-            CLASSIFIER = LogisticRegression # Mudado para LogReg (Modelo mais rápido)
-            MODEL_PARAMS = dict(penalty='l2', solver='liblinear', class_weight='balanced', random_state=42)
-            MODEL_NAME = 'Regressão Logística Rápida'
-        else:
-            # MODEL_FEATURES ajustado para não incluir 'Cluster'
-            MODEL_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel", 'rsi_14', 'macd_diff', 'vol_20d'] # Usamos features descorrelacionados
-            CLASSIFIER = RandomForestClassifier
-            MODEL_PARAMS = dict(n_estimators=150, max_depth=7, random_state=42, class_weight='balanced', n_jobs=-1)
-            MODEL_NAME = 'Full Ensemble (RF/XGB)'
-
-        # MODELO DE FALLBACK CASO CLASSIFIER FALHE
-        MODEL_FALLBACK = RandomForestClassifier
-        MODEL_FALLBACK_PARAMS = dict(n_estimators=100, max_depth=5, random_state=42, class_weight='balanced')
-        MODEL_FALLBACK_NAME = 'RandomForest (Fallback Risco)'
-
-        is_ml_trained = False
-        
-        if is_price_data_available and CLASSIFIER is not None:
-            log_debug(f"Análise Individual ML: Iniciando modelo {MODEL_NAME} para {ativo_selecionado}.")
-            
-            # Tenta o modelo primário/secundário (fast/full)
-            proba_up, conf_final, importances, is_trained = self._run_ml_model_pipeline(
-                df_tec, fund_row, MODEL_FEATURES, CLASSIFIER, MODEL_PARAMS, MODEL_NAME
-            )
-            
-            if not is_trained:
-                log_debug(f"Análise Individual ML: Modelo Primário/Secundário falhou. Tentando Fallback ({MODEL_FALLBACK_NAME}).")
-                # Tenta o modelo de fallback (RandomForest do usuário)
-                proba_up, conf_final, importances, is_trained = self._run_ml_model_pipeline(
-                    df_tec, fund_row, MODELO_FALLBACK_FEATURES, MODEL_FALLBACK, MODEL_FALLBACK_PARAMS, MODEL_FALLBACK_NAME
-                )
-
-            # Define os resultados finais
-            if is_trained:
-                df_tec['ML_Proba'] = proba_up
-                df_tec['ML_Confidence'] = conf_final
-                df_ml_meta = importances
-                is_ml_trained = True
-            
             last_idx = df_tec.index[-1] if not df_tec.empty else None
             # Se a última linha de df_tec estiver vazia (modo estático), as colunas serão perdidas. 
             # Reassegura que a última linha tem os dados ML se o treino foi bem sucedido.
-            if is_ml_trained and last_idx:
+            if is_ml_trained and last_idx is not None:
                 df_tec.loc[last_idx, 'ML_Proba'] = proba_up
                 df_tec.loc[last_idx, 'ML_Confidence'] = conf_final
 
@@ -1252,7 +1047,6 @@ class ColetorDadosLive(object):
                 })
             
         return df_tec, fund_row, df_ml_meta
-        return None, None, None
 
     def _run_ml_model_pipeline(self, df_tec, fund_row, model_features, classifier, model_params, model_name):
         """Método helper para executar um pipeline ML unificado (usado por Constutor e Individual)."""
@@ -1269,7 +1063,7 @@ class ColetorDadosLive(object):
             last_idx = df.index[-1] if not df.empty else None
 
             # 1. Injeção de Fundamentos (para features que o modelo espera)
-            if last_idx:
+            if last_idx is not None:
                 for f_col in ALL_FUND_FEATURES:
                     # Verifica se o feature faz parte do modelo atual (model_features)
                     if f_col in model_features: 
@@ -1313,27 +1107,27 @@ class ColetorDadosLive(object):
                 if len(np.unique(y_train)) < 2: continue # Classe única no treino
 
                 # Scaling
-                # Simplificado o scaling para usar apenas dados numéricos
-                scaler = StandardScaler().fit(X_train.select_dtypes(include=np.number).fillna(0))
-                X_train_scaled = X_train.copy()
-                X_test_scaled = X_test.copy()
-                X_predict_scaled = X_full.iloc[[-1]].copy()
+                numeric_cols_all = X_train.select_dtypes(include=np.number).columns
+                X_train_numeric = X_train[numeric_cols_all].fillna(0)
+                X_test_numeric = X_test[numeric_cols_all].fillna(0)
+                X_predict_numeric = X_full.iloc[[-1]][numeric_cols_all].fillna(0)
 
-                numeric_cols = X_train.select_dtypes(include=np.number).columns
-                X_train_scaled[numeric_cols] = scaler.transform(X_train[numeric_cols].fillna(0))
-                X_test_scaled[numeric_cols] = scaler.transform(X_test[numeric_cols].fillna(0))
-                X_predict_scaled[numeric_cols] = scaler.transform(X_predict_scaled[numeric_cols].fillna(0))
+                scaler = StandardScaler().fit(X_train_numeric)
+                
+                X_train_scaled = scaler.transform(X_train_numeric)
+                X_test_scaled = scaler.transform(X_test_numeric)
+                X_predict_scaled = scaler.transform(X_predict_numeric)
 
                 # Treina o modelo (usando apenas dados numéricos)
-                model.fit(X_train_scaled.select_dtypes(include=np.number).fillna(0), y_train)
+                model.fit(X_train_scaled, y_train)
 
                 # Predição e AUC
-                if not X_full.iloc[[-1]].isnull().any().any():
-                    prob_now = model.predict_proba(X_predict_scaled.select_dtypes(include=np.number).fillna(0))[0, 1]
+                if X_predict_numeric.shape[0] == 1:
+                    prob_now = model.predict_proba(X_predict_scaled)[0, 1]
                     probabilities.append(prob_now)
 
                 if len(y_test) > 0 and len(np.unique(y_test)) >= 2:
-                     prob_test = model.predict_proba(X_test_scaled.select_dtypes(include=np.number).fillna(0))[:, 1]
+                     prob_test = model.predict_proba(X_test_scaled)[:, 1]
                      auc_scores.append(roc_auc_score(y_test, prob_test))
             
             # 4. Consolidação
@@ -1343,13 +1137,12 @@ class ColetorDadosLive(object):
             # 5. Importância
             try:
                  if classifier is LogisticRegression:
-                     # Coeficientes para LogReg (assume que o scaler foi aplicado nas colunas)
                      importances_data = np.abs(model.coef_[0])
                  else:
                      importances_data = model.feature_importances_
 
                  importances = pd.DataFrame({
-                    'feature': X_train.select_dtypes(include=np.number).columns,
+                    'feature': numeric_cols_all.tolist(),
                     'importance': importances_data
                  }).sort_values('importance', ascending=False)
             except Exception as e:
@@ -2135,7 +1928,7 @@ def aba_introducao():
         O sistema é resiliente a falhas de API de preço ou dados insuficientes:
         
         * **Modo Estático Global:** Ativado se a coleta de preços falhar consecutivamente para múltiplos ativos, impedindo que dados incompletos corrompam a análise de risco.
-        * **Fallback ML (Treinamento):** Se um ativo não tiver dados históricos de preço suficientes para treinar o modelo de Machine Learning, sua predição de ML é descartada (**o Score ML é zerado pelo Fator Confiança AUC=0**). No entanto, o ativo não é excluído da análise, permitindo que ele seja classificado e selecionado apenas por seus fortes Fundamentos e Fatores Técnicos/Performance.
+        * **Fallback ML (Hierarquia):** O sistema tenta o **Modelo Rápido/Lento** (conforme sua escolha). Se falhar (dados insuficientes, classe única, ou erro), ele tenta o **Modelo Fallback (Risco)**. Se este também falhar, o **Score ML é zerado**, resultando em uma análise puramente **Fundamentalista/Performance**.
         * **Clusterização e Fundamentos:** Os processos de Clusterização (K-Means + PCA) e a leitura dos Fundamentos são independentes do histórico de preços, garantindo que uma avaliação de **Qualidade** sempre esteja disponível.
         """)
 
@@ -2257,13 +2050,19 @@ def aba_construtor_portfolio():
         st.warning("⚠️ Por favor, defina o universo de análise na aba **'Seleção de Ativos'** primeiro.")
         return
     
-    if 'builder' not in st.session_state: st.session_state.builder = None
+    # CORREÇÃO: Usar o nome correto da classe ConstrutorPortfolioAutoML
+    # Adicionado o try/except para garantir que o builder exista.
+    if 'builder' in st.session_state and st.session_state.builder is not None and isinstance(st.session_state.builder, ConstrutorPortfolioAutoML):
+        builder = st.session_state.builder
+    else:
+        builder = None
+        st.session_state.builder_complete = False
+
     if 'profile' not in st.session_state: st.session_state.profile = {}
     if 'builder_complete' not in st.session_state: st.session_state.builder_complete = False
     
     # Exibe o debug avançado no topo da aba (CORREÇÃO DE POSICIONAMENTO)
-    if st.session_state.builder_complete:
-        builder = st.session_state.builder
+    if st.session_state.builder_complete and builder is not None:
         with st.expander("🐛 LOG DE DEBUG AVANÇADO (Entradas, Scores e Pesos)", expanded=False):
             st.markdown("##### 1. Inputs do Perfil")
             st.json(st.session_state.profile)
@@ -2283,7 +2082,7 @@ def aba_construtor_portfolio():
             st.dataframe(pd.DataFrame(builder.predicoes_ml).T.reset_index().rename(columns={'index': 'Ticker'}), use_container_width=True)
 
 
-    if not st.session_state.builder_complete:
+    if not st.session_state.builder_complete or builder is None:
         st.markdown('## 📋 Calibração do Perfil de Risco')
         
         st.info(f"✔️ **{len(st.session_state.ativos_para_analise)} ativos** prontos. Responda o questionário para calibrar a otimização.")
@@ -2397,6 +2196,7 @@ def aba_construtor_portfolio():
                 log_debug(f"Perfil calculado: {risk_level} (Score {score}). Horizonte ML: {lookback} dias.")
                 
                 try:
+                    # CORREÇÃO: Renomeado para a classe correta
                     builder_local = ConstrutorPortfolioAutoML(investment)
                     st.session_state.builder = builder_local
                 except Exception as e:
@@ -2426,9 +2226,9 @@ def aba_construtor_portfolio():
                 st.rerun()
     
     else:
+        # Garante que builder está definido
         builder = st.session_state.builder
-        if builder is None: st.error("Objeto construtor não encontrado. Recomece a análise."); st.session_state.builder_complete = False; return
-            
+        
         profile = st.session_state.profile
         assets = builder.ativos_selecionados
         allocation = builder.alocacao_portfolio
