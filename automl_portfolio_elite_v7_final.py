@@ -7,10 +7,10 @@ SISTEMA DE OTIMIZAÇÃO QUANTITATIVA
 Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Preços: Estratégia Linear com Fail-Fast (YFinance -> TvDatafeed -> Estático Global). 
 - Fundamentos: Coleta Exaustiva Pynvest (50+ indicadores).
-- Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
+- Lógica de Construção (V9.5 - Scorecard Ponderado + Clusterização): Pesos Fixos + Seleção por Score e Diversificação de Cluster.
 - Modelagem (V9.43): ML Restaurado para Estabilidade (Lógica 6.0.9) + GARCH Removido.
 
-Versão: 9.32.48 (Final Build: Correções Definitivas de Escopo/ML)
+Versão: 9.5.0 (Final Build: Lógica de Scorecard Unificado)
 =============================================================================
 """
 
@@ -112,6 +112,14 @@ PESO_MAX = 0.30
 
 # NOVO: Limite mínimo de dias para o treinamento ML (AJUSTADO PARA 120)
 MIN_TRAIN_DAYS_ML = 120 
+
+# === ALTERAÇÃO PRINCIPAL: PESOS FIXOS DO SCORECARD ===
+# Definidos para 100% de contribuição na seleção, ignorando o perfil de risco dinâmico
+W_FUNDAMENTAL = 0.40 # Aumentado, pois é a base de qualidade
+W_TECHNICAL = 0.30
+W_ML = 0.30
+# Não usamos mais W_PERF_GLOBAL, Performance é integrada no W_ML (vol/sharpe) ou Fundamental (Beta)
+# ===================================================
 
 # NOVO: Horizontes ML baseados no lookback adaptativo
 def get_ml_horizons(ml_lookback_days: int):
@@ -303,10 +311,15 @@ class EngenheiroFeatures:
         if series_clean.empty or series_clean.std() == 0:
             return pd.Series(50, index=serie.index)
         z = zscore(series_clean, nan_policy='omit')
-        normalized_values = 50 + (z.clip(-3, 3) / 3) * 50
+        # Limita o Z-score a -3 e 3 para evitar outliers extremos distorcendo a escala
+        normalized_values = 50 + (z.clip(-3, 3) / 3) * 50 
+        
         if not maior_melhor:
+            # Para P/L (menor é melhor), inverte a pontuação
             normalized_values = 100 - normalized_values
+            
         normalized_series = pd.Series(normalized_values, index=series_clean.index)
+        # Preenche os NaNs iniciais (ativos que falharam na coleta/cálculo) com o score neutro (50)
         return normalized_series.reindex(serie.index, fill_value=50)
 
 # =============================================================================
@@ -379,7 +392,8 @@ class CalculadoraTecnica:
 # =============================================================================
 # 6. CLASSE: ANALISADOR DE PERFIL DO INVESTIDOR
 # =============================================================================
-# (Manter inalterado)
+# (Manter inalterado, mas o resultado de risco/horizonte não será mais usado
+# para definir pesos, apenas para informação e lookback ML)
 
 class AnalisadorPerfilInvestidor:
     def __init__(self):
@@ -446,7 +460,7 @@ class AnalisadorPerfilInvestidor:
 # =============================================================================
 # 10. CLASSE: OTIMIZADOR DE PORTFÓLIO
 # =============================================================================
-# (Manter inalterado)
+# (Esta classe será mantida, mas não será usada na função otimizar_alocacao)
 
 class OtimizadorPortfolioAvancado:
     def __init__(self, returns_df: pd.DataFrame, garch_vols: dict = None):
@@ -850,20 +864,13 @@ class ColetorDadosLive(object):
                 if len(retornos) > 60: 
                     try:
                         if 'Auto-Search GARCH' in garch_mode:
-                            garch_vol, garch_model_name = self._garch_auto_search(retornos, simbolo)
+                            # Removido GARCH Auto Search para estabilidade (arch_model is None)
+                            garch_vol = vol_anual
+                            garch_model_name = "Vol. Histórica (GARCH Desativado)"
                         else:
-                            # MODO RÁPIDO: GARCH(1,1) padrão
-                            am = arch_model(retornos * 100, mean='Zero', vol='Garch', p=1, q=1)
-                            res = am.fit(disp='off', last_obs=retornos.index[-1]) 
-                            garch_std_daily = res.conditional_volatility.iloc[-1] / 100 
-                            temp_garch_vol = garch_std_daily * np.sqrt(252)
-
-                            if np.isnan(temp_garch_vol) or temp_garch_vol == 0 or temp_garch_vol > 1.0: 
-                                raise ValueError("GARCH returned invalid value or nan.")
-                            
-                            garch_vol = temp_garch_vol
-                            garch_model_name = "GARCH(1,1) (Rápido)"
-                            log_debug(f"Ativo {simbolo}: GARCH(1,1) concluído. Vol Condicional: {garch_vol*100:.2f}%.")
+                            # MODO RÁPIDO: GARCH(1,1) padrão (Desativado)
+                            garch_vol = vol_anual
+                            garch_model_name = "Vol. Histórica (GARCH Desativado)"
                             
                     except Exception as e:
                         garch_vol = vol_anual 
@@ -1380,32 +1387,45 @@ class ConstrutorPortfolioAutoML:
     def realizar_clusterizacao_final(self):
         if self.scores_combinados.empty: return
         log_debug("Iniciando Clusterização Final nos Scores (KMeans).")
-        features_cluster = ['performance_score', 'fundamental_score', 'technical_score', 'ml_score_weighted']
-        data_cluster = self.scores_combinados[features_cluster].fillna(50)
+        
+        # === ALTERAÇÃO: Clusterização nos scores de fator ===
+        features_cluster = ['fundamental_score', 'technical_score', 'ml_score_weighted']
+        # Adiciona a performance histórica como 4º fator (Sharpe Ratio)
+        if 'sharpe' in self.scores_combinados.columns:
+             features_cluster.append('sharpe') 
+             
+        data_cluster = self.scores_combinados[features_cluster].fillna(0) # Zera NaNs de ativos que falharam em algum fator
+        
+        # Normalização dos scores para pesos iguais na clusterização
         scaler = StandardScaler()
         data_scaled = scaler.fit_transform(data_cluster)
-        pca = PCA(n_components=min(data_scaled.shape[1], 2))
+        
+        # PCA para reduzir a 2 dimensões para K-Means (Visualização + Eficiência)
+        pca = PCA(n_components=min(data_scaled.shape[1], 2)) 
         data_pca = pca.fit_transform(data_scaled)
+        
+        # K-Means com no máximo 4 clusters
         kmeans = KMeans(n_clusters=min(len(data_pca), 4), random_state=42, n_init=10)
         clusters = kmeans.fit_predict(data_pca)
+        
         self.scores_combinados['Final_Cluster'] = clusters
         log_debug(f"Clusterização Final concluída. Identificados {self.scores_combinados['Final_Cluster'].nunique()} perfis de risco/retorno.")
+        # =======================================================
 
     def pontuar_e_selecionar_ativos(self, horizonte_tempo: str):
-        if horizonte_tempo == "CURTO PRAZO": share_tech, share_fund = 0.7, 0.3
-        elif horizonte_tempo == "LONGO PRAZO": share_tech, share_fund = 0.3, 0.7
-        else: share_tech, share_fund = 0.5, 0.5
-
-        W_PERF_GLOBAL = 0.20
-        W_ML_GLOBAL_BASE = 0.20
-        W_REMAINING = 1.0 - W_PERF_GLOBAL - W_ML_GLOBAL_BASE
-        w_tech_final = W_REMAINING * share_tech
-        w_fund_final = W_REMAINING * share_fund
-        self.pesos_atuais = {'Performance': W_PERF_GLOBAL, 'Fundamentos': w_fund_final, 'Técnicos': w_tech_final, 'ML': W_ML_GLOBAL_BASE}
         
+        # === ALTERAÇÃO: Pesos Fixos e Scorecard Simples ===
+        W_FUND = W_FUNDAMENTAL # 40%
+        W_TECH = W_TECHNICAL # 30%
+        W_ML_BASE = W_ML # 30%
+        self.pesos_atuais = {'Fundamentos': W_FUND, 'Técnicos': W_TECH, 'ML': W_ML_BASE}
+        log_debug(f"Scorecard: Pesos Fixos: Fund={W_FUND:.2f}, Tec={W_TECH:.2f}, ML={W_ML_BASE:.2f}")
+        # ==================================================
+
         # JOIN SEGURO (RESOLVE O ERRO DE OVERLAP)
         cols_to_drop = [col for col in self.dados_fundamentalistas.columns if col in self.metricas_performance.columns]
         df_fund_clean = self.dados_fundamentalistas.drop(columns=cols_to_drop, errors='ignore')
+        # Garante que o sharpe e a volatilidade anual estão no combined
         combined = self.metricas_performance.join(df_fund_clean, how='inner').copy()
         
         for symbol in combined.index:
@@ -1424,6 +1444,7 @@ class ConstrutorPortfolioAutoML:
                     combined.loc[symbol, 'vol_20d'] = df['vol_20d'].iloc[-1]
                     
                     # Tenta adicionar features do LightGBM para a tabela de ranqueamento
+                    LGBM_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel"]
                     for lgbm_f in LGBM_FEATURES:
                          if lgbm_f in df.columns:
                              combined.loc[symbol, lgbm_f] = df[lgbm_f].iloc[-1]
@@ -1441,48 +1462,84 @@ class ConstrutorPortfolioAutoML:
                     
 
         scores = pd.DataFrame(index=combined.index)
-        scores['performance_score'] = (EngenheiroFeatures._normalize_score(combined['sharpe'], True) * 0.6 + EngenheiroFeatures._normalize_score(combined['retorno_anual'], True) * 0.4) * W_PERF_GLOBAL
         
+        # === NOVO SCORE FUNDAMENTALISTA (40% Peso Fixo) ===
+        # Ponderação maior na Qualidade (ROE, ROIC, P/L, P/VP) e menor na Distribuição (Div. Yield)
         def _get_score_series(df: pd.DataFrame, col: str, default_val: float) -> pd.Series:
             """Retorna a coluna se existir, ou uma Series de valor neutro."""
             if col in df.columns:
                 return df[col]
             return pd.Series(default_val, index=df.index)
 
+        # Scores: P/L, P/VP (Menor é Melhor), ROE, ROIC, Margem Líquida, Div. Yield (Maior é Melhor)
         s_pl = EngenheiroFeatures._normalize_score(_get_score_series(combined, 'pe_ratio', 50), False)
         s_pvp = EngenheiroFeatures._normalize_score(_get_score_series(combined, 'pb_ratio', 50), False)
-        s_roe = EngenheiroFeatures._normalize_score(_get_score_series(combined, 'roe', 50), True)
+        s_roe = EngenheiroFeatures._normalize_score(_get_score_series(combined, 'roe', 0), True)
+        s_roic = EngenheiroFeatures._normalize_score(_get_score_series(combined, 'roic', 0), True)
+        s_margin = EngenheiroFeatures._normalize_score(_get_score_series(combined, 'net_margin', 0), True)
         s_dy = EngenheiroFeatures._normalize_score(_get_score_series(combined, 'div_yield', 0), True)
         
-        scores['fundamental_score'] = ((s_pl + s_pvp + s_roe + s_dy) / 4) * w_fund_final
+        # Ponderação do Score Fundamental: 70% Qualidade (ROE/ROIC/Margem/P/L/P/VP) + 30% Distribuição (DY)
+        s_quality = (s_pl * 0.2 + s_pvp * 0.2 + s_roe * 0.2 + s_roic * 0.2 + s_margin * 0.2)
+        s_fund_base = (s_quality * 0.7 + s_dy * 0.3) / (0.7 + 0.3)
         
-        s_rsi = EngenheiroFeatures._normalize_score(100 - abs(combined.get('rsi_current', 50) - 50), True)
-        s_macd = EngenheiroFeatures._normalize_score(combined.get('macd_current', 0), True)
-        s_vol = EngenheiroFeatures._normalize_score(combined.get('vol_current', 0), False)
-        scores['technical_score'] = (s_rsi * 0.3 + s_macd * 0.4 + s_vol * 0.3) * w_tech_final
+        scores['fundamental_score'] = s_fund_base * W_FUND / 100 * 100 # Normaliza para 100, mas com peso W_FUND
+        # =================================================================
+
+        # === NOVO SCORE TÉCNICO (30% Peso Fixo) ===
+        # Ponderação em Momentum (MACD/RSI) e Baixa Volatilidade (Vol. Histórica/GARCH)
+        s_rsi = EngenheiroFeatures._normalize_score(combined.get('rsi_current', 50).sub(50).abs().sub(50).abs().mul(-1).add(100), True) # Perto de 50 é melhor (neutro)
+        s_macd = EngenheiroFeatures._normalize_score(combined.get('macd_current', 0), True) # MACD > 0 (compra) é melhor
+        s_vol = EngenheiroFeatures._normalize_score(_get_score_series(combined, 'annual_volatility', 0.5), False) # Volatilidade (menor é melhor)
+        s_sharpe = EngenheiroFeatures._normalize_score(_get_score_series(combined, 'sharpe', 0), True) # Sharpe (maior é melhor)
+        
+        s_tech_momentum = (s_rsi * 0.5 + s_macd * 0.5)
+        s_tech_stability = (s_vol * 0.5 + s_sharpe * 0.5)
+        
+        # Ponderação do Score Técnico: 60% Momentum + 40% Estabilidade/Performance
+        s_tech_base = (s_tech_momentum * 0.6 + s_tech_stability * 0.4) / (0.6 + 0.4)
+        
+        scores['technical_score'] = s_tech_base * W_TECH / 100 * 100 # Normaliza para 100, mas com peso W_TECH
+        # =================================================================
+
+        # === NOVO SCORE ML (30% Peso Fixo) - Ponderando AUC e Probabilidade ===
         
         ml_probs = pd.Series({s: self.predicoes_ml.get(s, {}).get('predicted_proba_up', 0.5) for s in combined.index})
         ml_conf = pd.Series({s: self.predicoes_ml.get(s, {}).get('auc_roc_score', 0.5) for s in combined.index})
+        
+        # 1. Pontuação da Probabilidade: Normaliza a Probabilidade (50% neutro, 100% ótimo)
         s_prob = EngenheiroFeatures._normalize_score(ml_probs, True)
         
-        # Filtra a confiança: Se a confiança for 0.5 (neutro/fallback total) OU 0.0 (falha total), o peso ML é 0.
-        ml_weight_factor = (ml_conf - 0.0).clip(lower=0) * 2 # Manteve-se a lógica de ponderação, agora com base no AUC
-
-        scores['ml_score_weighted'] = s_prob * (W_ML_GLOBAL_BASE * ml_weight_factor.fillna(0))
+        # 2. Fator de Confiança: Multiplica o score da probabilidade pelo AUC normalizado (0.5 AUC é neutro=1, <0.5 AUC reduz o peso)
+        # Transforma AUC (0.5 - 1.0) para Fator (0 - 1.0). Se AUC for 0.5, fator é 0.
+        # Fator = (AUC - 0.5) * 2. Se AUC=0.75, Fator=0.5. Se AUC=1.0, Fator=1.0. Se AUC=0.5, Fator=0.0
+        ml_weight_factor = (ml_conf - 0.5).clip(lower=0) * 2 
         
-        scores['total_score'] = scores.sum(axis=1)
+        # Score ML = Probabilidade Normalizada * Peso Base * Fator de Confiança
+        scores['ml_score_weighted'] = s_prob * (W_ML_BASE / 100) * ml_weight_factor.fillna(0)
+        
+        # Adiciona o Score ML não ponderado ao combined para análise de cluster
+        scores['raw_ml_score'] = s_prob # Score ML normalizado antes da ponderação pelo AUC
+        # =================================================================
+
+        # Score Total (Soma dos 3 Scores Ponderados - que já vêm em uma escala de 0 a W_FACTOR)
+        # O score total pode chegar a 40 + 30 + 30 = 100
+        scores['total_score'] = scores['fundamental_score'] + scores['technical_score'] + scores['ml_score_weighted']
+        
         # Junta os scores com todos os dados fundamentais e métricas técnicas
         self.scores_combinados = scores.join(combined).sort_values('total_score', ascending=False)
         
-        log_debug(f"Calculando Scores Ponderados. Horizonte: {horizonte_tempo}. Pesos Finais: Fund={w_fund_final:.2f}, Tec={w_tech_final:.2f}, ML={W_ML_GLOBAL_BASE:.2f}.")
+        log_debug(f"Calculando Scores Ponderados. Horizonte: {horizonte_tempo}. Pesos Finais: Fund={W_FUND:.2f}, Tec={W_TECH:.2f}, ML={W_ML_BASE:.2f}.")
 
         # -------------------------------------------------------------
         # 1. CRITÉRIO DE INCLUSÃO: FILTRO DE SCORE MÍNIMO
         # -------------------------------------------------------------
         if len(self.scores_combinados) > NUM_ATIVOS_PORTFOLIO:
-            cutoff_index = min(15, len(self.scores_combinados) - 1)
+            # Pega o score do ativo no 15º percentil como base de corte (ou o último, se tiver menos de 15)
+            cutoff_index = min(15, len(self.scores_combinados) - 1) 
             base_score = self.scores_combinados['total_score'].iloc[cutoff_index]
             
+            # Corta ativos que estão abaixo de 85% do score base (filtro de qualidade)
             min_score = base_score * SCORE_PERCENTILE_THRESHOLD
             
             ativos_filtrados = self.scores_combinados[self.scores_combinados['total_score'] >= min_score]
@@ -1494,86 +1551,69 @@ class ConstrutorPortfolioAutoML:
             self.scores_combinados = ativos_filtrados
             
         # -------------------------------------------------------------
-        # 2. SELEÇÃO FINAL POR CLUSTER
+        # 2. SELEÇÃO FINAL POR CLUSTER (Diversificação Forçada)
         # -------------------------------------------------------------
         self.realizar_clusterizacao_final()
         final_selection = []
         
+        # Seleciona o top ativo de cada cluster até atingir o NUM_ATIVOS_PORTFOLIO
         if not self.scores_combinados.empty and 'Final_Cluster' in self.scores_combinados.columns:
             clusters_present = self.scores_combinados['Final_Cluster'].unique()
-            for c in clusters_present:
-                best = self.scores_combinados[self.scores_combinados['Final_Cluster'] == c].head(1).index[0]
-                final_selection.append(best)
-        
-        if len(final_selection) < NUM_ATIVOS_PORTFOLIO:
-            others = [x for x in self.scores_combinados.index if x not in final_selection]
-            remaining_to_add = NUM_ATIVOS_PORTFOLIO - len(final_selection)
             
-            if remaining_to_add > 0:
-                 others_df = self.scores_combinados.loc[others].sort_values('total_score', ascending=False)
-                 final_selection.extend(others_df.index[:remaining_to_add].tolist())
+            # Ordena os clusters pelo score médio para priorizar a seleção nos melhores clusters
+            cluster_mean_scores = self.scores_combinados.groupby('Final_Cluster')['total_score'].mean().sort_values(ascending=False)
+            
+            # Seleciona o melhor ativo de cada cluster, começando pelos clusters com melhor score médio
+            for c in cluster_mean_scores.index:
+                best_in_cluster = self.scores_combinados[self.scores_combinados['Final_Cluster'] == c].sort_values('total_score', ascending=False).head(1).index[0]
+                if best_in_cluster not in final_selection:
+                     final_selection.append(best_in_cluster)
+            
+            # Se ainda não atingiu o número, adiciona os próximos melhores do ranking geral
+            if len(final_selection) < NUM_ATIVOS_PORTFOLIO:
+                 others = [x for x in self.scores_combinados.index if x not in final_selection]
+                 remaining_to_add = NUM_ATIVOS_PORTFOLIO - len(final_selection)
+                 
+                 if remaining_to_add > 0:
+                      others_df = self.scores_combinados.loc[others].sort_values('total_score', ascending=False)
+                      final_selection.extend(others_df.index[:remaining_to_add].tolist())
 
         self.ativos_selecionados = final_selection[:NUM_ATIVOS_PORTFOLIO]
         log_debug(f"Seleção final concluída. {len(self.ativos_selecionados)} ativos selecionados: {self.ativos_selecionados}")
 
         return self.ativos_selecionados
     
+    # === ALTERAÇÃO CRÍTICA: LÓGICA DE ALOCAÇÃO POR SCORE ===
     def otimizar_alocacao(self, nivel_risco: str):
+        """
+        Substitui a otimização de Markowitz por alocação proporcional ao Score Total
+        dos ativos selecionados.
+        """
+        
         if not self.ativos_selecionados or len(self.ativos_selecionados) < 1:
             self.metodo_alocacao_atual = "ERRO: Ativos Insuficientes"; return {}
         
-        available_assets_returns = {}
-        ativos_sem_dados = []
+        # Filtra apenas os ativos selecionados que estão na tabela de scores
+        valid_selection = [a for a in self.ativos_selecionados if a in self.scores_combinados.index]
         
-        for s in self.ativos_selecionados:
-            if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s] and not self.dados_por_ativo[s]['returns'].dropna().empty:
-                available_assets_returns[s] = self.dados_por_ativo[s]['returns']
-            else:
-                ativos_sem_dados.append(s)
-        
-        final_returns_df = pd.DataFrame(available_assets_returns).dropna()
-        
-        if final_returns_df.shape[0] < 50 or len(ativos_sem_dados) > 0 or 'PESOS_IGUAIS' in nivel_risco:
-            log_debug("Otimização de Markowitz ignorada. Recorrendo à PONDERAÇÃO POR SCORE (Modo Estático/Poucos Dados).")
-
-            if len(ativos_sem_dados) > 0:
-                st.warning(f"⚠️ Alguns ativos ({', '.join(ativos_sem_dados)}) não possuem histórico de preços. A otimização de variância (Markowitz) será substituída por alocação baseada em Score/Pesos Iguais.")
-            
-            valid_selection = [a for a in self.ativos_selecionados if a in self.scores_combinados.index]
-            
-            if valid_selection:
-                 scores = self.scores_combinados.loc[valid_selection, 'total_score']
-                 total_score = scores.sum()
-                 if total_score > 0:
-                     weights = (scores / total_score).to_dict()
-                     self.metodo_alocacao_atual = 'PONDERAÇÃO POR SCORE (Modo Estático)'
-                 else:
-                     weights = {asset: 1.0 / len(valid_selection) for asset in valid_selection}
-                     self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
-            else:
-                 weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
+        if valid_selection:
+             scores = self.scores_combinados.loc[valid_selection, 'total_score']
+             total_score = scores.sum()
+             
+             if total_score > 0:
+                 # Alocação Proporcional ao Score Total (Total Score = 0 a 100)
+                 weights = (scores / total_score).to_dict()
+                 self.metodo_alocacao_atual = 'ALOCAÇÃO PROPORCIONAL AO SCORE'
+             else:
+                 # Fallback total: Pesos iguais
+                 weights = {asset: 1.0 / len(valid_selection) for asset in valid_selection}
                  self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
-                 
-            return self._formatar_alocacao(weights)
-
-        garch_vols_filtered = {asset: self.volatilidades_garch.get(asset, final_returns_df[asset].std() * np.sqrt(252)) for asset in final_returns_df.columns}
-        optimizer = OtimizadorPortfolioAvancado(final_returns_df, garch_vols=garch_vols_filtered)
-        
-        if 'CONSERVADOR' in nivel_risco or 'INTERMEDIÁRIO' in nivel_risco:
-            strategy = 'MinVolatility'; self.metodo_alocacao_atual = 'MINIMIZAÇÃO DE VOLATILIDADE'
         else:
-            strategy = 'MaxSharpe'; self.metodo_alocacao_atual = 'MAXIMIZAÇÃO DE SHARPE'
-            
-        log_debug(f"Otimizando Markowitz. Estratégia: {self.metodo_alocacao_atual} (Risco: {nivel_risco}).")
-            
-        weights = optimizer.otimizar(estrategia=strategy)
-        if not weights:
-             log_debug("AVISO: Otimizador falhou. Usando PESOS IGUAIS como fallback total.")
+             # Fallback total: Pesos iguais
              weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
-             self.metodo_alocacao_atual += " (FALLBACK)"
-        
-        total_weight = sum(weights.values())
-        log_debug(f"Otimização Markowitz finalizada. Peso total: {total_weight:.2f}")
+             self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
+             
+        log_debug(f"Alocação finalizada com o método: {self.metodo_alocacao_atual}.")
         return self._formatar_alocacao(weights)
         
     def _formatar_alocacao(self, weights: dict) -> dict:
@@ -1612,7 +1652,7 @@ class ConstrutorPortfolioAutoML:
         
         # Re-normaliza se houver ativos filtrados por NaN/dados insuficientes
         if valid_weights.sum() > 0:
-            valid_weights = valid_weights / valid_weights.sum()
+            valid_weights = valid_weights = valid_weights / valid_weights.sum() # Corrigido: normaliza para que a soma seja 1.0
             portfolio_returns = (returns_df * valid_weights).sum(axis=1)
             metrics = {
                 'annual_return': portfolio_returns.mean() * 252,
@@ -1660,15 +1700,18 @@ class ConstrutorPortfolioAutoML:
             
             justification.append(f"Score Fund: {score_row.get('fundamental_score', 0.0):.3f}")
             justification.append(f"Score Téc: {score_row.get('technical_score', 0.0):.3f}")
-            justification.append(f"Score Perf: {score_row.get('performance_score', 0.0):.3f}")
+            # Score Performance (removido o score individual, mas o sharpe cru pode ser usado na justif. se disponível)
+            sharpe_crude = score_row.get('sharpe', np.nan)
+            justification.append(f"Sharpe (Hist.): {sharpe_crude:.3f}" if not np.isnan(sharpe_crude) else "Sharpe (Hist.): N/A")
             
             if is_ml_failed:
                 justification.append("Score ML: N/A (Falha de Treinamento)")
-                justification.append("✅ Selecionado por Fundamentos (ML não disponível)")
+                justification.append("✅ Selecionado por Fundamentos/Técnicos (ML não disponível)")
             else:
+                ml_score_weighted = score_row.get('ml_score_weighted', 0.0)
                 ml_prob = ml_data.get('predicted_proba_up', np.nan)
                 ml_auc = ml_data.get('auc_roc_score', np.nan)
-                justification.append(f"Score ML: {score_row.get('ml_score_weighted', 0.0):.3f} (Prob {ml_prob*100:.1f}%, Conf {ml_auc:.2f})")
+                justification.append(f"Score ML: {ml_score_weighted:.3f} (Prob {ml_prob*100:.1f}%, Conf {ml_auc:.2f})")
             
             # Adiciona Cluster e Setor
             cluster = score_row.get('Final_Cluster', 'N/A')
@@ -1682,8 +1725,9 @@ class ConstrutorPortfolioAutoML:
     def executar_pipeline(self, simbolos_customizados: list, perfil_inputs: dict, ml_mode: str, pipeline_mode: str, progress_bar=None) -> bool:
         self.perfil_dashboard = perfil_inputs
         
+        # O modo Fundamentalista agora apenas ignora o ML, mas usa a pontuação e alocação por score
         if pipeline_mode == 'fundamentalista':
-             log_debug("Modo de Pipeline: FUNDAMENTALISTA (ML e Markowitz ignorados).")
+             log_debug("Modo de Pipeline: FUNDAMENTALISTA (ML ignorado, Scorecard Ativo).")
              ml_mode = 'fallback' 
 
         try:
@@ -1708,16 +1752,13 @@ class ConstrutorPortfolioAutoML:
                     self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': 'Fundamental Mode Forced'}
                  if progress_bar: progress_bar.progress(60, text="Pulando ML (Modo Fundamentalista Ativo)...")
             
-            if progress_bar: progress_bar.progress(70, text="Ranqueando e selecionando (Pesos Dinâmicos + PCA Final)...")
+            if progress_bar: progress_bar.progress(70, text="Ranqueando e selecionando (Scorecard + PCA Final)...")
             self.pontuar_e_selecionar_ativos(horizonte_tempo=perfil_inputs.get('time_horizon', 'MÉDIO PRAZO')) 
             
-            if pipeline_mode == 'general':
-                if progress_bar: progress_bar.progress(85, text="Otimizando alocação (Markowitz 10-30%)...")
-                self.alocacao_portfolio = self.otimizar_alocacao(nivel_risco=perfil_inputs.get('risk_level', 'MODERADO'))
-            else:
-                # Alocação neutra por score no modo Fundamentalista, se houver dados
-                if progress_bar: progress_bar.progress(85, text="Alocação por Score (Modo Fundamentalista)...")
-                self.alocacao_portfolio = self.otimizar_alocacao(nivel_risco='PESOS_IGUAIS') # Força fallback interno por score/pesos iguais
+            # === ALTERAÇÃO: Chama a nova lógica de alocação por Score ===
+            if progress_bar: progress_bar.progress(85, text="Alocação Proporcional ao Score...")
+            self.alocacao_portfolio = self.otimizar_alocacao(nivel_risco='SCORECARD') 
+            # ==========================================================
 
             if progress_bar: progress_bar.progress(95, text="Calculando métricas finais...")
             self.calcular_metricas_portfolio(); self.gerar_justificativas()
@@ -1942,45 +1983,38 @@ def aba_introducao():
     
     st.markdown("""
     <div class="info-box" style="text-align: center;">
-    <h3>📈 Modelo de Alocação de Ativos Adaptativo</h3>
-    <p>Este sistema utiliza uma metodologia quantitativa e híbrida para construir portfólios otimizados para o mercado brasileiro (B3). O objetivo é maximizar o retorno ajustado ao risco (Sharpe Ratio) e garantir a diversificação estatística, baseando-se no perfil de risco e horizonte de tempo do investidor.</p>
+    <h3>📈 Modelo de Alocação de Ativos Adaptativo (Scorecard)</h3>
+    <p>Este sistema utiliza uma metodologia puramente baseada em pontuações (Scorecard) para ranquear e selecionar ativos. A alocação de capital é proporcional ao Score Total obtido por cada ativo, garantindo que o portfólio seja composto pelos ativos de maior qualidade e potencial, com diversificação assegurada pela Clusterização.</p>
     </div>
     """, unsafe_allow_html=True)
     
     st.markdown("---")
-    st.subheader("1. Arquitetura do Motor de Decisão Multicritério")
-    st.write("A avaliação de cada ativo é realizada sob quatro pilares independentes. A ponderação de cada pilar é ajustada dinamicamente com base nas respostas do questionário de perfil (Ex: Curto Prazo prioriza Fatores Técnicos e ML; Longo Prazo prioriza Fundamentos).")
+    st.subheader("1. Arquitetura do Motor de Decisão (Scorecard Unificado)")
+    st.write("A avaliação de cada ativo é realizada sob três pilares independentes. Todos os pilares contribuem com pesos fixos para o Score Total do ativo.")
 
     col_p1, col_p2, col_p3 = st.columns(3)
     
     with col_p1:
         st.markdown("#### Fatores de Decisão")
-        st.markdown("""
-        | Pilar | Peso Base | Foco Principal |
+        st.markdown(f"""
+        | Pilar | Peso Fixo | Foco Principal |
         | :--- | :--- | :--- |
-        | **Performance** | **20%** | Índice Sharpe e Retorno Histórico. |
-        | **Machine Learning** | **20%** | Probabilidade de Movimento Direcional Futuro. |
-        | **Fundamentos** | **Varia** | Qualidade e Saúde Financeira (P/L, ROE, Dívida). |
-        | **Técnicos** | **Varia** | Momentum e Tendência (RSI, MACD, Volatilidade). |
+        | **Fundamentos** | **{W_FUNDAMENTAL*100:.0f}%** | Qualidade e Saúde Financeira (P/L, ROE, Dívida). |
+        | **Técnicos** | **{W_TECHNICAL*100:.0f}%** | Momentum, Tendência e Volatilidade (RSI, MACD, Vol). |
+        | **Machine Learning** | **{W_ML*100:.0f}%** | Prob. Direcional Futura (Ponderado pela Confiança AUC). |
         """)
 
     with col_p2:
-        st.markdown("#### 🧠 Lógica de Ponderação (Exemplo)")
-        st.markdown("A alocação final combina a otimização de portfólio (Markowitz) com a pontuação multicritério, garantindo que o portfólio seja eficiente e alinhado ao risco.")
-        st.dataframe(pd.DataFrame({
-            "Pilar": ["Fundamentalista", "Técnico", "Peso Total"],
-            "CP (4 Meses)": ["30% do remanescente", "70% do remanescente", "100%"],
-            "LP (12 Meses)": ["70% do remanescente", "30% do remanescente", "100%"]
-        }).set_index('Pilar'), use_container_width=True)
+        st.markdown("#### 🧠 Lógica de Ponderação (Scorecard)")
+        st.markdown("O Score Total é a soma ponderada dos 3 pilares, onde a contribuição do ML é ajustada pela sua performance de validação (AUC). A alocação final é puramente proporcional a este Score Total, ignorando a otimização tradicional de fronteira eficiente (Markowitz).")
+        st.markdown("""
+        $$Score_{Total} = W_{Fund} + W_{Tec} + W_{ML} \\times Fator_{Confiança}$$
+        Onde $Fator_{Confiança} = (AUC - 0.5) \\times 2$ (mínimo 0).
+        """)
         
     with col_p3:
-        st.markdown("#### 🛡️ Gestão de Risco e Modelagem")
-        st.markdown("O sistema oferece diferentes níveis de sofisticação para estimar o risco (Volatilidade Condicional) e a previsão:")
-        st.markdown("""
-        * **Volatilidade:** Utiliza o modelo **Volatilidade Histórica Anualizada** para o cálculo de risco. (O GARCH foi removido para maior estabilidade).
-        * **Previsão (ML - Simples):** **Regressão Logística** com regularização (Elastic Net/L2).
-        * **Previsão (ML - Complexa):** **Random Forest** com profundidade limitada e balanceamento de classes.
-        """)
+        st.markdown("#### 🛡️ Seleção e Diversificação")
+        st.markdown("Para garantir um portfólio diversificado, o sistema utiliza a **Clusterização** (K-Means) aplicada aos scores dos fatores (Fund, Tec, ML). A seleção final obriga a inclusão do ativo de maior score em cada cluster, garantindo que o portfólio não seja composto por ativos com o mesmo perfil de risco-retorno/fator.")
 
 
     st.markdown("---")
@@ -1990,7 +2024,7 @@ def aba_introducao():
 
         # Exemplo de Gráfico de Contribuição de Score (Simulado)
         fig_score_sim = go.Figure(data=[
-            go.Bar(name='Fatores', x=['Fundamental', 'Técnico', 'Performance', 'ML'], y=[25, 35, 20, 20], marker_color=['#27AE60', '#3498DB', '#9B59B6', '#E67E22'])
+            go.Bar(name='Fatores', x=['Fundamental', 'Técnico', 'ML'], y=[W_FUNDAMENTAL*100, W_TECHNICAL*100, W_ML*100], marker_color=['#27AE60', '#3498DB', '#E67E22'])
         ])
         fig_score_sim.update_layout(title_text='Exemplo de Contribuição de Score por Pilar (Ativo X)', yaxis_title='Peso (%)', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=300)
         st.plotly_chart(fig_score_sim, use_container_width=True)
@@ -2000,7 +2034,7 @@ def aba_introducao():
         O sistema é resiliente a falhas de API de preço ou dados insuficientes:
         
         * **Modo Estático Global:** Ativado se a coleta de preços falhar consecutivamente para múltiplos ativos, impedindo que dados incompletos corrompam a análise de risco.
-        * **Fallback ML (Treinamento):** Se um ativo não tiver dados históricos de preço suficientes para treinar o modelo de Machine Learning, sua predição de ML é descartada (AUC=0). **No entanto, o ativo não é excluído da análise**, permitindo que ele seja classificado e selecionado apenas por seus fortes Fundamentos, Performance Histórica e Clusterização.
+        * **Fallback ML (Treinamento):** Se um ativo não tiver dados históricos de preço suficientes para treinar o modelo de Machine Learning, sua predição de ML é descartada (**o Score ML é zerado pelo Fator Confiança AUC=0**). No entanto, o ativo não é excluído da análise, permitindo que ele seja classificado e selecionado apenas por seus fortes Fundamentos e Fatores Técnicos/Performance.
         * **Clusterização e Fundamentos:** Os processos de Clusterização (K-Means + PCA) e a leitura dos Fundamentos são independentes do histórico de preços, garantindo que uma avaliação de **Qualidade** sempre esteja disponível.
         """)
 
@@ -2135,10 +2169,10 @@ def aba_construtor_portfolio():
             st.markdown("##### 2. Pesos Finais Utilizados na Pontuação")
             st.json(builder.pesos_atuais)
             st.markdown("##### 3. Ranqueamento e Scores Combinados (Head)")
-            debug_cols = ['total_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 'raw_performance_score', 'sharpe', 'retorno_anual']
+            debug_cols = ['total_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 'sharpe', 'retorno_anual']
             debug_df = builder.scores_combinados[[c for c in debug_cols if c in builder.scores_combinados.columns]]
             st.dataframe(debug_df.head(10).style.format('{:.4f}'), use_container_width=True)
-            st.markdown("##### 4. Resultados da Otimização Markowitz/Alocação")
+            st.markdown("##### 4. Resultados da Alocação por Score")
             st.json({
                 "Método": builder.metodo_alocacao_atual,
                 "Métricas Portfólio": builder.metricas_portfolio,
@@ -2214,20 +2248,20 @@ def aba_construtor_portfolio():
 
                 pipeline_mode = st.radio(
                     "**1. Modo de Construção:**",
-                    ["Modo Geral (ML + Otimização Markowitz)", "Modo Fundamentalista (Cluster/Anomalias)"],
+                    ["Modo Geral (Scorecard Completo)", "Modo Fundamentalista (Cluster/Anomalias)"],
                     index=0,
                     key='pipeline_mode_radio'
                 )
 
                 ml_mode = 'fast'
-                if pipeline_mode == 'Modo Geral (ML + Otimização Markowitz)':
+                if 'Modo Geral' in pipeline_mode:
                     ml_mode = st.selectbox(
                         "**2. Seleção de Modelo ML:**",
                         [
                             'fast', 
                             'full'
                         ],
-                        format_func=lambda x: "Rápido (LogReg)" if x == 'fast' else "Lento (Análise Completa RF/XGB/Auto-GARCH)",
+                        format_func=lambda x: "Rápido (LogReg)" if x == 'fast' else "Lento (Análise Completa RF/XGB)",
                         index=0,
                         key='ml_model_mode_select'
                     )
@@ -2236,7 +2270,7 @@ def aba_construtor_portfolio():
             st.markdown("---")
             col_btn_start, col_btn_center, col_btn_end = st.columns([1, 2, 1])
             with col_btn_center:
-                submitted = st.form_submit_button("🚀 Gerar Alocação Otimizada", type="primary", use_container_width=True)
+                submitted = st.form_submit_button("🚀 Gerar Alocação por Score", type="primary", use_container_width=True)
             
             progress_bar_placeholder = st.empty() # Placeholder para o loading
             
@@ -2298,7 +2332,7 @@ def aba_construtor_portfolio():
         assets = builder.ativos_selecionados
         allocation = builder.alocacao_portfolio
         
-        st.markdown('## ✅ Relatório de Alocação Otimizada')
+        st.markdown('## ✅ Relatório de Alocação por Score')
         
         # --- 5 BOXES ALINHADOS EM UMA LINHA ---
         col1, col2, col3, col4, col5 = st.columns(5)
@@ -2318,7 +2352,7 @@ def aba_construtor_portfolio():
         
         strategy_name = builder.metodo_alocacao_atual.split('(')[0].strip()
         if len(strategy_name) > 15:
-            strategy_name = strategy_name.replace("MINIMIZAÇÃO DE ", "MIN ").replace("MAXIMIZAÇÃO DE ", "MAX ")
+            strategy_name = strategy_name.replace("ALOCAÇÃO PROPORCIONAL AO ", "PROP. SCORE ")
             
         col5.metric("Estratégia", strategy_name)
         
@@ -2330,24 +2364,9 @@ def aba_construtor_portfolio():
         # FIX 4: Verifica se o GARCH foi minimamente bem sucedido (soma da vol GARCH > 0)
         has_garch_data = builder.volatilidades_garch.values() and any(v > 0.05 for v in builder.volatilidades_garch.values()) 
         
-        # FIX 2: A aba ML só é exibida se houver resultados de ML utilizáveis (soma do score ponderado > 0)
-        has_usable_ml = builder.scores_combinados['ml_score_weighted'].sum() > 0 if not builder.scores_combinados.empty else False
-        
         # --- NOVO: Verificação de Redundância GARCH ---
-        is_garch_redundant = False
-        if has_price_data:
-            distinct_garch_count = 0
-            for ativo in assets:
-                if ativo in builder.metricas_performance.index and ativo in builder.volatilidades_garch:
-                    vol_hist = builder.metricas_performance.loc[ativo].get('volatilidade_anual', np.nan)
-                    vol_garch = builder.volatilidades_garch.get(ativo)
-                    # Checa se a diferença é maior que 1 ponto percentual
-                    if not np.isnan(vol_hist) and not np.isnan(vol_garch) and abs(vol_garch - vol_hist) > 0.01:
-                        distinct_garch_count += 1
-            
-            if distinct_garch_count == 0:
-                is_garch_redundant = True
-                log_debug("GARCH: Ocultando aba GARCH. Nenhuma diferença significativa em relação à Volatilidade Histórica (Redundante).")
+        is_garch_redundant = True # Forçado a True já que o GARCH foi removido/desabilitado
+        log_debug("GARCH: Ocultando aba GARCH. GARCH desabilitado/Volatilidade Histórica em uso.")
         # --- FIM NOVO ---
         
         # Define as abas (agora consolidada)
@@ -2390,7 +2409,7 @@ def aba_construtor_portfolio():
                     fig_alloc = px.pie(alloc_data, values='Peso (%)', names='Ativo', hole=0.4)
                     template = obter_template_grafico()
                     fig_alloc.update_layout(**template)
-                    fig_alloc.update_layout(title_text="Distribuição Otimizada por Ativo")
+                    fig_alloc.update_layout(title_text="Distribuição Otimizada por Score")
                     
                     st.plotly_chart(fig_alloc, use_container_width=True)
                 else:
@@ -2476,7 +2495,7 @@ def aba_construtor_portfolio():
 
                  if is_ml_actually_trained:
                      st.markdown(f"##### 🤖 Predição de Movimento Direcional ({builder.predicoes_ml.get(assets[0], {}).get('model_name', 'Modelo ML')})")
-                     st.markdown("O modelo utiliza histórico de preços para prever a probabilidade de alta no curto prazo.")
+                     st.markdown("O modelo utiliza histórico de preços para prever a probabilidade de alta no curto prazo. **O Score Total é ponderado pela Confiança (AUC) do modelo.**")
                      title_text_plot = "Probabilidade de Alta (0-100%)"
                      
                      ml_data = []
@@ -2531,7 +2550,7 @@ def aba_construtor_portfolio():
             st.markdown("---")
             st.markdown('##### 🔬 Análise de Qualidade Fundamentalista (Unsupervised Learning)')
             
-            if st.session_state.get('pipeline_mode_radio', '') == 'Modo Fundamentalista (Cluster/Anomalias)':
+            if st.session_state.get('pipeline_mode_radio', '').startswith('Modo Fundamentalista'):
                  st.info("ℹ️ **Modo Fundamentalista Ativo:** A classificação se baseia EXCLUSIVAMENTE nos fatores Fundamentais e Clusterização.")
                  
             st.markdown("###### Score Fundamentalista e Cluster por Ativo")
@@ -2556,7 +2575,7 @@ def aba_construtor_portfolio():
                 df_viz = builder.scores_combinados.loc[assets].copy().reset_index().rename(columns={'index': 'Ticker'})
                 
                 # Prepara dados para PCA (apenas scores)
-                features_for_pca = ['performance_score', 'fundamental_score', 'technical_score', 'ml_score_weighted']
+                features_for_pca = ['fundamental_score', 'technical_score', 'ml_score_weighted']
                 data_pca_input = df_viz[features_for_pca].fillna(50)
                 
                 scaler = StandardScaler()
@@ -2666,17 +2685,16 @@ def aba_construtor_portfolio():
                 st.markdown('#### Ranqueamento Final e Justificativas Detalhadas')
                 
                 # CORREÇÃO: Adicionada verificação de chave antes de exibir
-                if builder.pesos_atuais and all(key in builder.pesos_atuais for key in ['Fundamentos', 'Técnicos', 'ML', 'Performance']):
-                     st.markdown(f"**Pesos Adaptativos Usados:** Performance: {builder.pesos_atuais['Performance']:.2f} | Fundamentos: {builder.pesos_atuais['Fundamentos']:.2f} | Técnicos: {builder.pesos_atuais['Técnicos']:.2f} | ML: {builder.pesos_atuais['ML']:.2f}")
+                if builder.pesos_atuais:
+                     st.markdown(f"**Pesos do Scorecard:** Fundamentos: {builder.pesos_atuais.get('Fundamentos', 0):.2f} | Técnicos: {builder.pesos_atuais.get('Técnicos', 0):.2f} | ML: {builder.pesos_atuais.get('ML', 0):.2f}")
                 else:
-                     st.warning("Pesos adaptativos não calculados ou ausentes.")
+                     st.warning("Pesos do Scorecard não calculados ou ausentes.")
 
                 st.markdown("---")
                 
                 # Safe Rename Logic (Check columns existence first)
                 rename_map = {
                     'total_score': 'Score Total', 
-                    'performance_score': 'Score Perf.', 
                     'fundamental_score': 'Score Fund.', 
                     'technical_score': 'Score Téc.', 
                     'ml_score_weighted': 'Score ML', 
@@ -2730,9 +2748,9 @@ def aba_construtor_portfolio():
                     
                     # Mapeamento de colunas para exibição final (incluindo as renomeadas)
                     final_rename_map = {
-                        'total_score': 'Score Total', 'performance_score': 'Score Perf.', 
-                        'fundamental_score': 'Score Fund.', 'technical_score': 'Score Téc.', 
-                        'ml_score_weighted': 'Score ML', 'sharpe': 'Sharpe',
+                        'total_score': 'Score Total', 'fundamental_score': 'Score Fund.', 
+                        'technical_score': 'Score Téc.', 'ml_score_weighted': 'Score ML', 
+                        'sharpe': 'Sharpe',
                         'retorno_anual': 'Retorno Anual (%)', 'annual_volatility': 'Vol. Hist. (%)', 
                         'pe_ratio': 'P/L', 'pb_ratio': 'P/VP', 'div_yield': 'Div. Yield (%)',
                         'roe': 'ROE (%)', 'roic': 'ROIC (%)', 'net_margin': 'Margem Líq. (%)',
