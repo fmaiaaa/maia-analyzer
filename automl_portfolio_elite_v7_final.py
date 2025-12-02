@@ -2132,7 +2132,7 @@ def aba_introducao():
             'Pilar': ['Performance', 'Machine Learning', 'Fundamentos', 'Técnicos'],
             'Peso Base': ['20%', '20%', 'Varia (30%-50%)', 'Varia (30%-50%)'],
             'Foco': ['Risco/Retorno Histórico', 'Predição Direcional', 'Qualidade/Valuation', 'Momento/Tendência']
-        }, index=['1', '2', '3', '4']).rename_axis('ID')), use_container_width=True, hide_index=False)
+        }, index=['1', '2', '3', '4']).rename_axis('ID'), use_container_width=True, hide_index=False)
     
     st.markdown("---")
     
