@@ -110,13 +110,13 @@ SCORE_PERCENTILE_THRESHOLD = 0.85
 PESO_MIN = 0.10
 PESO_MAX = 0.30
 
+# NOVO: Limite mínimo de dias para o treinamento ML (AJUSTADO PARA 120)
+MIN_TRAIN_DAYS_ML = 120 
+
 # === REVERSÃO: PESOS DINÂMICOS (V9.6) ===
 # Peso base de Performance (Usado no cálculo dinâmico)
 W_PERF_GLOBAL = 0.20
 # =======================================
-
-# NOVO: Limite mínimo de dias para o treinamento ML (AJUSTADO PARA 120)
-MIN_TRAIN_DAYS_ML = 120 
 
 # NOVO: Horizontes ML baseados no lookback adaptativo
 def get_ml_horizons(ml_lookback_days: int):
@@ -1663,132 +1663,85 @@ class ConstrutorPortfolioAutoML:
         if not self.ativos_selecionados or len(self.ativos_selecionados) < 1:
             self.metodo_alocacao_atual = "ERRO: Ativos Insuficientes"; return {}
         
-        # --- CONSTANTES DA NOVA REGRA (SOLICITADA PELO CLIENTE) ---
-        PESO_FINANCEIRO_TOTAL = 0.30
-        PESO_TECNOLOGIA_TOTAL = 0.10
-        # --- FIM CONSTANTES DA NOVA REGRA ---
-        
-        # 1. Classifica os ativos selecionados em fixos e otimizáveis (aqueles que passaram no filtro de score)
-        ativos_fixos = []
-        ativos_otimizaveis = []
-        
-        # Mapeia ativos selecionados para seus setores
-        ativos_setores = {}
-        for ativo in self.ativos_selecionados:
-             # O setor é lido do dataframe fundamentalista
-             setor = self.dados_fundamentalistas.loc[ativo, 'sector'] if ativo in self.dados_fundamentalistas.index and 'sector' in self.dados_fundamentalistas.columns else 'Outros'
-             ativos_setores[ativo] = setor
-             
-             if setor == 'Financeiro' or setor == 'Tecnologia da Informação':
-                 ativos_fixos.append(ativo)
-             else:
-                 ativos_otimizaveis.append(ativo)
-                 
-        # 2. Atribui pesos fixos aos ativos fixos
-        alocacao_final = {}
-        
-        ativos_financeiro = [a for a in ativos_fixos if ativos_setores[a] == 'Financeiro']
-        ativos_tecnologia = [a for a in ativos_fixos if ativos_setores[a] == 'Tecnologia da Informação']
-        
-        # Calcula a distribuição do peso fixo total pelos ativos selecionados em cada setor
-        peso_por_ativo_fin = PESO_FINANCEIRO_TOTAL / len(ativos_financeiro) if ativos_financeiro else 0
-        peso_por_ativo_tec = PESO_TECNOLOGIA_TOTAL / len(ativos_tecnologia) if ativos_tecnologia else 0
-        
-        for ativo in ativos_financeiro:
-            alocacao_final[ativo] = peso_por_ativo_fin
-        for ativo in ativos_tecnologia:
-            alocacao_final[ativo] = peso_por_ativo_tec
-            
-        peso_fixo_alocado = sum(alocacao_final.values())
-        peso_otimizar = 1.0 - peso_fixo_alocado # O peso remanescente a ser distribuído/otimizado
-        
-        # 3. Lógica de Markowitz/Fallback para os ativos otimizáveis (restante do peso)
-        
-        # A. Verifica se o peso otimizável é muito pequeno (Ex: portfólio 100% fixo)
-        if peso_otimizar <= 0.001:
-            log_debug(f"AVISO: Alocação Markowitz remanescente ignorada. Peso fixo alocado: {peso_fixo_alocado:.2f}. Peso remanescente muito baixo.")
-            self.metodo_alocacao_atual = f"FIXO ({peso_fixo_alocado*100:.0f}%) + IGUAL (Residual)"
-            
-            # Distribui o peso residual (se houver, que deve ser minúsculo) igualmente entre os otimizáveis
-            peso_residual_por_ativo = peso_otimizar / len(ativos_otimizaveis) if ativos_otimizaveis else 0
-            for ativo in ativos_otimizaveis:
-                 alocacao_final[ativo] = peso_residual_por_ativo
-
-            return self._formatar_alocacao(alocacao_final)
-
-        # B. Prepara para Otimização Markowitz (apenas ativos otimizáveis)
         available_assets_returns = {}
+        ativos_sem_dados = []
         
-        for s in ativos_otimizaveis:
+        # *** ALTERAÇÃO CRÍTICA (3.2): Filtra aqui também, garantindo que o Markowitz só rode com dados válidos ***
+        ativos_para_otimizacao = []
+        for s in self.ativos_selecionados:
             if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s]:
                  returns_series = self.dados_por_ativo[s]['returns'].dropna()
-                 if len(returns_series) >= 50:
+                 if len(returns_series) >= 50: # Mínimo de 50 pontos para Markowitz ser razoável
                      available_assets_returns[s] = returns_series
-            # Ativos sem dados (sem dados, sem Markowitz) são ignorados do Markowitz
+                     ativos_para_otimizacao.append(s)
+                 else:
+                     ativos_sem_dados.append(s)
+            else:
+                 ativos_sem_dados.append(s)
         
         final_returns_df = pd.DataFrame(available_assets_returns)
-        
-        # C. Execução da Otimização Markowitz ou Fallback (Apenas para os ativos otimizáveis que tinham dados)
-        weights_otimizados_raw = {}
-        
-        # 4. Condição para Markowitz (Mínimo de dados e ativos)
+        # *** FIM ALTERAÇÃO CRÍTICA (3.2) ***
+
+        # Verifica se há dados suficientes para Markowitz
         if final_returns_df.shape[0] < 50 or len(final_returns_df.columns) < 2:
-            log_debug("Otimização de Markowitz restrita ignorada. Recorrendo à PONDERAÇÃO POR SCORE/PESOS IGUAIS para os remanescentes.")
+            log_debug("Otimização de Markowitz ignorada. Recorrendo à PONDERAÇÃO POR SCORE (Modo Estático/Poucos Dados).")
+
+            if len(ativos_sem_dados) > 0:
+                # Alterado para não ser um st.warning para manter o tom de "recomendação firme"
+                log_debug(f"AVISO: {len(ativos_sem_dados)} ativos ({', '.join(ativos_sem_dados)}) não possuem histórico de preços. Usando alocação baseada em Score/Pesos Iguais.")
             
-            # Fallback para Pesos Iguais ou Score Proporcional nos remanescentes
-            valid_selection_for_fallback = [a for a in ativos_otimizaveis if a in self.scores_combinados.index]
+            # Usa a lista original (embora alguns tenham sido ignorados) para manter a soma de 100%
+            valid_selection = [a for a in self.ativos_selecionados if a in self.scores_combinados.index]
             
-            if valid_selection_for_fallback:
-                 scores = self.scores_combinados.loc[valid_selection_for_fallback, 'total_score']
-                 total_score = scores.sum()
-                 if total_score > 0:
-                    # Distribui o peso do Markowitz igualmente baseado no Score Total (o total_score deve somar 1.0 para ser normalizado abaixo)
-                    weights_otimizados_raw = (scores / total_score).to_dict()
-                    self.metodo_alocacao_atual = f'FIXO ({peso_fixo_alocado*100:.0f}%) + SCORE (Restante)'
+            # === ALTERAÇÃO 2: Implementando o Fallback para 20% se o Markowitz falhar ===
+            # Isso ocorre se o Markowitz não pôde ser TENTADO (dados insuficientes)
+            if valid_selection:
+                 
+                 # Alocação 20% para cada (para 5 ativos, é 100%)
+                 if len(valid_selection) == NUM_ATIVOS_PORTFOLIO:
+                    weights = {asset: 1.0 / NUM_ATIVOS_PORTFOLIO for asset in valid_selection}
+                    self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Markowitz: 20% cada)'
                  else:
-                    # Se o score não for válido, distribui o peso do Markowitz de forma igual
-                    weights_otimizados_raw = {asset: 1.0 / len(valid_selection_for_fallback) for asset in valid_selection_for_fallback}
-                    self.metodo_alocacao_atual = f'FIXO ({peso_fixo_alocado*100:.0f}%) + IGUAL (Restante)'
+                     # Se houver dados de score, usa alocação proporcional ao score (melhor que pesos iguais se for menos de 5)
+                     scores = self.scores_combinados.loc[valid_selection, 'total_score']
+                     total_score = scores.sum()
+                     if total_score > 0:
+                        weights = (scores / total_score).to_dict()
+                        self.metodo_alocacao_atual = 'PONDERAÇÃO POR SCORE (Fallback Markowitz)'
+                     else:
+                        weights = {asset: 1.0 / len(valid_selection) for asset in valid_selection}
+                        self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
             else:
-                 self.metodo_alocacao_atual = f'FIXO ({peso_fixo_alocado*100:.0f}%) + N/A' # Nenhum ativo otimizável restante
+                 weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
+                 self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
                  
-        else:
-            # Execução da Markowitz
-            garch_vols_filtered = {asset: self.volatilidades_garch.get(asset, final_returns_df[asset].std() * np.sqrt(252)) for asset in final_returns_df.columns}
-            optimizer = OtimizadorPortfolioAvancado(final_returns_df, garch_vols=garch_vols_filtered)
-            
-            if 'CONSERVADOR' in nivel_risco or 'INTERMEDIÁRIO' in nivel_risco:
-                strategy = 'MinVolatility'; self.metodo_alocacao_atual = f'FIXO ({peso_fixo_alocado*100:.0f}%) + MIN VOL (Markowitz)'
-            else:
-                strategy = 'MaxSharpe'; self.metodo_alocacao_atual = f'FIXO ({peso_fixo_alocado*100:.0f}%) + MAX SHARPE (Markowitz)'
-                
-            weights_otimizados_raw = optimizer.otimizar(estrategia=strategy)
-            
-        # 5. Combinação e Normalização Final (Aplica o peso remanescente aos otimizados)
-        total_weight_otimizado_raw = sum(weights_otimizados_raw.values())
+            return self._formatar_alocacao(weights)
+
+        garch_vols_filtered = {asset: self.volatilidades_garch.get(asset, final_returns_df[asset].std() * np.sqrt(252)) for asset in final_returns_df.columns}
+        optimizer = OtimizadorPortfolioAvancado(final_returns_df, garch_vols=garch_vols_filtered)
         
-        # 5.1. Aplica o peso remanescente (peso_otimizar) aos pesos otimizados (weights_otimizados_raw)
-        if total_weight_otimizado_raw > 0:
-             for ativo, peso_raw in weights_otimizados_raw.items():
-                 # O peso otimizado deve ser reescalado para somar 'peso_otimizar'
-                 alocacao_final[ativo] = (peso_raw / total_weight_otimizado_raw) * peso_otimizar
-                 
-        # 5.2. Trata ativos otimizáveis que não entraram na Markowitz/Fallback (Ex: sem histórico de preço)
-        ativos_otimizaveis_com_alocacao = set(weights_otimizados_raw.keys())
-        ativos_otimizaveis_nao_alocados = [a for a in ativos_otimizaveis if a not in ativos_otimizaveis_com_alocacao]
-
-        if ativos_otimizaveis_nao_alocados:
-             log_debug(f"AVISO: {len(ativos_otimizaveis_nao_alocados)} ativos otimizáveis selecionados ficaram sem alocação (sem dados de preço). Definindo peso 0.")
-             
-             # Estes ativos não alocados recebem peso 0, pois o peso otimizado já foi distribuído
-             # para o grupo que tinha dados e consumiu o 'peso_otimizar'.
-             for ativo in ativos_otimizaveis_nao_alocados:
-                 alocacao_final[ativo] = 0.0
-                 
-        total_weight = sum(alocacao_final.values())
-        log_debug(f"Alocação final combinada. Fixa: {peso_fixo_alocado:.2f}. Otimizada: {total_weight - peso_fixo_alocado:.2f}. Total: {total_weight:.2f}")
-
-        return self._formatar_alocacao(alocacao_final)
+        if 'CONSERVADOR' in nivel_risco or 'INTERMEDIÁRIO' in nivel_risco:
+            strategy = 'MinVolatility'; self.metodo_alocacao_atual = 'MINIMIZAÇÃO DE VOLATILIDADE (Markowitz)'
+        else:
+            strategy = 'MaxSharpe'; self.metodo_alocacao_atual = 'MAXIMIZAÇÃO DE SHARPE (Markowitz)'
+            
+        log_debug(f"Otimizando Markowitz. Estratégia: {self.metodo_alocacao_atual} (Risco: {nivel_risco}).")
+            
+        weights = optimizer.otimizar(estrategia=strategy)
+        
+        # O optimizer.otimizar agora retorna pesos iguais se falhar internamente (Alteração 1)
+        if not weights or sum(weights.values()) == 0:
+            # Deve ser o fallback por pesos iguais (20% se houver 5 ativos)
+            if len(self.ativos_selecionados) == NUM_ATIVOS_PORTFOLIO:
+                 weights = {asset: 1.0 / NUM_ATIVOS_PORTFOLIO for asset in self.ativos_selecionados}
+                 self.metodo_alocacao_atual = 'PESOS IGUAIS (Markowitz Fallback: 20% cada)'
+            else:
+                 weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
+                 self.metodo_alocacao_atual += " (FALLBACK)"
+        
+        total_weight = sum(weights.values())
+        log_debug(f"Otimização Markowitz finalizada. Peso total: {total_weight:.2f}")
+        return self._formatar_alocacao(weights)
         
     def _formatar_alocacao(self, weights: dict) -> dict:
         if not weights or sum(weights.values()) == 0: 
@@ -2211,7 +2164,7 @@ def aba_introducao():
         st.write("""
         A MPT é a espinha dorsal da nossa fase de alocação de capital. Ela se baseia no princípio de que o risco de um portfólio não é a mera soma dos riscos individuais dos ativos, mas sim o risco resultante da **combinação** desses ativos, considerando a correlação entre eles.
         
-        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente** , que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
+        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente** [Image of Efficient Frontier], que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
         """)
         
         col_mpt_1, col_mpt_2 = st.columns(2)
@@ -2257,7 +2210,7 @@ def aba_introducao():
         
         st.markdown("##### 4.2. Random Forest (Floresta Aleatória)")
         st.write("""
-        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão .
+        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão [Image of Random Forest structure].
         
         **Funcionamento:** Cada árvore na floresta é treinada em uma subamostra diferente do conjunto de dados e em um subconjunto aleatório de *features*. A previsão final é determinada pela maioria dos votos das árvores (o que o chamamos de *bagging*).
         
@@ -2758,6 +2711,33 @@ def aba_construtor_portfolio():
                         last_row = df_tec.iloc[-1]
                         data_at_last_idx[ticker] = {
                             'Preço Fechamento': last_row.get('Close'),
+                            'rsi_14_raw': last_row.get('rsi_14'), # Usamos um nome distinto para o valor raw
+                            'macd_diff_raw': last_row.get('macd_diff'), # Usamos um nome distinto para o valor raw
+                            'ret': last_row.get('ret'),
+                            'vol20': last_row.get('vol20'),
+                            'ma20': last_row.get('ma20'),
+                            'z20': last_row.get('z20'),
+                            'trend': last_row.get('trend'),
+                            'volrel': last_row.get('volrel'),
+                        }
+                
+                df_last_data_clean = pd.DataFrame.from_dict(data_at_last_idx, orient='index')
+
+                # **********************************************
+                # CORREÇÃO DO KEYERROR (FINAL): Remove as colunas duplicadas antes do rename final.
+                # **********************************************
+                
+                # 1. Lista de colunas duplicadas que DEVEM ser removidas (versão não-_LATEST)
+                cols_to_remove = [col for col in LGBM_FEATURES if col in df_full_data.columns]
+                
+                # 2. Faz o JOIN com sufixo na DIREITA, mantendo a versão 'LATEST' para ser exibida.
+                data_at_last_idx = {}
+                for ticker in df_full_data.index:
+                    df_tec = builder.dados_por_ativo.get(ticker)
+                    if df_tec is not None and not df_tec.empty:
+                        last_row = df_tec.iloc[-1]
+                        data_at_last_idx[ticker] = {
+                            'Preço Fechamento': last_row.get('Close'),
                             'rsi_14_raw': last_row.get('rsi_14'), 
                             'macd_diff_raw': last_row.get('macd_diff'), 
                             'ret': last_row.get('ret'),
@@ -2777,7 +2757,7 @@ def aba_construtor_portfolio():
                 
                 # Colunas do LGBM_FEATURES (agora com _LATEST)
                 for col in LGBM_FEATURES:
-                    if col in rename_map and f'{col}_LATEST' in df_scores_display.columns:
+                    if f'{col}_LATEST' in df_scores_display.columns:
                          rename_dict_final[f'{col}_LATEST'] = rename_map[col]
                 
                 # Outras colunas
@@ -2790,7 +2770,6 @@ def aba_construtor_portfolio():
                 
                 
                 # Remove colunas antigas que se sobrepõem e não queremos exibir
-                cols_to_remove = [col for col in LGBM_FEATURES if col in df_full_data.columns]
                 for col in cols_to_remove:
                     if col in df_scores_display.columns:
                         df_scores_display.drop(columns=[col], inplace=True)
@@ -2812,6 +2791,10 @@ def aba_construtor_portfolio():
                 # *** FIM ALTERAÇÃO SOLICITADA ***
 
                 df_scores_display = df_scores_display[final_display_names].copy()
+                
+                # **********************************************
+                # FIM DA CORREÇÃO
+                # **********************************************
                 
                 # Multiplicando por 100 para percentual (apenas colunas que existem)
                 if 'ROE (%)' in df_scores_display.columns: df_scores_display['ROE (%)'] = df_scores_display['ROE (%)'] * 100
