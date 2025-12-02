@@ -2725,7 +2725,7 @@ def aba_construtor_portfolio():
                 # para que não haja sobreposição com as colunas já existentes em df_full_data (como 'ret', 'vol20', etc.)
                 # **********************************************
                 
-                # 1. Filtra as colunas que estão em df_last_data_clean e também em df_full_data
+                # 1. Colunas que se sobrepõem (e que vamos querer manter a versão 'LATEST' da tabela de scores)
                 overlap_cols = [col for col in df_last_data_clean.columns if col in df_full_data.columns]
                 
                 # 2. Renomeia as colunas de sobreposição em df_last_data_clean com o sufixo '_LATEST'
@@ -2733,12 +2733,22 @@ def aba_construtor_portfolio():
                 df_last_data_clean.rename(columns=rename_dict, inplace=True)
                 
                 # 3. Faz o join sem sufixo, pois a sobreposição foi resolvida pelo rename
+                # O df_full_data ainda contém as colunas originais (sem LATEST)
                 df_scores_display = df_full_data.join(df_last_data_clean, how='left')
 
                 # **********************************************
-                # FIM DA CORREÇÃO
+                # CORREÇÃO DO KEYERROR: REMOVE AS COLUNAS ORIGINAIS DE SOBREPOSIÇÃO
+                # O KeyError ocorre porque as colunas 'ret', 'vol20', etc. estão em df_scores_display
+                # mas não estão no rename_map, e o rename_map tenta renomear as versões _LATEST.
+                # Se as colunas originais com os nomes 'ret', 'vol20' etc. estiverem presentes no DataFrame 
+                # após o join, a função display não saberá como formatá-las.
+                # Removemos as colunas originais que se sobrepõem, forçando o uso apenas das colunas '_LATEST'
                 # **********************************************
                 
+                cols_to_drop_after_join = [col for col in overlap_cols if col in df_scores_display.columns]
+                df_scores_display.drop(columns=cols_to_drop_after_join, errors='ignore', inplace=True)
+
+
                 # Recria o rename_map para incluir os nomes corrigidos
                 rename_map.update({
                     'ret_LATEST': 'Ret. Diário',
