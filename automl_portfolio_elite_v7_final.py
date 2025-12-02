@@ -2792,6 +2792,9 @@ def aba_analise_individual():
             # Detecta Modo Estático (Sem Preço)
             static_mode = features_fund.get('static_mode', False) or (df_completo is not None and df_completo['Close'].isnull().all())
             
+            # Define has_price_data no escopo local (CORREÇÃO)
+            has_price_data = not static_mode
+
             # Verifica se o ML supervisionado foi executado com sucesso (AUC > 0.0)
             is_ml_trained = 'ML_Proba' in df_completo.columns and not static_mode and df_completo.get('ML_Confidence', 0.0).iloc[-1] > 0.0
 
