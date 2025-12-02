@@ -148,6 +148,11 @@ LGBM_FEATURES = ["ret", "vol20", "ma20", "z20", "trend", "volrel"]
 
 # =============================================================================
 # 4. LISTAS DE ATIVOS E SETORES (AJUSTADAS SOMENTE PARA IBOVESPA)
+#
+# ATUALIZAÇÃO: Inclusão da nova lista completa de ativos e setores fornecida
+# pelo usuário. Tickers da B3 (Ações, FIIs, Fiagros, ETFs) recebem .SA. BDRs
+# (final 31, 33, 34, 35) permanecem sem sufixo. Tickers não-padrão/placeholders
+# (com 'F' no início, como FRENT3) foram removidos para garantir a colega.
 # =============================================================================
 
 ATIVOS_POR_SETOR_IBOV = {
@@ -281,7 +286,25 @@ for ativos in ATIVOS_POR_SETOR_IBOV.values():
     for ativo in ativos:
         TODOS_ATIVOS_SET.add(ativo)
 
-ATIVOS_IBOVESPA = sorted(list(TODOS_ATIVOS_SET))
+ATIVOS_B3 = sorted(list(TODOS_ATIVOS_SET))
+
+# ATIVOS_IBOVESPA é um subconjunto de ATIVOS_B3. 
+# O Ibovespa padrão (IBOV) geralmente inclui ações mais líquidas.
+# Vamos definir um subconjunto IBOVESPA para propósitos de filtro, usando o conjunto original.
+ATIVOS_IBOVESPA_SUBSET = [
+    'ALOS3.SA', 'AZZA3.SA', 'B3SA3.SA', 'BBSE3.SA', 'BBDC3.SA', 'BBDC4.SA', 'BRAP4.SA', 
+    'BBAS3.SA', 'BPAC11.SA', 'CXSE3.SA', 'CMIG4.SA', 'COGN3.SA', 'CPLE6.SA', 
+    'CSAN3.SA', 'CPFE3.SA', 'CMIN3.SA', 'CVCB3.SA', 'CYRE3.SA', 'ELET3.SA', 
+    'EMBR3.SA', 'EGIE3.SA', 'FLRY3.SA', 'GGBR4.SA', 'GOAU4.SA', 'HAPV3.SA', 
+    'HYPE3.SA', 'IGTI11.SA', 'IRBR3.SA', 'ISAE4.SA', 'ITSA4.SA', 'ITUB4.SA', 
+    'KLBN11.SA', 'RENT3.SA', 'LREN3.SA', 'MGLU3.SA', 'BEEF3.SA', 'MRVE3.SA', 
+    'MULT3.SA', 'NATU3.SA', 'PCAR3.SA', 'PETR3.SA', 'PETR4.SA', 'PRIO3.SA', 
+    'PSSA3.SA', 'RADL3.SA', 'RAIZ4.SA', 'RDOR3.SA', 'SBSP3.SA', 'SANB11.SA', 
+    'CSNA3.SA', 'SLCE3.SA', 'SMFT3.SA', 'SUZB3.SA', 'TAEE11.SA', 'VIVT3.SA', 
+    'TIMS3.SA', 'TOTS3.SA', 'UGPA3.SA', 'VALE3.SA', 'VAMO3.SA', 'VBBR3.SA', 
+    'VIVA3.SA', 'WEGE3.SA', 'YDUQ3.SA'
+]
+TODOS_ATIVOS = ATIVOS_B3.copy() # Mantém o nome 'TODOS_ATIVOS' referenciando o conjunto B3 completo
 
 # Dicionário Fallback Invertido (Ticker -> Setor)
 FALLBACK_SETORES = {}
@@ -289,12 +312,10 @@ for setor, tickers in ATIVOS_POR_SETOR_IBOV.items():
     for t in tickers:
         FALLBACK_SETORES[t] = setor
 
-TODOS_ATIVOS = sorted(list(set(ATIVOS_IBOVESPA)))
-
 ATIVOS_POR_SETOR = {
-    setor: [ativo for ativo in ativos if ativo in ATIVOS_IBOVESPA] 
+    setor: [ativo for ativo in ativos if ativo in ATIVOS_B3] 
     for setor, ativos in ATIVOS_POR_SETOR_IBOV.items()
-    if any(ativo in ATIVOS_IBOVESPA for ativo in ativos)
+    if any(ativo in ATIVOS_B3 for ativo in ativos)
 }
 
 # =============================================================================
@@ -2018,7 +2039,7 @@ class AnalisadorIndividualAtivos:
         
         # Usa um subset menor de ativos (os da lista do Ibovespa) para não demorar muito
         # Mas compara com todos eles, independente de setor
-        ativos_comparacao = ATIVOS_IBOVESPA 
+        ativos_comparacao = TODOS_ATIVOS # Usa o conjunto B3 completo, pois IBOVESPA_SUBSET é para filtragem
         
         # Coleta dados de TODOS os ativos (apenas fundamentos)
         df_fund_geral = coletor.coletar_fundamentos_em_lote(ativos_comparacao)
@@ -2267,7 +2288,7 @@ def aba_introducao():
         st.write("""
         A MPT é a espinha dorsal da nossa fase de alocação de capital. Ela se baseia no princípio de que o risco de um portfólio não é a mera soma dos riscos individuais dos ativos, mas sim o risco resultante da **combinação** desses ativos, considerando a correlação entre eles.
         
-        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente** [Image of Efficient Frontier], que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
+        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente** , que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
         """)
         
         col_mpt_1, col_mpt_2 = st.columns(2)
@@ -2313,7 +2334,7 @@ def aba_introducao():
         
         st.markdown("##### 4.2. Random Forest (Floresta Aleatória)")
         st.write("""
-        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão [Image of Random Forest structure].
+        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão .
         
         **Funcionamento:** Cada árvore na floresta é treinada em uma subamostra diferente do conjunto de dados e em um subconjunto aleatório de *features*. A previsão final é determinada pela maioria dos votos das árvores (o que o chamamos de *bagging*).
         
@@ -2332,20 +2353,49 @@ def aba_introducao():
         """)
         
 def aba_selecao_ativos():
-    """Aba 2: Seleção de Ativos (Design Original Restaurado)"""
+    """Aba 2: Seleção de Ativos (Design Original Restaurado com filtro de Índice)"""
     
     st.markdown("## 🎯 Definição do Universo de Análise")
     
     st.markdown("""
     <div class="info-box">
-    <p>O universo de análise está restrito ao <b>Índice Ibovespa</b>. O sistema utiliza todos os ativos selecionados para realizar o ranqueamento multi-fatorial e otimizar a carteira.</p>
+    <p>O universo de análise serve como base para o ranqueamento multi-fatorial. Ativos fora do universo selecionado não serão considerados na otimização.</p>
     </div>
     """, unsafe_allow_html=True)
+
+    # NOVO: SELEÇÃO DO ÍNDICE BASE
+    st.markdown("### 📝 Seleção do Índice Base")
+    st.markdown("""
+    * **B3 (Geral):** Inclui todas as Ações (ON, PN, UNIT), FIIs, Fiagros, BDRs e ETFs disponíveis no nosso universo de dados.
+    * **IBOVESPA (Subconjunto):** Restringe a análise apenas aos ativos que fazem parte do Índice Bovespa (IBOV).
+    """)
     
+    indice_selecionado = st.radio(
+        "**Índice de Ativos:**",
+        [
+            "B3 (Geral)", 
+            "IBOVESPA (Subconjunto)"
+        ],
+        index=0,
+        key='index_selection_radio_v9'
+    )
+
+    # 1. DEFINE O UNIVERSO BASE COM BASE NA SELEÇÃO
+    if indice_selecionado == "IBOVESPA (Subconjunto)":
+        universo_base = ATIVOS_IBOVESPA_SUBSET
+        universo_base_nome = "IBOVESPA"
+    else:
+        universo_base = ATIVOS_B3
+        universo_base_nome = "B3"
+
+    st.markdown("---")
+    st.markdown(f"## 🔎 Universo Selecionado: **{universo_base_nome}** ({len(universo_base)} ativos)")
+    
+    # 2. SELEÇÃO DO MODO DE FILTRO
     modo_selecao = st.radio(
         "**Modo de Seleção:**",
         [
-            "📊 Índice de Referência (Todos do Ibovespa)",
+            f"📊 Índice de Referência (Todos do {universo_base_nome})",
             "🏢 Seleção Setorial",
             "✍️ Seleção Individual"
         ],
@@ -2355,16 +2405,22 @@ def aba_selecao_ativos():
     
     ativos_selecionados = []
     
-    if "Índice de Referência" in modo_selecao:
-        ativos_selecionados = TODOS_ATIVOS.copy()
-        st.success(f"✔️ **{len(ativos_selecionados)} ativos** (Ibovespa completo) definidos para análise.")
+    if f"Índice de Referência (Todos do {universo_base_nome})" in modo_selecao:
+        ativos_selecionados = universo_base.copy()
+        st.success(f"✔️ **{len(ativos_selecionados)} ativos** ({universo_base_nome} completo) definidos para análise.")
         
         with st.expander("📋 Visualizar Tickers"):
             st.write(", ".join([a.replace('.SA', '') for a in ativos_selecionados]))
     
     elif "Seleção Setorial" in modo_selecao:
         st.markdown("### 🏢 Seleção por Setor")
-        setores_disponiveis = sorted(list(ATIVOS_POR_SETOR.keys()))
+        
+        # Filtra os ativos setoriais para corresponder ao universo_base
+        ativos_por_setor_filtrado = {
+            setor: [ativo for ativo in ativos if ativo in universo_base]
+            for setor, ativos in ATIVOS_POR_SETOR.items()
+        }
+        setores_disponiveis = sorted([s for s, a in ativos_por_setor_filtrado.items() if a])
         
         # BARRA DE SELEÇÃO SETORIAL
         setores_selecionados = st.multiselect(
@@ -2375,7 +2431,8 @@ def aba_selecao_ativos():
         )
         
         if setores_selecionados:
-            for setor in setores_selecionados: ativos_selecionados.extend(ATIVOS_POR_SETOR[setor])
+            for setor in setores_selecionados: 
+                ativos_selecionados.extend(ativos_por_setor_filtrado[setor])
             ativos_selecionados = list(set(ativos_selecionados))
             
             # NOVO: Centraliza e expande as métricas abaixo do multiselect (lateralidade total)
@@ -2389,12 +2446,11 @@ def aba_selecao_ativos():
                 st.metric("Total de Ativos", len(ativos_selecionados))
             with col_metrics_s[2]:
                  # Placeholder para manter o layout lateralizado (pode ser ajustado se houver mais métricas)
-                 st.metric("Tickers/Setor (Visual)", "OK") 
+                 st.metric("Índice Base", universo_base_nome) 
             
-            with st.expander("📋 Visualizar Ativos por Setor"):
+            with st.expander(f"📋 Visualizar Ativos por Setor (Filtrados por {universo_base_nome})"):
                 for setor in setores_selecionados:
-                    # CORREÇÃO DO ERRO: ATIVOS_POR_POR_SETOR -> ATIVOS_POR_SETOR
-                    ativos_do_setor = ATIVOS_POR_SETOR.get(setor, []) 
+                    ativos_do_setor = ativos_por_setor_filtrado.get(setor, []) 
                     st.markdown(f"**{setor}** ({len(ativos_do_setor)} ativos)")
                     st.write(", ".join([a.replace('.SA', '') for a in ativos_do_setor]))
         else:
@@ -2407,13 +2463,14 @@ def aba_selecao_ativos():
         for setor, ativos in ATIVOS_POR_SETOR.items():
             for ativo in ativos: ativos_com_setor[ativo] = setor
         
-        todos_tickers_ibov = sorted(list(ativos_com_setor.keys()))
+        # Filtra a lista de tickers para exibir apenas os do universo_base
+        todos_tickers_filtrados = sorted([t for t in ativos_com_setor.keys() if t in universo_base])
         
         # BARRA DE SELEÇÃO INDIVIDUAL
-        st.markdown("#### 📝 Selecione Tickers (Ibovespa)")
+        st.markdown(f"#### 📝 Selecione Tickers ({universo_base_nome})")
         ativos_selecionados = st.multiselect(
             "Pesquise e selecione os tickers:",
-            options=todos_tickers_ibov,
+            options=todos_tickers_filtrados,
             format_func=lambda x: f"{x.replace('.SA', '')} - {ativos_com_setor.get(x, 'Desconhecido')}",
             key='ativos_individuais_multiselect_v8'
         )
@@ -2453,27 +2510,6 @@ def aba_construtor_portfolio():
     if 'profile' not in st.session_state: st.session_state.profile = {}
     if 'builder_complete' not in st.session_state: st.session_state.builder_complete = False
     
-    # *** ALTERAÇÃO SOLICITADA: Remoção do Log de Debug ***
-    # if st.session_state.builder_complete:
-    #     builder = st.session_state.builder
-    #     with st.expander("🐛 LOG DE DEBUG AVANÇADO (Entradas, Scores e Pesos)", expanded=False):
-    #         st.markdown("##### 1. Inputs do Perfil")
-    #         st.json(st.session_state.profile)
-    #         st.markdown("##### 2. Pesos Finais Utilizados na Pontuação")
-    #         st.json(builder.pesos_atuais)
-    #         st.markdown("##### 3. Ranqueamento e Scores Combinados (Head)")
-    #         debug_cols = ['total_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 'sharpe', 'retorno_anual']
-    #         debug_df = builder.scores_combinados[[c for c in debug_cols if c in builder.scores_combinados.columns]]
-    #         st.dataframe(debug_df.head(10).style.format('{:.4f}'), use_container_width=True)
-    #         st.markdown("##### 4. Resultados da Otimização Markowitz/Alocação")
-    #         st.json({
-    #             "Método": builder.metodo_alocacao_atual,
-    #             "Métricas Portfólio": builder.metricas_portfolio,
-    #             "Alocação Final": {k: f"{v['weight']:.4f}" for k, v in builder.alocacao_portfolio.items()}
-    #         })
-    #         st.markdown("##### 5. Predições ML por Ativo")
-    #         st.dataframe(pd.DataFrame(builder.predicoes_ml).T.reset_index().rename(columns={'index': 'Ticker'}), use_container_width=True)
-    # *** FIM DA ALTERAÇÃO SOLICITADA ***
 
     if not st.session_state.builder_complete:
         st.markdown('## 📋 Calibração do Perfil de Risco')
