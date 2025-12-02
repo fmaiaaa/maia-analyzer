@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Modelagem (V9.43): ML Restaurado para Estabilidade (Lógica 6.0.9) + GARCH Removido.
 
-Versão: 9.32.46 (Final Build: Debug Avançado e Estabilidade)
+Versão: 9.32.47 (Final Build: Debug no Topo da Página)
 =============================================================================
 """
 
@@ -925,7 +925,7 @@ class ColetorDadosLive(object):
                     # Treinamento final para predição
                     model_pipeline.fit(X, y)
                     
-                    # Previsão da última linha
+                    # Predição da última linha
                     last_features = df_tec[X_cols].iloc[[-1]].copy()
                     if 'Cluster' in last_features.columns:
                         last_features['Cluster'] = last_features['Cluster'].astype(str)
@@ -2021,8 +2021,28 @@ def aba_construtor_portfolio():
     if 'profile' not in st.session_state: st.session_state.profile = {}
     if 'builder_complete' not in st.session_state: st.session_state.builder_complete = False
     
-    # REMOVIDO: progress_bar_placeholder = st.empty()
-    
+    # Exibe o debug avançado no topo da aba (CORREÇÃO DE POSICIONAMENTO)
+    if st.session_state.builder_complete:
+        builder = st.session_state.builder
+        with st.expander("🐛 LOG DE DEBUG AVANÇADO (Entradas, Scores e Pesos)", expanded=False):
+            st.markdown("##### 1. Inputs do Perfil")
+            st.json(st.session_state.profile)
+            st.markdown("##### 2. Pesos Finais Utilizados na Pontuação")
+            st.json(builder.pesos_atuais)
+            st.markdown("##### 3. Ranqueamento e Scores Combinados (Head)")
+            debug_cols = ['total_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 'raw_performance_score', 'sharpe', 'retorno_anual']
+            debug_df = builder.scores_combinados[[c for c in debug_cols if c in builder.scores_combinados.columns]]
+            st.dataframe(debug_df.head(10).style.format('{:.4f}'), use_container_width=True)
+            st.markdown("##### 4. Resultados da Otimização Markowitz/Alocação")
+            st.json({
+                "Método": builder.metodo_alocacao_atual,
+                "Métricas Portfólio": builder.metricas_portfolio,
+                "Alocação Final": {k: f"{v['weight']:.4f}" for k, v in builder.alocacao_portfolio.items()}
+            })
+            st.markdown("##### 5. Predições ML por Ativo")
+            st.dataframe(pd.DataFrame(builder.predicoes_ml).T.reset_index().rename(columns={'index': 'Ticker'}), use_container_width=True)
+
+
     if not st.session_state.builder_complete:
         st.markdown('## 📋 Calibração do Perfil de Risco')
         
