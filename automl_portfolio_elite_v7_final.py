@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.6 - REVERSÃO MARKOWITZ/DINÂMICO): Pesos Dinâmicos + Otimização Markowitz + Seleção por Score e Diversificação de Cluster.
 - Modelagem (V9.6): ML Restaurado para Estabilidade (Lógica 6.0.9) + GARCH Removido da UI/Lógica de Otimização.
 
-Versão: 9.6.2 (Fix: Garantia de Alocação 20%/Markowitz Fallback)
+Versão: 9.6.3 (Fix: Correção do ValueError: columns overlap)
 =============================================================================
 """
 
@@ -278,8 +278,6 @@ def log_debug(message: str):
     if 'debug_logs' in st.session_state:
         st.session_state.debug_logs.append(f"[{timestamp}] {message}")
 
-# REMOVIDO: A função mostrar_debug_panel() foi removida conforme solicitado.
-
 def obter_template_grafico() -> dict:
     """Retorna o template padrão de cores e estilo para gráficos Plotly."""
     corporate_colors = ['#2E86C1', '#D35400', '#27AE60', '#8E44AD', '#C0392B', '#16A085', '#F39C12', '#34495E']
@@ -445,7 +443,7 @@ class AnalisadorPerfilInvestidor:
         nivel_risco = self.determinar_nivel_risco(pontuacao)
         
         # CORREÇÃO: Trata a chave ausente ou None/vazia
-        liquidez_val = respostas_risco_originais.get('liquidity')
+        liquidez_val = respostas_risco_originais.get('liquidez')
         objetivo_val = respostas_risco_originais.get('time_purpose')
 
         liquidez_key = liquidez_val[0] if isinstance(liquidez_val, str) and liquidez_val else 'C'
@@ -607,6 +605,7 @@ class ColetorDadosLive(object):
 
         # Selecionar melhor modelo por BIC
         best_row = results_df.loc[results_df["bic"].idxmin()]
+        best_model_name = best_row['model']
         best_fit = fitted_models[best_model_name]
         
         final_vol_daily = best_fit.conditional_volatility.iloc[-1] / 100
@@ -2651,16 +2650,6 @@ def aba_construtor_portfolio():
                 
                 st.plotly_chart(fig_cluster_scatter, use_container_width=True)
                 
-                st.markdown("##### Distribuição Setorial (Confirmação de Diversificação)")
-                df_sector = df_viz.groupby('sector')['Ticker'].count().reset_index()
-                df_sector.columns = ['Setor', 'Contagem']
-                fig_sector = px.bar(df_sector, x='Setor', y='Contagem', title='Contagem de Ativos por Setor')
-                
-                # NOVO: Aplicando o template para garantir o fundo transparente
-                fig_sector.update_layout(**obter_template_grafico())
-                
-                st.plotly_chart(fig_sector, use_container_width=True)
-                
             else:
                  st.warning("Dados de scores insuficientes para análise de Clusterização do Portfólio.")
         
@@ -2731,8 +2720,35 @@ def aba_construtor_portfolio():
                 
                 df_last_data_clean = pd.DataFrame.from_dict(data_at_last_idx, orient='index')
 
-                # CORREÇÃO FINAL DO VALUEERROR: O join é feito aqui.
+                # **********************************************
+                # CORREÇÃO DO VALUEERROR: Adiciona o sufixo '_RAW' às colunas de df_last_data_clean
+                # para que não haja sobreposição com as colunas já existentes em df_full_data (como 'ret', 'vol20', etc.)
+                # **********************************************
+                
+                # 1. Filtra as colunas que estão em df_last_data_clean e também em df_full_data
+                overlap_cols = [col for col in df_last_data_clean.columns if col in df_full_data.columns]
+                
+                # 2. Renomeia as colunas de sobreposição em df_last_data_clean com o sufixo '_LATEST'
+                rename_dict = {col: f"{col}_LATEST" for col in overlap_cols}
+                df_last_data_clean.rename(columns=rename_dict, inplace=True)
+                
+                # 3. Faz o join sem sufixo, pois a sobreposição foi resolvida pelo rename
                 df_scores_display = df_full_data.join(df_last_data_clean, how='left')
+
+                # **********************************************
+                # FIM DA CORREÇÃO
+                # **********************************************
+                
+                # Recria o rename_map para incluir os nomes corrigidos
+                rename_map.update({
+                    'ret_LATEST': 'Ret. Diário',
+                    'vol20_LATEST': 'Vol. 20d',
+                    'ma20_LATEST': 'Média 20d',
+                    'z20_LATEST': 'Z-Score 20d',
+                    'trend_LATEST': 'Trend 5d',
+                    'volrel_LATEST': 'Vol. Relativa',
+                    'Preço Fechamento_LATEST': 'Preço Fechamento'
+                })
                 
                 # Filtra colunas para exibição (apenas as que existem após o join)
                 cols_to_display = [col for col in rename_map.keys() if col in df_scores_display.columns]
