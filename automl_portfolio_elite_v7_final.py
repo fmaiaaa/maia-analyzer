@@ -8,9 +8,9 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Preços: Estratégia Linear com Fail-Fast (YFinance -> TvDatafeed -> Estático Global). 
 - Fundamentos: Coleta Exaustiva Pynvest (50+ indicadores).
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
-- Modelagem (V9.42): ML RESTAURADO para estabilidade + GARCH REMOVIDO + Correções Finais.
+- Modelagem (V9.43): ML Restaurado para Estabilidade (Lógica 6.0.9) + GARCH Removido.
 
-Versão: 9.32.42 (Final Build: ML Estável, Vol. Histórica, UI Simplificada)
+Versão: 9.32.43 (Final Build: ML Estável, Vol. Histórica, UI Simplificada)
 =============================================================================
 """
 
@@ -130,8 +130,12 @@ LOOKBACK_ML_DAYS_MAP = {
     'longo_prazo': 252   
 }
 
-# FEATURES DE ML (Para modelagem Pós-Score)
-ML_NUMERIC_FEATURES = ['Close', 'vol_20d', 'macd_diff', 'rsi_14', 'momentum_10d', 'sma_50d', 'sma_200d']
+# FEATURES DE ML (LÓGICA DO ARQUIVO PORTFOLIO_ANALYZER.PY - RESTAURADA)
+ML_FEATURES_P_ANALYZER = [
+    'RSI', 'MACD', 'Volatility', 'Momentum', 'SMA_50', 'SMA_200',
+    'PE_Ratio', 'PB_Ratio', 'Div_Yield', 'ROE',
+    'pe_rel_sector', 'pb_rel_sector', 'Cluster'
+]
 ML_CATEGORICAL_FEATURES = ['Cluster']
 
 
@@ -311,7 +315,7 @@ class EngenheiroFeatures:
 
 class CalculadoraTecnica:
     """
-    CLASSE REFEITA PARA USAR AS FEATURES DO MODELO ESTÁVEL
+    CLASSE REFEITA PARA USAR AS FEATURES DO MODELO ESTÁVEL (LÓGICA 6.0.9)
     """
     @staticmethod
     def enriquecer_dados_tecnicos(df_ativo: pd.DataFrame) -> pd.DataFrame:
@@ -323,7 +327,7 @@ class CalculadoraTecnica:
 
         df['returns'] = df['close'].pct_change()
         
-        # === FEATURES ADICIONAIS PARA ML/ANÁLISE TÉCNICA (RESTAURO) ===
+        # === FEATURES ADICIONAIS PARA ML/ANÁLISE TÉCNICA (RESTAURO - LÓGICA 6.0.9) ===
         
         # 1. Vol Anualizada (usada no score de performance/vol_current)
         df['vol_20d'] = df["returns"].rolling(20).std() * np.sqrt(252) 
@@ -334,7 +338,7 @@ class CalculadoraTecnica:
         df['macd'] = ema_12 - ema_26 
         df['macd_signal'] = df['macd'].ewm(span=9, adjust=False).mean() 
         df['macd_diff'] = df['macd'] - df['macd_signal'] 
-
+        
         # 3. RSI (Proxy para score técnico e display)
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
@@ -342,10 +346,10 @@ class CalculadoraTecnica:
         rs = gain / loss.replace(0, np.nan)
         df['rsi_14'] = 100 - (100 / (1 + rs)) 
 
-        # 4. Momentum (10 períodos) - Baseado no arquivo estável
+        # 4. Momentum (10 períodos)
         df['momentum_10d'] = df['close'] / df['close'].shift(10) - 1
 
-        # 5. Médias Móveis (Baseado no arquivo estável)
+        # 5. Médias Móveis
         df['sma_50d'] = df['close'].rolling(window=50).mean()
         df['sma_200d'] = df['close'].rolling(window=200).mean()
         
@@ -510,13 +514,19 @@ class ColetorDadosLive(object):
             st.error(f"Erro ao inicializar tvDatafeed: {e}")
         
         try:
+            from pynvest.scrappers.fundamentus import Fundamentus # Re-importa dentro do try/except
             self.pynvest_scrapper = Fundamentus()
             self.pynvest_ativo = True
             log_debug("Pynvest (Fundamentus) inicializado com sucesso.")
-        except Exception:
+        except ImportError:
             self.pynvest_ativo = False
             log_debug("AVISO: Pynvest falhou ao inicializar. Coleta de fundamentos desativada.")
             st.warning("Biblioteca pynvest não inicializada corretamente.")
+        except Exception:
+             self.pynvest_ativo = False
+             log_debug("AVISO: Pynvest falhou ao inicializar. Coleta de fundamentos desativada.")
+             st.warning("Biblioteca pynvest não inicializada corretamente.")
+
 
     # GARCH Logic: Removida a seleção por HQIC e a previsão GARCH para estabilidade (Correção)
     
@@ -823,8 +833,8 @@ class ColetorDadosLive(object):
         
         df_ml_meta = pd.DataFrame()
         
-        # FEATURES AGORA SÃO BASEADAS NO MODELO ESTÁVEL
-        ML_NUMERIC_FEATURES = ['Close', 'vol_20d', 'macd_diff', 'rsi_14', 'momentum_10d', 'sma_50d', 'sma_200d']
+        # FEATURES AGORA SÃO BASEADAS NO MODELO ESTÁVEL (PORTFOLIO_ANALYZER.PY)
+        ML_FEATURES = ML_FEATURES_P_ANALYZER # Mantendo a lista de features do arquivo estável
         ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
         
         is_price_data_available = 'Close' in df_tec.columns and not df_tec['Close'].isnull().all() and len(df_tec.dropna(subset=['Close'])) > 60
@@ -861,29 +871,27 @@ class ColetorDadosLive(object):
                 
                 # Targets Futuros (make_targets logic)
                 ml_lookback_days = 5 # Usando lookback fixo para a Análise Individual
-                ML_HORIZONS_IND = get_ml_horizons(ml_lookback_days)
                 
-                for d in ML_HORIZONS_IND:
-                    df[f"t_{d}"] = (df["Close"].shift(-d) > df["Close"]).astype(int)
+                # Targets Futuros (Lógica do Portfolio_Analyzer: Future_Direction)
+                df['Future_Direction'] = np.where(
+                    df['Close'].pct_change(ml_lookback_days).shift(-ml_lookback_days) > 0,
+                    1,
+                    0
+                )
 
                 # Prepara Features para o ML
-                ML_FEATURES_FINAL = ML_NUMERIC_FEATURES + [
-                    'pe_ratio', 'roe', 'vol_20d' # Exemplo de features fund/técnicos que se provaram estáveis
-                ]
-                
-                # Garante que as colunas existem
-                ML_FEATURES_FINAL = [f for f in ML_FEATURES_FINAL if f in df.columns]
+                current_features = [f for f in ML_FEATURES if f in df.columns]
 
                 # Adiciona Cluster para o preprocessor
-                X_cols = ML_FEATURES_FINAL + ['Cluster']
+                X_cols = [f for f in current_features if f not in ML_CATEGORICAL_FEATURES] + ML_CATEGORICAL_FEATURES
                 
-                df_model = df.dropna(subset=X_cols + [f"t_{ML_HORIZONS_IND[-1]}"]).copy()
+                df_model = df.dropna(subset=X_cols + ['Future_Direction']).copy()
                 
                 if len(df_model) > MIN_TRAIN_DAYS_ML:
                     
-                    # Preprocessador (Mantendo a estrutura do pipeline estável)
-                    numeric_cols = [f for f in ML_FEATURES_FINAL if f in df_model.columns]
-                    categorical_cols = ['Cluster']
+                    # Preprocessador (Mantendo a estrutura do pipeline estável - Mapeando colunas)
+                    numeric_cols = [f for f in X_cols if df_model[f].dtype in [np.float64, np.int64] and f not in ML_CATEGORICAL_FEATURES]
+                    categorical_cols = [f for f in X_cols if f in ML_CATEGORICAL_FEATURES]
                     
                     preprocessor = ColumnTransformer(
                         transformers=[
@@ -899,11 +907,12 @@ class ColetorDadosLive(object):
                         ('classifier', CLASSIFIER(**MODEL_PARAMS))
                     ])
 
-                    X = df_model[X_cols].iloc[:-ML_HORIZONS_IND[-1]]
-                    y = df_model[f"t_{ML_HORIZONS_IND[-1]}"].iloc[:-ML_HORIZONS_IND[-1]]
+                    X = df_model[X_cols].iloc[:-ml_lookback_days]
+                    y = df_model['Future_Direction'].iloc[:-ml_lookback_days]
                     
                     # Ajusta X para o scaler: Cluster precisa ser string
-                    X['Cluster'] = X['Cluster'].astype(str)
+                    if 'Cluster' in X.columns:
+                        X['Cluster'] = X['Cluster'].astype(str)
 
                     # Split treino/teste (simulado por TimeSeriesSplit)
                     tscv = TimeSeriesSplit(n_splits=5)
@@ -917,16 +926,30 @@ class ColetorDadosLive(object):
                     
                     # Previsão da última linha
                     last_features = df_tec[X_cols].iloc[[-1]].copy()
-                    last_features['Cluster'] = last_features['Cluster'].astype(str)
+                    if 'Cluster' in last_features.columns:
+                        last_features['Cluster'] = last_features['Cluster'].astype(str)
 
                     proba = model_pipeline.predict_proba(last_features)[0][1]
                     ensemble_proba = proba
                     
-                    df_tec['ML_Proba'] = ensemble_proba
-                    df_tec['ML_Confidence'] = conf_final
+                    df_tec.loc[df_tec.index[-1], 'ML_Proba'] = ensemble_proba
+                    df_tec.loc[df_tec.index[-1], 'ML_Confidence'] = conf_final
                     is_ml_trained = True
                     log_debug(f"ML Individual: Sucesso {MODEL_NAME}. Prob Média: {ensemble_proba:.2f}, AUC Teste Média: {conf_final:.2f}.")
 
+                    # Calculando Feature Importance para o display
+                    try:
+                        if hasattr(model_pipeline['classifier'], 'feature_importances_'):
+                            importances = model_pipeline['classifier'].feature_importances_
+                        elif hasattr(model_pipeline['classifier'], 'coef_'):
+                            importances = np.abs(model_pipeline['classifier'].coef_[0])
+                        
+                        # Mapeando os nomes das colunas de volta
+                        feature_names = model_pipeline['preprocessor'].get_feature_names_out(X.columns)
+                        df_ml_meta = pd.DataFrame({'feature': feature_names, 'importance': importances}).sort_values('importance', ascending=False)
+                    except:
+                        df_ml_meta = pd.DataFrame({'feature': current_features, 'importance': [1/len(current_features)]*len(current_features)})
+                    
                 else:
                     log_debug(f"ML Individual: Dados insuficientes ({len(df_model)}). Pulando modelo supervisionado.")
                     
@@ -984,8 +1007,8 @@ class ColetorDadosLive(object):
         log_debug(f"Iniciando Pipeline de Treinamento ML/Clusterização (Modo: {ml_mode}).")
         
         # --- DEFINIÇÃO DE FEATURES (RESTAURO) ---
-        ML_NUMERIC_FEATURES = ['Close', 'vol_20d', 'macd_diff', 'rsi_14', 'momentum_10d', 'sma_50d', 'sma_200d']
-        X_cols = ML_NUMERIC_FEATURES + ['pe_ratio', 'pb_ratio', 'div_yield', 'roe'] + ['Cluster']
+        ML_FEATURES = ML_FEATURES_P_ANALYZER
+        ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
         
         # --- Seleção de Classificador (Restaurado e Simplificado) ---
         if ml_mode == 'fast':
@@ -1048,24 +1071,29 @@ class ColetorDadosLive(object):
                     for f_col in ALL_FUND_FEATURES: df[f_col] = np.nan
                     df['Cluster'] = 0
 
-                # 2. Targets Futuros (usando apenas o Close)
-                if 'Close' in df.columns and len(df) > ML_HORIZONS_CONST[-1]:
-                    for d in ML_HORIZONS_CONST:
-                        df[f"t_{d}"] = (df["Close"].shift(-d) > df["Close"]).astype(int)
-                
+                # 2. Targets Futuros (usando a lógica do Portfolio_Analyzer)
+                # Targets Futuros (Lógica do Portfolio_Analyzer: Future_Direction)
+                df['Future_Direction'] = np.where(
+                    df['Close'].pct_change(ml_lookback_days).shift(-ml_lookback_days) > 0,
+                    1,
+                    0
+                )
+
                 # 3. Prepara Features: Combinação de features técnicos e fundamentais
-                current_features = [f for f in X_cols if f in df.columns]
+                current_features = [f for f in ML_FEATURES if f in df.columns]
+
+                # Adiciona Cluster para o preprocessor
+                X_cols = [f for f in current_features if f not in ML_CATEGORICAL_FEATURES] + ML_CATEGORICAL_FEATURES
                 
-                # Removendo features com muitos NaNs para evitar erro de pipeline
-                df_model = df.dropna(subset=[f for f in current_features if f != 'Cluster'] + [f"t_{ML_HORIZONS_CONST[-1]}"]).copy()
+                df_model = df.dropna(subset=X_cols + ['Future_Direction']).copy()
                 
                 # Apenas segue se houver dados suficientes após limpeza
                 if len(df_model) < MIN_TRAIN_DAYS_ML: 
                     raise ValueError(f"Apenas {len(df_model)} pontos válidos para treino (Requerido: {MIN_TRAIN_DAYS_ML}).")
                 
                 # 4. Configura Pipeline de ML
-                numeric_cols = [f for f in current_features if f not in ML_CATEGORICAL_FEATURES]
-                categorical_cols = [f for f in current_features if f in ML_CATEGORICAL_FEATURES]
+                numeric_cols = [f for f in X_cols if df_model[f].dtype in [np.float64, np.int64] and f not in ML_CATEGORICAL_FEATURES]
+                categorical_cols = [f for f in X_cols if f in ML_CATEGORICAL_FEATURES]
 
                 preprocessor = ColumnTransformer(
                     transformers=[
@@ -1080,49 +1108,37 @@ class ColetorDadosLive(object):
                     ('classifier', CLASSIFIER(**MODEL_PARAMS))
                 ])
 
-                X_full = df_model[current_features]
-                split_idx = int(len(X_full) * 0.7)
-                X_train = X_full.iloc[:split_idx]
+                X_full = df_model[X_cols].iloc[:-ml_lookback_days]
+                y = df_model['Future_Direction'].iloc[:-ml_lookback_days]
                 
                 probabilities = []
                 auc_scores = []
                 
-                for tgt_d in ML_HORIZONS_CONST:
-                    tgt = f"t_{tgt_d}"
-                    y = df_model[tgt].values
-                    y_train = y[:split_idx]
-                    X_test = X_full.iloc[split_idx:]
-                    y_test = y[split_idx:] 
-                    
-                    if len(np.unique(y_train)) < 2: continue
-                             
-                    # Ajusta X para o scaler/encoder: Cluster precisa ser string
-                    X_train['Cluster'] = X_train['Cluster'].astype(str)
-                    X_test['Cluster'] = X_test['Cluster'].astype(str)
-                    
-                    # Treinamento
-                    model_pipeline.fit(X_train, y_train)
-                    
-                    # Predição
-                    last_features = X_full.iloc[[-1]].copy()
-                    last_features['Cluster'] = last_features['Cluster'].astype(str)
-                    
-                    prob_now = model_pipeline.predict_proba(last_features)[:, 1][0]
-                    probabilities.append(prob_now)
-
-                    # AUC
-                    if len(y_test) > 0 and len(np.unique(y_test)) >= 2:
-                         prob_test = model_pipeline.predict_proba(X_test)[:, 1]
-                         auc_scores.append(roc_auc_score(y_test, prob_test))
-                             
-                ensemble_proba = np.mean(probabilities) if probabilities else 0.5
-                conf_final = np.mean(auc_scores) if auc_scores else 0.5
+                # Para maior estabilidade, treinamos apenas no último horizonte (Future_Direction)
+                # que já foi calculado para o lookback do perfil.
                 
-                result_for_ativo = {
-                    'predicted_proba_up': ensemble_proba, 
-                    'auc_roc_score': conf_final, 
-                    'model_name': MODEL_NAME
-                }
+                # Ajusta X para o scaler/encoder: Cluster precisa ser string
+                if 'Cluster' in X_full.columns:
+                    X_full['Cluster'] = X_full['Cluster'].astype(str)
+
+                # Split treino/teste (simulado por TimeSeriesSplit)
+                tscv = TimeSeriesSplit(n_splits=5)
+                
+                # Treinamento e Cross-Validation
+                auc_scores = cross_val_score(model_pipeline, X_full, y, cv=tscv, scoring='roc_auc', n_jobs=-1)
+                conf_final = auc_scores.mean()
+
+                # Treinamento final para predição
+                model_pipeline.fit(X_full, y)
+                
+                # Predição da última linha (usando os últimos dados conhecidos - lookback dias antes do final)
+                last_features = df_model[X_cols].iloc[[-1]].copy()
+                if 'Cluster' in last_features.columns:
+                    last_features['Cluster'] = last_features['Cluster'].astype(str)
+                
+                prob_now = model_pipeline.predict_proba(last_features)[:, 1][0]
+                
+                ensemble_proba = prob_now
                 
                 # Armazenamento dos resultados na última linha do DF
                 self.dados_por_ativo[ativo].loc[self.dados_por_ativo[ativo].index[-1], 'ML_Proba'] = ensemble_proba
@@ -1246,7 +1262,7 @@ class ColetorDadosLive(object):
         scores['total_score'] = scores['fundamental_score'] + scores['technical_score'] + scores['ml_score_weighted']
         
         # Junta os scores com todos os dados fundamentais e métricas técnicas
-        self.scores_combinados = scores.join(combined).sort_values('total_score', ascending=False)
+        self.combined_scores = scores.join(combined).sort_values('total_score', ascending=False)
         
         log_debug(f"Calculando Scores Ponderados. Horizonte: {horizonte_tempo}. Pesos Finais: Fund={w_fund_final:.2f}, Tec={w_tech_final:.2f}, ML={W_ML_GLOBAL_BASE:.2f}. (Performance Removida).")
 
