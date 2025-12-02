@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.6 - REVERSÃO MARKOWITZ/DINÂMICO): Pesos Dinâmicos + Otimização Markowitz + Seleção por Score e Diversificação de Cluster.
 - Modelagem (V9.6): ML Restaurado para Estabilidade (Lógica 6.0.9) + GARCH Removido da UI/Lógica de Otimização.
 
-Versão: 9.6.1 (Fix: Erros de Index/Markowitz Fallback)
+Versão: 9.6.2 (Fix: Garantia de Alocação 20%/Markowitz Fallback)
 =============================================================================
 """
 
@@ -775,15 +775,31 @@ class ColetorDadosLive(object):
                 if not tem_dados:
                     consecutive_failures += 1
                     log_debug(f"Coleta de preços para {simbolo} falhou. Falhas consecutivas: {consecutive_failures}")
+                    
+                    # === ALTERAÇÃO: Modo Fundamentalista como Fallback para o ativo único ===
+                    # Se falhou, mas não atingiu o limite GLOBAL, processa em modo estático localmente
                     if consecutive_failures >= FAILURE_THRESHOLD:
                         global_static_mode = True
                         log_debug(f"ATIVANDO MODO ESTÁTICO GLOBAL (Limite de {FAILURE_THRESHOLD} falhas atingido).")
                         st.warning(f"⚠️ Falha na coleta de preços para {consecutive_failures} ativos consecutivos. Ativando MODO FUNDAMENTALISTA GLOBAL (sem histórico de preços) para o restante da lista.")
+                    
+                    # Continua em modo estático local para tentar obter o Score Fundamentalista
+                    if not global_static_mode or consecutive_failures < FAILURE_THRESHOLD:
+                        usando_fallback_estatico = True
+                        log_debug(f"Ativo {simbolo}: Processando em MODO ESTÁTICO (Sem preços históricos).")
+                        df_tecnicos = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'rsi_14', 'macd', 'vol_20d'])
+                        df_tecnicos.loc[pd.Timestamp.today()] = [np.nan] * len(df_tecnicos.columns)
+                    
+                    # Se o modo estático global foi ativado, processa o restante em modo estático
+                    if global_static_mode:
+                        usando_fallback_estatico = True
+                        df_tecnicos = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'rsi_14', 'macd', 'vol_20d'])
+                        df_tecnicos.loc[pd.Timestamp.today()] = [np.nan] * len(df_tecnicos.columns)
+                
                 else:
                     consecutive_failures = 0 
             
-            if global_static_mode or not tem_dados:
-                usando_fallback_estatico = True
+            if usando_fallback_estatico or not tem_dados: # Check after processing
                 log_debug(f"Ativo {simbolo}: Processando em MODO ESTÁTICO (Sem preços históricos).")
                 df_tecnicos = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'rsi_14', 'macd', 'vol_20d'])
                 df_tecnicos.loc[pd.Timestamp.today()] = [np.nan] * len(df_tecnicos.columns)
@@ -1595,21 +1611,23 @@ class ConstrutorPortfolioAutoML:
             valid_selection = [a for a in self.ativos_selecionados if a in self.scores_combinados.index]
             
             # === ALTERAÇÃO 2: Implementando o Fallback para 20% se o Markowitz falhar ===
-            # (Já tratamos a lógica interna do optimizer, aqui é o fallback para Markowitz ignorada)
+            # Isso ocorre se o Markowitz não pôde ser TENTADO (dados insuficientes)
             if valid_selection:
-                 scores = self.scores_combinados.loc[valid_selection, 'total_score']
-                 total_score = scores.sum()
                  
                  # Alocação 20% para cada (para 5 ativos, é 100%)
                  if len(valid_selection) == NUM_ATIVOS_PORTFOLIO:
                     weights = {asset: 1.0 / NUM_ATIVOS_PORTFOLIO for asset in valid_selection}
                     self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Markowitz: 20% cada)'
-                 elif total_score > 0:
-                     weights = (scores / total_score).to_dict()
-                     self.metodo_alocacao_atual = 'PONDERAÇÃO POR SCORE (Fallback Markowitz)'
                  else:
-                     weights = {asset: 1.0 / len(valid_selection) for asset in valid_selection}
-                     self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
+                     # Se houver dados de score, usa alocação proporcional ao score (melhor que pesos iguais se for menos de 5)
+                     scores = self.scores_combinados.loc[valid_selection, 'total_score']
+                     total_score = scores.sum()
+                     if total_score > 0:
+                        weights = (scores / total_score).to_dict()
+                        self.metodo_alocacao_atual = 'PONDERAÇÃO POR SCORE (Fallback Markowitz)'
+                     else:
+                        weights = {asset: 1.0 / len(valid_selection) for asset in valid_selection}
+                        self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
             else:
                  weights = {asset: 1.0 / len(self.ativos_selecionados) for asset in self.ativos_selecionados}
                  self.metodo_alocacao_atual = 'PESOS IGUAIS (Fallback Total)'
