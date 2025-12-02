@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.4): Pesos Dinâmicos + Seleção por Clusterização.
 - Modelagem (V9.43): ML Restaurado para Estabilidade (Lógica 6.0.9) + GARCH Removido.
 
-Versão: 9.32.45 (Final Build: Correção de Escopo, ML Estável, UI Aprimorada)
+Versão: 9.32.46 (Final Build: Debug Avançado e Estabilidade)
 =============================================================================
 """
 
@@ -881,7 +881,7 @@ class ColetorDadosLive(object):
                 )
 
                 # Prepara Features para o ML
-                current_features = [f for f in current_ml_features if f in df.columns]
+                current_features = [f for f in ML_FEATURES if f in df.columns]
 
                 # Adiciona Cluster para o preprocessor
                 X_cols = [f for f in current_features if f not in ML_CATEGORICAL_FEATURES] + ML_CATEGORICAL_FEATURES
@@ -925,12 +925,12 @@ class ColetorDadosLive(object):
                     # Treinamento final para predição
                     model_pipeline.fit(X, y)
                     
-                    # Predição da última linha
+                    # Previsão da última linha
                     last_features = df_tec[X_cols].iloc[[-1]].copy()
                     if 'Cluster' in last_features.columns:
                         last_features['Cluster'] = last_features['Cluster'].astype(str)
 
-                    proba = model_pipeline.predict_proba(last_features)[0][1]
+                    proba = model_pipeline.predict_proba(last_features)[:, 1][0]
                     ensemble_proba = proba
                     
                     df_tec.loc[df_tec.index[-1], 'ML_Proba'] = ensemble_proba
@@ -1008,7 +1008,7 @@ class ColetorDadosLive(object):
         log_debug(f"Iniciando Pipeline de Treinamento ML/Clusterização (Modo: {ml_mode}).")
         
         # --- DEFINIÇÃO DE FEATURES (RESTAURO) ---
-        ML_FEATURES = ML_FEATURES_P_ANALYZER
+        ML_FEATURES = ML_FEATURES # Mantendo a lista de features do arquivo estável
         ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
         
         # --- Seleção de Classificador (Restaurado e Simplificado) ---
@@ -1559,7 +1559,10 @@ class ColetorDadosLive(object):
                 st.markdown("##### 2. Pesos Finais Utilizados na Pontuação")
                 st.json(self.pesos_atuais)
                 st.markdown("##### 3. Ranqueamento e Scores Combinados (Head)")
-                st.dataframe(self.scores_combinados.head(10), use_container_width=True)
+                # Novo: Exibir colunas relevantes para o debug (scores crus e ml_weighted)
+                debug_cols = ['total_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 'raw_performance_score', 'sharpe', 'retorno_anual']
+                debug_df = self.scores_combinados[[c for c in debug_cols if c in self.scores_combinados.columns]]
+                st.dataframe(debug_df.head(10).style.format('{:.4f}'), use_container_width=True)
                 st.markdown("##### 4. Resultados da Otimização Markowitz/Alocação")
                 st.json({
                     "Método": self.metodo_alocacao_atual,
@@ -1630,7 +1633,7 @@ class AnalisadorIndividualAtivos:
         
         # Usar 3 componentes para gráfico 3D
         n_components = min(3, dados_normalizados.shape[1])
-        pca = PCA(n_components=n_components)
+        pca = PCA(n_components=n_comp)
         componentes_pca = pca.fit_transform(dados_normalizados)
         
         # --- LÓGICA DE CLUSTERIZAÇÃO E ANOMALIA (UNSUPERVISED FALLBACK) ---
@@ -2120,7 +2123,7 @@ def aba_construtor_portfolio():
                     'reaction': MAP_REACTION.get(p511_reaction_desc, 'B: Manteria e reavaliaria a tese'),
                     'level': MAP_CONHECIMENTO.get(p_level_desc, 'B: Intermediário (Conhecimento básico sobre mercados e ativos)'),
                     'time_purpose': p211_time_desc, 
-                    'liquidity': p311_liquid_desc,
+                    'liquidez': p311_liquid_desc,
                 }
                 
                 analyzer = AnalisadorPerfilInvestidor()
