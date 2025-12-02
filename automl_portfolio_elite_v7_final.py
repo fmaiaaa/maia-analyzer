@@ -803,6 +803,13 @@ class ColetorDadosLive(object):
                 log_debug(f"Ativo {simbolo}: Processando em MODO ESTÁTICO (Sem preços históricos).")
                 df_tecnicos = pd.DataFrame(columns=['Open', 'High', 'Low', 'Close', 'Volume', 'returns', 'rsi_14', 'macd', 'vol_20d'])
                 df_tecnicos.loc[pd.Timestamp.today()] = [np.nan] * len(df_tecnicos.columns)
+                
+                # *** ALTERAÇÃO 1.1: Se o ativo não tem dados de preço, não adicioná-lo ao pipeline ***
+                # Ele deve ser pulado, exceto se a lista de ativos for muito pequena.
+                if check_min_ativos:
+                    log_debug(f"Ativo {simbolo} PULADO: Coleta de preço falhou. Ativos sem histórico de preço não serão usados no construtor.")
+                    continue
+                # *** FIM ALTERAÇÃO 1.1 ***
             else:
                 log_debug(f"Ativo {simbolo}: Enriquecendo dados técnicos...")
                 rename_map = {
@@ -937,11 +944,16 @@ class ColetorDadosLive(object):
         # Define o modo GARCH para a coleta individual (usamos o modo fast como padrão)
         st.session_state['garch_mode'] = st.session_state.get('individual_garch_mode', 'GARCH(1,1)')
         
+        # NOTE: Passamos check_min_ativos=False, mas se falhar a coleta, o ativo não estará em self.dados_por_ativo
         self.coletar_e_processar_dados([ativo_selecionado], check_min_ativos=False)
         
+        # *** ALTERAÇÃO 1.2: Verifica se o ativo existe em dados_por_ativo, se não, falha imediatamente ***
         if ativo_selecionado not in self.dados_por_ativo:
-            log_debug(f"ERRO: Dados não encontrados após coleta para {ativo_selecionado}.")
+            log_debug(f"ERRO: Ativo {ativo_selecionado} pulado na coleta (sem dados históricos de preço/fundamental).")
+            # Retorna None para que a UI saiba que falhou
             return None, None, None
+        # *** FIM ALTERAÇÃO 1.2 ***
+
 
         df_tec = self.dados_por_ativo[ativo_selecionado]
         fund_row = {}
@@ -974,6 +986,8 @@ class ColetorDadosLive(object):
 
         # CORREÇÃO CRÍTICA: Inicializa is_ml_trained antes do bloco try/except
         is_ml_trained = False
+        ensemble_proba = 0.5
+        conf_final = 0.0
         
         if is_price_data_available and CLASSIFIER is not None:
             log_debug(f"Análise Individual ML: Iniciando modelo {MODEL_NAME} para {ativo_selecionado}.")
@@ -1057,7 +1071,7 @@ class ColetorDadosLive(object):
                     ensemble_proba = np.mean(probabilities) if probabilities else 0.5
                     
                     # Confiança final = Média dos AUCs de teste
-                    conf_final = np.mean(auc_scores) if auc_scores else 0.5
+                    conf_final = np.mean(auc_scores) if auc_scores else 0.0
                     
                     log_debug(f"ML Individual: Sucesso {MODEL_NAME}. Prob Média: {ensemble_proba:.2f}, AUC Teste Média: {conf_final:.2f}.")
 
@@ -1098,6 +1112,10 @@ class ColetorDadosLive(object):
             if 'ML_Proba' in df_tec.columns:
                 df_tec.drop(columns=['ML_Proba', 'ML_Confidence'], errors='ignore', inplace=True)
             
+            # Garante que a probabilidade e confiança são neutras/zero
+            ensemble_proba = 0.5
+            conf_final = 0.0
+            
             # Gera uma tabela de importância de fallback se a original não foi gerada
             if df_ml_meta.empty:
                 df_ml_meta = pd.DataFrame({
@@ -1105,8 +1123,20 @@ class ColetorDadosLive(object):
                     'importance': [0.8, 0.2]
                 })
             
+        # *** ALTERAÇÃO 2.1: Incluir score ML ponderado na análise individual para consistência ***
+        # A pontuação na análise individual não é usada no construtor, mas é útil para debug/exibição
+        
+        # Fator Confiança AUC
+        # ml_weight_factor = (ml_conf - 0.5).clip(lower=0) * 2 
+        # Score ML Ponderado = Probabilidade * Confiança (AUC). Se AUC for 0.5, o score é Prob / 2.
+        # Se AUC for 0.0, o score é 0.0. (Usando a AUC real)
+        ml_score_weighted_display = ensemble_proba * conf_final 
+        
+        # Adiciona o score ponderado (final) ao dataframe técnico para exibição/debug
+        df_tec['ML_Score_Weighted'] = ml_score_weighted_display
+        # *** FIM ALTERAÇÃO 2.1 ***
+        
         return df_tec, fund_row, df_ml_meta
-        return None, None, None
 
 # =============================================================================
 # 11. CLASSE PRINCIPAL: CONSTRUTOR DE PORTFÓLIO AUTOML
@@ -1145,13 +1175,19 @@ class ConstrutorPortfolioAutoML:
         if not simbolos_filtrados: return False
         
         # Inicia a coleta
-        if not coletor.coletar_e_processar_dados(simbolos_filtrados):
-            # Mesmo se falhar, preenche com o que foi coletado (pode ser útil para debug ou fallback)
+        # O coletor agora filtra automaticamente ativos sem preço, se check_min_ativos=True
+        if not coletor.coletar_e_processar_dados(simbolos_filtrados, check_min_ativos=True):
+            # Se o check_min_ativos falhar, pode ser por insuficiência de ativos ou falha geral
             self.dados_por_ativo = coletor.dados_por_ativo
             self.dados_fundamentalistas = coletor.dados_fundamentalistas
             self.ativos_sucesso = coletor.ativos_sucesso
             self.metricas_performance = coletor.metricas_performance
             self.volatilidades_garch = coletor.volatilidades_garch_raw
+            
+            # Se a coleta falhou, mas ativos_sucesso tem dados, retornamos True para continuar o pipeline
+            if self.ativos_sucesso:
+                 log_debug("AVISO: Coleta parcial. Prosseguindo com ranqueamento.")
+                 return True
             return False
             
         self.dados_por_ativo = coletor.dados_por_ativo
@@ -1339,12 +1375,18 @@ class ConstrutorPortfolioAutoML:
                 ensemble_proba = np.mean(probabilities) if probabilities else 0.5
                 
                 # Confiança final = Média dos AUCs de teste
-                conf_final = np.mean(auc_scores) if auc_scores else 0.5
+                conf_final = np.mean(auc_scores) if auc_scores else 0.0
                 
+                # *** ALTERAÇÃO 2.2: Cálculo do Score ML Ponderado (Prob * AUC) ***
+                # Score ML Ponderado = Probabilidade * Confiança (AUC). 
+                ml_score_weighted = ensemble_proba * conf_final 
+                # *** FIM ALTERAÇÃO 2.2 ***
+
                 result_for_ativo = {
                     'predicted_proba_up': ensemble_proba, 
                     'auc_roc_score': conf_final, 
-                    'model_name': MODEL_NAME
+                    'model_name': MODEL_NAME,
+                    'ml_score_weighted': ml_score_weighted # Adicionado para uso posterior
                 }
                 
                 # Importância das features (Usamos o último modelo treinado como proxy)
@@ -1364,22 +1406,35 @@ class ConstrutorPortfolioAutoML:
                 # Os dados ML (Proba/Confidence) são injetados na última linha do DF técnico local (para debug)
                 self.dados_por_ativo[ativo].loc[last_idx, 'ML_Proba'] = ensemble_proba
                 self.dados_por_ativo[ativo].loc[last_idx, 'ML_Confidence'] = conf_final
-                log_debug(f"ML (Supervisionado): Ativo {ativo} sucesso. Prob: {ensemble_proba:.2f}, AUC: {conf_final:.2f}.")
+                self.dados_por_ativo[ativo].loc[last_idx, 'ML_Score_Weighted'] = ml_score_weighted # Adicionado
+                
+                log_debug(f"ML (Supervisionado): Ativo {ativo} sucesso. Prob: {ensemble_proba:.2f}, AUC: {conf_final:.2f}, Score Ponderado: {ml_score_weighted:.3f}.")
                 total_ml_success += 1
 
             except Exception as e:
                 # O erro de Valor (dados insuficientes) é tratado aqui, resultando em ML neutro/falho
                 log_debug(f"ML (Fallback): Ativo {ativo} falhou no treinamento ({str(e)[:20]}). Aplicando Score Neutro.")
                 
+                # Garante que a probabilidade, confiança e score ponderado são neutros/zero
+                ensemble_proba = 0.5
+                conf_final = 0.0
+                ml_score_weighted = 0.0
+                
                 if ativo in self.dados_por_ativo and not self.dados_por_ativo[ativo].empty:
                     df_local = self.dados_por_ativo[ativo]
                     # Adiciona valores neutros para manter a consistência do DF técnico (para debug),
                     # mas o dicionário `result_for_ativo` define a pontuação real (AUC=0.0)
-                    df_local.loc[df_local.index[-1], 'ML_Proba'] = 0.5
-                    df_local.loc[df_local.index[-1], 'ML_Confidence'] = 0.0
+                    df_local.loc[df_local.index[-1], 'ML_Proba'] = ensemble_proba
+                    df_local.loc[df_local.index[-1], 'ML_Confidence'] = conf_final
+                    df_local.loc[df_local.index[-1], 'ML_Score_Weighted'] = ml_score_weighted # Adicionado
                 
-                # O resultado no dictionary permanece neutro (0.5 prob, 0.0 AUC) para que o score ML ponderado seja 0
-                result_for_ativo = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': 'Training Failed'}
+                # O resultado no dictionary permanece neutro (0.5 prob, 0.0 AUC, 0.0 Score Ponderado)
+                result_for_ativo = {
+                    'predicted_proba_up': ensemble_proba, 
+                    'auc_roc_score': conf_final, 
+                    'model_name': 'Training Failed',
+                    'ml_score_weighted': ml_score_weighted # Adicionado
+                }
                 
             all_ml_results[ativo] = result_for_ativo
 
@@ -1389,6 +1444,7 @@ class ConstrutorPortfolioAutoML:
             log_debug("AVISO: Falha total no ML supervisionado. Score ML será desabilitado/neutro.")
             for ativo in ativos_com_dados:
                 all_ml_results[ativo]['auc_roc_score'] = 0.0
+                all_ml_results[ativo]['ml_score_weighted'] = 0.0 # Garante score ponderado = 0
                 all_ml_results[ativo]['model_name'] = 'Total Fallback'
         
         self.predicoes_ml = all_ml_results
@@ -1511,25 +1567,32 @@ class ConstrutorPortfolioAutoML:
         
         s_tech_base = (s_rsi * 0.3 + s_macd * 0.4 + s_vol * 0.3)
         
-        # 4. Score ML (Base 100)
-        ml_probs = pd.Series({s: self.predicoes_ml.get(s, {}).get('predicted_proba_up', 0.5) for s in combined.index})
-        ml_conf = pd.Series({s: self.predicoes_ml.get(s, {}).get('auc_roc_score', 0.5) for s in combined.index})
-        s_prob = EngenheiroFeatures._normalize_score(ml_probs, True)
+        # 4. Score ML Ponderado (Base 100)
+        # O score ponderado (ml_score_weighted) já foi calculado em treinar_modelos_ensemble (Alteração 2.2)
+        ml_scores_weighted = pd.Series({s: self.predicoes_ml.get(s, {}).get('ml_score_weighted', 0.0) for s in combined.index})
         
-        # Fator Confiança AUC
-        ml_weight_factor = (ml_conf - 0.5).clip(lower=0) * 2 
+        # Note: Não é necessário normalizar ml_scores_weighted, pois ele já é o resultado final 
+        # (Probabilidade * AUC) e representa a contribuição direta do ML, variando de 0 a 1.
+        # Precisamos apenas escalá-lo para a base 100 do Scorecard se quisermos que ele se comporte
+        # como os outros scores normalizados de 0-100, mas a ponderação W_ML_GLOBAL_BASE (0.20)
+        # é aplicada no final. Usaremos o valor RAW Ponderado na alocação.
+        
+        # Para que o ranqueamento seja justo, vamos normalizar o ml_scores_weighted (0-1) para 0-100 antes da ponderação pelo W_ML_GLOBAL_BASE
+        s_ml_base = EngenheiroFeatures._normalize_score(ml_scores_weighted, True) # Normaliza o Score Ponderado (Prob * AUC)
 
         # Ponderação dos Scores com pesos dinâmicos (reversão)
         scores['fundamental_score'] = s_fund_base * w_fund_final
         scores['technical_score'] = s_tech_base * w_tech_final
         scores['performance_score_weighted'] = scores['performance_score'] * W_PERF_GLOBAL_ADJ
-        scores['ml_score_weighted'] = s_prob * W_ML_GLOBAL_BASE * ml_weight_factor.fillna(0)
+        # *** ALTERAÇÃO 2.3: Score ML ponderado final é a base ML normalizada (0-100) * peso ML (0.20) ***
+        scores['ml_score_weighted'] = s_ml_base * W_ML_GLOBAL_BASE
         
         # Score Total (Soma dos 4 Scores Ponderados)
         scores['total_score'] = scores['fundamental_score'] + scores['technical_score'] + scores['performance_score_weighted'] + scores['ml_score_weighted']
         
         # Adiciona o Score ML não ponderado ao combined para análise de cluster
-        scores['raw_ml_score'] = s_prob # Score ML normalizado antes da ponderação pelo AUC
+        ml_probs = pd.Series({s: self.predicoes_ml.get(s, {}).get('predicted_proba_up', 0.5) for s in combined.index})
+        scores['raw_ml_score'] = EngenheiroFeatures._normalize_score(ml_probs, True) # Score ML normalizado antes da ponderação pelo AUC
         
         # Junta os scores com todos os dados fundamentais e métricas técnicas
         self.scores_combinados = scores.join(combined).sort_values('total_score', ascending=False)
@@ -1597,12 +1660,14 @@ class ConstrutorPortfolioAutoML:
             if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s] and not self.dados_por_ativo[s]['returns'].dropna().empty:
                 available_assets_returns[s] = self.dados_por_ativo[s]['returns']
             else:
+                # Se o ativo está na seleção final, mas não tem dados de retorno (o que não deve acontecer 
+                # se Alteração 1.1 for bem sucedida), ele deve ser ignorado no Markowitz.
                 ativos_sem_dados.append(s)
         
         final_returns_df = pd.DataFrame(available_assets_returns).dropna()
         
         # Verifica se há dados suficientes para Markowitz
-        if final_returns_df.shape[0] < 50 or len(ativos_sem_dados) > 0:
+        if final_returns_df.shape[0] < 50 or len(final_returns_df.columns) < 2:
             log_debug("Otimização de Markowitz ignorada. Recorrendo à PONDERAÇÃO POR SCORE (Modo Estático/Poucos Dados).")
 
             if len(ativos_sem_dados) > 0:
@@ -1731,11 +1796,12 @@ class ConstrutorPortfolioAutoML:
             
             ml_data = self.predicoes_ml.get(simbolo, {})
             # ML Fallback: Verifica se o AUC é 0.0 (falha total)
-            is_ml_failed = ml_data.get('auc_roc_score', 0.0) == 0.0
+            is_ml_failed = ml_data.get('auc_roc_score', 0.0) <= 0.05 # AUC quase zero
             
             is_static = False
             if simbolo in self.dados_fundamentalistas.index:
-                 is_static = self.dados_fundamentalistas.loc[simbolo].get('static_mode', False)
+                 # Se o ativo tem dados fundamentais, mas foi filtrado no início (Alteração 1.1)
+                 is_static = simbolo not in self.dados_por_ativo 
 
             if is_static:
                 justification.append("⚠️ MODO ESTÁTICO (Preço Indisponível)")
@@ -1795,7 +1861,12 @@ class ConstrutorPortfolioAutoML:
             else:
                  # Simula o resultado de ML para que o score ML seja desativado, mas o processo continue.
                  for ativo in self.ativos_sucesso:
-                    self.predicoes_ml[ativo] = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': 'Fundamental Mode Forced'}
+                    self.predicoes_ml[ativo] = {
+                        'predicted_proba_up': 0.5, 
+                        'auc_roc_score': 0.0, 
+                        'model_name': 'Fundamental Mode Forced',
+                        'ml_score_weighted': 0.0 # Garante que o score ponderado seja 0
+                    }
                  if progress_bar: progress_bar.progress(60, text="Pulando ML (Modo Fundamentalista Ativo)...")
             
             if progress_bar: progress_bar.progress(70, text="Ranqueando e selecionando (Scorecard Dinâmico + PCA Final)...")
@@ -2547,6 +2618,7 @@ def aba_construtor_portfolio():
                             'Ticker': asset.replace('.SA', ''),
                             'Score/Prob.': ml_info.get('predicted_proba_up', 0.5) * 100,
                             'Confiança': ml_info.get('auc_roc_score', np.nan),
+                            'Score Ponderado': ml_info.get('ml_score_weighted', np.nan) * 100, # Adicionado
                             'Modelo': ml_info.get('model_name', 'N/A')
                         })
                      
@@ -2554,25 +2626,26 @@ def aba_construtor_portfolio():
                 
                      if not df_ml.empty:
                         fig_ml = go.Figure()
-                        plot_df_ml = df_ml.sort_values('Score/Prob.', ascending=False)
+                        plot_df_ml = df_ml.sort_values('Score Ponderado', ascending=False)
                         
+                        # Plota o Score Ponderado (Prob * AUC)
                         fig_ml.add_trace(go.Bar(
                             x=plot_df_ml['Ticker'],
-                            y=plot_df_ml['Score/Prob.'],
+                            y=plot_df_ml['Score Ponderado'],
                             marker=dict(
-                                color=plot_df_ml['Score/Prob.'],
+                                color=plot_df_ml['Score Ponderado'],
                                 colorscale='Viridis', # Cor profissional
                                 showscale=True,
-                                colorbar=dict(title="Score")
+                                colorbar=dict(title="Score Ponderado")
                             ),
-                            text=plot_df_ml['Score/Prob.'].round(1),
+                            text=plot_df_ml['Score Ponderado'].round(1),
                                 textposition='outside'
                         ))
                         
                         template = obter_template_grafico()
                         fig_ml.update_layout(**template)
                         
-                        fig_ml.update_layout(title_text=title_text_plot, yaxis_title="Score", xaxis_title="Ticker", height=400)
+                        fig_ml.update_layout(title_text=title_text_plot, yaxis_title="Score (Ponderado pelo AUC)", xaxis_title="Ticker", height=400)
                         
                         st.plotly_chart(fig_ml, use_container_width=True)
                         
@@ -2581,6 +2654,8 @@ def aba_construtor_portfolio():
                         df_ml_display = df_ml.copy()
                         df_ml_display['Score/Prob.'] = df_ml_display['Score/Prob.'].round(2)
                         df_ml_display['Confiança'] = df_ml_display['Confiança'].apply(lambda x: safe_format(x))
+                        df_ml_display['Score Ponderado'] = df_ml_display['Score Ponderado'].round(3)
+                        
                         st.dataframe(df_ml_display, use_container_width=True, hide_index=True)
                      else:
                          st.info("ℹ️ **Modelo ML Não Treinado:** A pipeline de Machine Learning falhou para todos os ativos. A classificação se baseia puramente nos fatores Fundamentais e Técnicos.")
@@ -2956,9 +3031,9 @@ def aba_analise_individual():
             # Coleta dados específicos do ativo (Preço + Fundamentos)
             df_completo, features_fund, df_ml_meta = coletor.coletar_ativo_unico_gcs(ativo_selecionado)
             
-            # Verificação Básica
-            if features_fund is None:
-                st.error(f"❌ Dados indisponíveis para **{ativo_selecionado.replace('.SA', '')}**.")
+            # Verificação Básica (AGORA ROBUSTA PELA ALTERAÇÃO 1.2)
+            if df_completo is None:
+                st.error(f"❌ Dados indisponíveis para **{ativo_selecionado.replace('.SA', '')}**. Não foi possível obter dados históricos de preço ou fundamentos.")
                 return
 
             # Detecta Modo Estático (Sem Preço)
@@ -3162,15 +3237,21 @@ def aba_analise_individual():
                     ml_proba = df_completo['ML_Proba'].iloc[-1] if 'ML_Proba' in df_completo.columns else 0.5
                     ml_conf = df_completo['ML_Confidence'].iloc[-1] if 'ML_Confidence' in df_completo.columns else 0.0
                     
-                    col1, col2 = st.columns(2)
+                    # *** ALTERAÇÃO 2.4: Exibe o Score Ponderado ***
+                    ml_score_weighted_display = df_completo['ML_Score_Weighted'].iloc[-1] if 'ML_Score_Weighted' in df_completo.columns else 0.0
+                    # *** FIM ALTERAÇÃO 2.4 ***
+                    
+                    col1, col2, col3 = st.columns(3)
                     col1.metric("Probabilidade Média de Alta", f"{ml_proba*100:.1f}%")
                     
                     # NOVO: Apenas se AUC > 0.0, mostra que foi treinado
                     if ml_conf > 0.0:
                         col2.metric("Confiança do Modelo (AUC)", f"{ml_conf:.2f}")
+                        col3.metric("Score Ponderado (Prob * AUC)", f"{ml_score_weighted_display:.3f}")
                         st.info(f"ℹ️ **Modelo Supervisionado Ativo:** O score reflete a **MÉDIA** da probabilidade de alta do ativo nos {len(get_ml_horizons(st.session_state.profile.get('ml_lookback_days', 252)))} horizontes, conforme previsto pelo modelo. Confiança validada via AUC de teste.")
                     else:
                          col2.metric("Confiança do Modelo (AUC)", "N/A (Falha de Treinamento)")
+                         col3.metric("Score Ponderado (Prob * AUC)", "0.000")
                          st.warning("⚠️ **Modelo ML Falhou:** Não foi possível treinar o modelo supervisionado (dados insuficientes ou classes desbalanceadas). A predição não está disponível.")
                         
                     if df_ml_meta is not None and not df_ml_meta.empty:
