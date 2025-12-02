@@ -1879,7 +1879,7 @@ class ConstrutorPortfolioAutoML:
             self.calcular_metricas_portfolio(); self.gerar_justificativas()
             if progress_bar: progress_bar.progress(100, text="Pipeline concluído!"); time.sleep(1) 
         except Exception as e:
-            st.error(f"Erro durante a execução do pipeline: {e}"); st.code(tracebox.format_exc()); return False
+            st.error(f"Erro durante a execução do pipeline: {e}"); st.code(traceback.format_exc()); return False
         return True
 
 # =============================================================================
@@ -2104,96 +2104,108 @@ def aba_introducao():
     """, unsafe_allow_html=True)
     
     st.markdown("---")
+
+    st.subheader("Arquitetura do Motor de Decisão: O Scorecard Dinâmico")
+    st.write("""
+    A seleção de ativos não é baseada em uma única métrica, mas sim em um **Scorecard Ponderado Multi-Fatorial**. Este Scorecard atribui uma pontuação de 0 a 100 a cada ativo em quatro dimensões críticas: Performance, Fundamentos, Fatores Técnicos e Machine Learning.
     
-    # -----------------------------------------------------
-    # SEÇÃO 1: TEORIA DE MARKOWITZ E ALOCAÇÃO
-    # -----------------------------------------------------
-    with st.expander("1. Otimização de Markowitz e a Fronteira Eficiente", expanded=True):
-        st.subheader("Fundamentos da Teoria de Portfólio Moderna (MPT)")
-        st.write("""
-        A MPT, desenvolvida por Harry Markowitz, é o pilar de nossa alocação. Ela se baseia no princípio de que o risco de um portfólio não é a mera soma dos riscos individuais dos ativos, mas sim o risco resultante da **combinação** desses ativos, considerando a correlação entre eles.
-        
-        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente**, que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
-        """)
-        
-        col_markowitz_img, col_markowitz_eq = st.columns([1, 1])
-        with col_markowitz_img:
-            st.markdown("")
-        
-        with col_markowitz_eq:
-            st.markdown("##### Variância do Portfólio (Medida de Risco)")
-            st.markdown(r"$$\sigma_p^2 = \sum_{i=1}^{N}\sum_{j=1}^{N} w_i w_j \sigma_{ij}$$")
-            st.markdown("""
-            Onde:
-            * $\sigma_p^2$: Variância do portfólio (Risco).
-            * $w_i, w_j$: Pesos (alocação) dos ativos $i$ e $j$.
-            * $\sigma_{ij}$: Covariância entre os retornos dos ativos $i$ e $j$.
-            """)
-            st.markdown("##### Função de Utilidade (Sharpe Ratio)")
-            st.markdown(r"$$Sharpe Ratio = \frac{E(R_p) - R_f}{\sigma_p}$$")
-            st.write("A otimização busca o ponto com o maior **Sharpe Ratio**, que representa a melhor relação entre o retorno excedente ($E(R_p) - R_f$) e o risco ($\sigma_p$).")
-        
-        st.markdown("---")
-
-    # -----------------------------------------------------
-    # SEÇÃO 2: ARQUITETURA DO SCORECARD E ML
-    # -----------------------------------------------------
-    with st.expander("2. Seleção de Ativos por Scorecard Dinâmico e Machine Learning"):
-        st.subheader("Metodologia de Ranqueamento Multi-Fatorial")
-        st.write("""
-        O sistema adota um Scorecard de quatro pilares, cujos pesos são calibrados pelo perfil de risco e horizonte de tempo do investidor (por exemplo, um perfil de longo prazo prioriza Fundamentos; um de curto prazo, Fatores Técnicos e ML).
-        """)
-
-        col_score_1, col_score_2 = st.columns(2)
-        with col_score_1:
-             st.markdown("##### Pilares de Ranqueamento")
-             st.markdown("""
-             | Pilar | Peso Base | Foco de Avaliação |
-             | :--- | :--- | :--- |
-             | **Performance** | 20% | Risco/Retorno Histórico (Sharpe, Retorno Anualizado). |
-             | **Machine Learning** | 20% | Predição de Movimento Direcional Futuro. |
-             | **Fundamentos** | Variável | Qualidade, Valuation e Saúde Financeira. |
-             | **Técnicos** | Variável | Momentum, Posição Relativa e Volatilidade. |
-             """)
-             
-        with col_score_2:
-            st.markdown("##### Exemplo de Ponderação (Médio Prazo)")
-            
-            # Gráfico de Contribuição de Score (Simulado)
-            fig_score_sim = go.Figure(data=[
-                go.Bar(name='Fatores', x=['Fundamental', 'Técnico', 'Performance', 'ML'], y=[27, 33, 20, 20], marker_color=['#27AE60', '#3498DB', '#9B59B6', '#E67E22'])
-            ])
-            fig_score_sim.update_layout(title_text='Ponderação Média (Soma = 100%)', yaxis_title='Peso (%)', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=300)
-            st.plotly_chart(fig_score_sim, use_container_width=True)
-
-        
-        st.markdown("---")
-        with st.expander("2.1. Detalhamento do Modelo de Machine Learning (ML)"):
-            st.write("""
-            O componente de Machine Learning atua como um filtro preditivo, estimando a probabilidade de um ativo superar seu preço atual em múltiplos horizontes futuros (curto, médio e longo prazo).
-            """)
-            st.markdown("##### Regressão Logística (Modo Rápido)")
-            st.write("""
-            Utilizada para a análise 'rápida' devido à sua alta eficiência computacional e interpretabilidade. A Regressão Logística modela a probabilidade de um evento binário (alta vs. baixa) usando uma função sigmoide. O modelo é treinado com features técnicos (momento, volatilidade) e fundamentais do ativo.
-            """)
-            st.markdown("##### Random Forest / XGBoost (Modo Completo)")
-            st.write("""
-            Para a análise 'completa', empregamos um Ensemble de Árvores de Decisão (Random Forest ou XGBoost). Estes são modelos não-lineares, capazes de capturar interações complexas entre os fatores que a Regressão Logística pode ignorar. Eles fornecem uma previsão mais robusta do movimento de preços, mas exigem maior custo computacional.
-            """)
-            
-            st.markdown("##### Score ML Ponderado (Probabilidade x AUC)")
-            st.write("""
-            Para garantir que apenas predições confiáveis influenciem a alocação, o Score ML final é **ponderado pela Confiança (AUC-ROC)** do modelo. Um modelo com AUC baixo (próximo a 0.5) tem sua probabilidade de alta neutralizada, enquanto um modelo com AUC alto (próximo a 1.0) tem sua previsão plenamente considerada.
-            """)
-            st.markdown(r"$$Score_{ML} \propto Probabilidade_{Alta} \times AUC$$")
-            
-        with st.expander("2.2. Otimização Final e Filtro de Diversificação"):
-            st.write("""
-            Após o ranqueamento pelo Score Total, o sistema aplica um filtro de diversificação (Clusterização via K-Means e PCA) para garantir que os ativos selecionados representem perfis de risco-retorno e setores distintos. A alocação final de capital é calculada pela otimização de Markowitz (Max Sharpe ou Min Volatilidade), baseada no nível de risco determinado pelo seu questionário.
-            """)
+    A grande inovação reside na **Adaptação Dinâmica** dos pesos: a importância de cada pilar é ajustada de acordo com o **Perfil de Risco** e o **Horizonte de Investimento** fornecidos pelo usuário, garantindo que a recomendação seja contextualmente otimizada.
+    """)
+    
+    col_geral_1, col_geral_2 = st.columns(2)
+    
+    with col_geral_1:
+         st.markdown("##### Fatores Primários e Calibração de Pesos")
+         st.markdown(r"""
+         O peso total é dividido em uma base fixa (Performance e ML) e uma parte variável (Fundamentos e Técnicos), onde o horizonte de tempo ajusta a proporção:
+         
+         * **Curto Prazo:** Pondera mais os fatores **Técnicos/Momentum**.
+         * **Longo Prazo:** Pondera mais os **Fundamentos/Qualidade**.
+         
+         $$Score_{Total} = W_{Perf} + W_{ML} + W_{Fund} \times (\text{Fator Longo}) + W_{Tec} \times (\text{Fator Curto})$$
+         """)
+         
+    with col_geral_2:
+        st.markdown("##### Tabela de Contribuição Base (Exemplo Neutro)")
+        # Tabela simulada de contribuição de peso
+        st.dataframe(pd.DataFrame({
+            'Pilar': ['Performance', 'Machine Learning', 'Fundamentos', 'Técnicos'],
+            'Peso Base': ['20%', '20%', 'Varia (30%-50%)', 'Varia (30%-50%)'],
+            'Foco': ['Risco/Retorno Histórico', 'Predição Direcional', 'Qualidade/Valuation', 'Momento/Tendência']
+        }), use_container_width=True, hide_index=True)
     
     st.markdown("---")
     
+    # -----------------------------------------------------
+    # SEÇÃO 3: DETALHES TÉCNICOS (EXPANDERS)
+    # -----------------------------------------------------
+    
+    with st.expander("3. Análise Exaustiva da Teoria de Portfólio Moderna (MPT)"):
+        st.subheader("A Otimização de Markowitz para Alocação de Capital")
+        st.write("""
+        A MPT é a espinha dorsal da nossa fase de alocação de capital. Depois que os ativos são ranqueados e selecionados pelo Scorecard, a Otimização de Markowitz é aplicada para determinar os pesos ideais que devem ser alocados em cada ativo, visando o melhor equilíbrio entre risco e retorno.
+        """)
+        
+        col_mpt_1, col_mpt_2 = st.columns(2)
+        
+        with col_mpt_1:
+             st.markdown("##### Processo de Otimização")
+             st.write("""
+             O processo se resume em encontrar um portfólio que minimize a variância (risco) para um determinado retorno esperado, ou maximize o retorno para um determinado risco. Matematicamente, isso é feito através de métodos de programação quadrática sob restrições (a soma dos pesos deve ser 100%).
+             """)
+             st.markdown("###### Objetivos da Otimização")
+             st.write("""
+             1.  **Maximização do Sharpe Ratio:** Para perfis moderados a avançados, o sistema busca o portfólio na Fronteira Eficiente com o maior retorno excedente por unidade de risco (Sharpe Ratio).
+             2.  **Minimização da Volatilidade:** Para perfis conservadores, o sistema prioriza a carteira com a menor volatilidade absoluta, sacrificando parte do retorno esperado em prol da segurança.
+             """)
+        
+        with col_mpt_2:
+             st.markdown("##### Cálculo da Variância e Covariância")
+             st.write("O risco total ($\sigma_p^2$) é fortemente influenciado pelas covariâncias entre os ativos. Ativos com baixa correlação ($\sigma_{ij}$ próxima de zero) ou correlação negativa (onde $\sigma_{ij}$ é negativo) são cruciais para a diversificação, reduzindo o risco não sistemático do portfólio.")
+             st.markdown(r"$$\sigma_p^2 = \sum_{i=1}^{N}\sum_{j=1}^{N} w_i w_j \sigma_{ij}$$")
+             
+             # Exemplo de matriz de covariância (simulado)
+             st.markdown("###### Matriz de Covariância (Simulada)")
+             st.dataframe(pd.DataFrame({
+                 'Ativo A': [0.04, -0.01, 0.02], 'Ativo B': [-0.01, 0.09, 0.00], 'Ativo C': [0.02, 0.00, 0.03]
+             }, index=['Ativo A', 'Ativo B', 'Ativo C']).style.format('{:.4f}'))
+    
+    with st.expander("4. Algoritmos de Machine Learning no Pipeline de Predição"):
+        st.subheader("Modelagem Preditiva para Vantagem Direcional")
+        st.write("""
+        O Machine Learning é integrado como um filtro prospectivo que complementa a análise histórica e fundamentalista. Sua função é identificar padrões complexos em grandes volumes de dados (features técnicos e fundamentais) para prever a direção do preço (alta ou baixa) em horizontes futuros.
+        """)
+        
+        st.markdown("##### 4.1. Regressão Logística (Logistic Regression)")
+        st.write("""
+        **Natureza:** Algoritmo linear fundamental, utilizado principalmente para classificação binária. Embora seja "Regressão", ele estima a probabilidade de um evento, o que o torna ideal para prever a probabilidade de alta.
+        
+        **Funcionamento:** Utiliza a função logística (sigmoide) para mapear qualquer valor real entre 0 e 1.
+        $$P(Y=1|X) = \frac{1}{1 + e^{-( \beta_0 + \beta_1 x_1 + \dots + \beta_n x_n )}}$$
+        
+        **Vantagens na Bolsa:** Extremamente rápido para treinar e prever (ideal para o modo 'fast'). Sua linearidade facilita a interpretação da influência de cada *feature* (peso $\beta_n$). É a base do nosso modo rápido de ML.
+        """)
+        
+        st.markdown("##### 4.2. Random Forest (Floresta Aleatória)")
+        st.write("""
+        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão.
+        
+        **Funcionamento:** Cada árvore na floresta é treinada em uma subamostra diferente do conjunto de dados e em um subconjunto aleatório de *features*. A previsão final é determinada pela maioria dos votos das árvores (o que o chamamos de *bagging*).
+        
+        **Vantagens na Bolsa:** Reduz drasticamente o *overfitting* e lida bem com dados ruidosos e não-lineares, capturando interações de mercado que modelos lineares não conseguem. É mais robusto e é a escolha para o modo 'full'.
+        """)
+
+    with st.expander("5. Métrica de Confiança: AUC-ROC (Area Under the Receiver Operating Characteristic Curve)"):
+        st.subheader("Validação da Qualidade da Predição")
+        st.write("""
+        O AUC é a métrica chave para validar a **confiança** de nossos modelos de ML. Ele mede a capacidade do modelo de distinguir entre as classes (alta vs. baixa).
+        
+        * **AUC = 0.5:** O modelo é tão bom quanto um chute aleatório.
+        * **AUC = 1.0:** O modelo é perfeito.
+        
+        Ao ponderar a probabilidade de alta ($Probabilidade_{Alta}$) pelo AUC do modelo ($AUC$), garantimos que a força do Score ML seja proporcional à qualidade comprovada da previsão. Se o modelo não for confiável (AUC próximo de 0.5), sua contribuição para o Score Total será minimizada (próximo de zero).
+        """)
+        
 def aba_selecao_ativos():
     """Aba 2: Seleção de Ativos (Design Original Restaurado)"""
     
