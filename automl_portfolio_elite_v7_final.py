@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.6 - REVERSÃO MARKOWITZ/DINÂMICO): Pesos Dinâmicos + Otimização Markowitz + Seleção por Score e Diversificação de Cluster.
 - Modelagem (V9.6): ML Restaurado para Estabilidade (Lógica 6.0.9) + GARCH Removido da UI/Lógica de Otimização.
 
-Versão: 9.6.3 (Fix: Correção do ValueError: columns overlap)
+Versão: 9.6.4 (Fix: Consistência do Pipeline ML na Construção e Ajustes na UI)
 =============================================================================
 """
 
@@ -275,8 +275,9 @@ def log_debug(message: str):
     timestamp = datetime.now().strftime("%H:%M:%S")
     # Imprime no console (para Streamlit Cloud logs) e armazena na sessão
     print(f"DEBUG {timestamp} | {message}") 
-    if 'debug_logs' in st.session_state:
-        st.session_state.debug_logs.append(f"[{timestamp}] {message}")
+    if 'debug_logs' not in st.session_state:
+        st.session_state.debug_logs = []
+    st.session_state.debug_logs.append(f"[{timestamp}] {message}")
 
 def obter_template_grafico() -> dict:
     """Retorna o template padrão de cores e estilo para gráficos Plotly."""
@@ -981,14 +982,9 @@ class ColetorDadosLive(object):
                 
                 # Obtendo os Horizons adaptativos (embora o lookback do perfil não seja fornecido aqui, usamos um padrão)
                 # Tenta usar a seleção da UI, senão usa o padrão do perfil (252)
-                if st.session_state.get('individual_horizon_selection') == 'Curto Prazo (CP)':
-                     ml_lookback_days = 84
-                elif st.session_state.get('individual_horizon_selection') == 'Médio Prazo (MP)':
-                     ml_lookback_days = 168
-                else: # Longo (LP) ou Fallback
-                     ml_lookback_days = st.session_state.profile.get('ml_lookback_days', 252) 
+                ml_lookback_days_input = st.session_state.profile.get('ml_lookback_days', 252) 
                      
-                ML_HORIZONS_IND = get_ml_horizons(ml_lookback_days)
+                ML_HORIZONS_IND = get_ml_horizons(ml_lookback_days_input)
                 
                 # REFORÇANDO: Garante que os features fundamentais estão na última linha (para a predição)
                 last_idx = df.index[-1] if not df.empty else None
@@ -1275,6 +1271,7 @@ class ConstrutorPortfolioAutoML:
 
                 # Condição de desvio para o FALLBACK
                 if CLASSIFIER is None or f"t_{ML_HORIZONS_CONST[-1]}" not in df.columns or df[f"t_{ML_HORIZONS_CONST[-1]}"].isnull().all() or len(df.dropna(subset=MODEL_FEATURES)) < 200:
+                    # Permite o uso da lógica de ML, mas com retorno neutro/falha
                     raise ValueError("Dados insuficientes para treinamento supervisionado.")
 
                 # --- Construção do Dataset de Treino/Predição ---
@@ -1301,7 +1298,7 @@ class ConstrutorPortfolioAutoML:
                 probabilities = []
                 auc_scores = []
                 
-                # --- TREINAMENTO PARA CADA HORIZONTE ---
+                # --- TREINAMENTO PARA CADA HORIZONTE (MANTIDO IDÊNTICO À LÓGICA INDIVIDUAL) ---
                 for tgt_d in ML_HORIZONS_CONST:
                     tgt = f"t_{tgt_d}"
                     y = df_model[tgt].values
@@ -1364,18 +1361,22 @@ class ConstrutorPortfolioAutoML:
                 except:
                      importances = pd.DataFrame({'feature': MODEL_FEATURES, 'importance': [1/len(MODEL_FEATURES)]*len(MODEL_FEATURES)})
                 
+                # Os dados ML (Proba/Confidence) são injetados na última linha do DF técnico local (para debug)
                 self.dados_por_ativo[ativo].loc[last_idx, 'ML_Proba'] = ensemble_proba
                 self.dados_por_ativo[ativo].loc[last_idx, 'ML_Confidence'] = conf_final
                 log_debug(f"ML (Supervisionado): Ativo {ativo} sucesso. Prob: {ensemble_proba:.2f}, AUC: {conf_final:.2f}.")
                 total_ml_success += 1
 
             except Exception as e:
-                log_debug(f"ML (Fallback): Ativo {ativo} falhou no treinamento ({str(e)[:20]}). Não aplicando Score Fallback.")
+                # O erro de Valor (dados insuficientes) é tratado aqui, resultando em ML neutro/falho
+                log_debug(f"ML (Fallback): Ativo {ativo} falhou no treinamento ({str(e)[:20]}). Aplicando Score Neutro.")
                 
-                # Se falhar, as colunas ML_Proba/Confidence são excluídas do DF local (e não preenchidas com proxy)
                 if ativo in self.dados_por_ativo and not self.dados_por_ativo[ativo].empty:
                     df_local = self.dados_por_ativo[ativo]
-                    df_local.drop(columns=['ML_Proba', 'ML_Confidence'], errors='ignore', inplace=True)
+                    # Adiciona valores neutros para manter a consistência do DF técnico (para debug),
+                    # mas o dicionário `result_for_ativo` define a pontuação real (AUC=0.0)
+                    df_local.loc[df_local.index[-1], 'ML_Proba'] = 0.5
+                    df_local.loc[df_local.index[-1], 'ML_Confidence'] = 0.0
                 
                 # O resultado no dictionary permanece neutro (0.5 prob, 0.0 AUC) para que o score ML ponderado seja 0
                 result_for_ativo = {'predicted_proba_up': 0.5, 'auc_roc_score': 0.0, 'model_name': 'Training Failed'}
@@ -2721,50 +2722,82 @@ def aba_construtor_portfolio():
                 df_last_data_clean = pd.DataFrame.from_dict(data_at_last_idx, orient='index')
 
                 # **********************************************
-                # CORREÇÃO DO VALUEERROR: Adiciona o sufixo '_RAW' às colunas de df_last_data_clean
-                # para que não haja sobreposição com as colunas já existentes em df_full_data (como 'ret', 'vol20', etc.)
+                # CORREÇÃO DO KEYERROR (FINAL): Remove as colunas duplicadas antes do rename final.
+                # A sobreposição ocorre porque LGBM_FEATURES (ret, vol20, etc.) já está em df_full_data
+                # e também no df_last_data_clean (que foi renomeado com _LATEST). 
+                # Solução: Remova a versão original que veio do scores_combinados (df_full_data) 
+                # antes de renomear as versões _LATEST.
                 # **********************************************
                 
-                # 1. Colunas que se sobrepõem (e que vamos querer manter a versão 'LATEST' da tabela de scores)
-                overlap_cols = [col for col in df_last_data_clean.columns if col in df_full_data.columns]
+                # 1. Lista de colunas duplicadas que DEVEM ser removidas (versão não-_LATEST)
+                cols_to_remove = [col for col in LGBM_FEATURES if col in df_full_data.columns]
                 
-                # 2. Renomeia as colunas de sobreposição em df_last_data_clean com o sufixo '_LATEST'
-                rename_dict = {col: f"{col}_LATEST" for col in overlap_cols}
-                df_last_data_clean.rename(columns=rename_dict, inplace=True)
+                # 2. Faz o JOIN com sufixo na DIREITA, mantendo a versão 'LATEST' para ser exibida.
+                # Não é necessário renomear df_last_data_clean previamente se usarmos rsuffix.
                 
-                # 3. Faz o join sem sufixo, pois a sobreposição foi resolvida pelo rename
-                # O df_full_data ainda contém as colunas originais (sem LATEST)
-                df_scores_display = df_full_data.join(df_last_data_clean, how='left')
+                # Remove o df_last_data_clean original e refaz a preparação para o join
+                data_at_last_idx = {}
+                for ticker in df_full_data.index:
+                    df_tec = builder.dados_por_ativo.get(ticker)
+                    if df_tec is not None and not df_tec.empty:
+                        last_row = df_tec.iloc[-1]
+                        data_at_last_idx[ticker] = {
+                            'Preço Fechamento': last_row.get('Close'),
+                            'rsi_14_raw': last_row.get('rsi_14'), 
+                            'macd_diff_raw': last_row.get('macd_diff'), 
+                            'ret': last_row.get('ret'),
+                            'vol20': last_row.get('vol20'),
+                            'ma20': last_row.get('ma20'),
+                            'z20': last_row.get('z20'),
+                            'trend': last_row.get('trend'),
+                            'volrel': last_row.get('volrel'),
+                        }
+                df_last_data_clean = pd.DataFrame.from_dict(data_at_last_idx, orient='index')
 
+                # Juntando. O sufixo '_LATEST' é adicionado automaticamente às colunas sobrepostas do DataFrame da direita.
+                df_scores_display = df_full_data.join(df_last_data_clean, how='left', rsuffix='_LATEST')
+                
+                # Renomeio das colunas de exibição
+                # As colunas originais (sem _LATEST) estão no dataframe, mas as que foram trazidas 
+                # do LGBM_FEATURES devem ser renomeadas para usar a versão _LATEST.
+                
+                # Mapeamento para renomear colunas LATEST e RAW
+                rename_dict_final = {}
+                
+                # Colunas do LGBM_FEATURES (agora com _LATEST)
+                for col in LGBM_FEATURES:
+                    if f'{col}_LATEST' in df_scores_display.columns:
+                         rename_dict_final[f'{col}_LATEST'] = rename_map[col]
+                
+                # Outras colunas
+                if 'rsi_14_raw_LATEST' in df_scores_display.columns:
+                    rename_dict_final['rsi_14_raw_LATEST'] = 'RSI 14'
+                if 'macd_diff_raw_LATEST' in df_scores_display.columns:
+                    rename_dict_final['macd_diff_raw_LATEST'] = 'MACD Hist.'
+                if 'Preço Fechamento_LATEST' in df_scores_display.columns:
+                     rename_dict_final['Preço Fechamento_LATEST'] = 'Preço Fechamento'
+                
+                
+                # Remove colunas antigas que se sobrepõem e não queremos exibir
+                for col in cols_to_remove:
+                    if col in df_scores_display.columns:
+                        df_scores_display.drop(columns=[col], inplace=True)
+                
+                # Adiciona as colunas do rename_map original que não estavam em cols_to_remove
+                for original, final in rename_map.items():
+                    if original in df_scores_display.columns and original not in cols_to_remove:
+                         rename_dict_final[original] = final
+
+                # Aplica o renomeio final
+                df_scores_display.rename(columns=rename_dict_final, inplace=True)
+                
+                # Filtra colunas finais (usando os nomes de exibição)
+                final_display_names = list(set(rename_map.values()) & set(df_scores_display.columns))
+                df_scores_display = df_scores_display[final_display_names].copy()
+                
                 # **********************************************
-                # CORREÇÃO DO KEYERROR: REMOVE AS COLUNAS ORIGINAIS DE SOBREPOSIÇÃO
-                # O KeyError ocorre porque as colunas 'ret', 'vol20', etc. estão em df_scores_display
-                # mas não estão no rename_map, e o rename_map tenta renomear as versões _LATEST.
-                # Se as colunas originais com os nomes 'ret', 'vol20' etc. estiverem presentes no DataFrame 
-                # após o join, a função display não saberá como formatá-las.
-                # Removemos as colunas originais que se sobrepõem, forçando o uso apenas das colunas '_LATEST'
+                # FIM DA CORREÇÃO
                 # **********************************************
-                
-                cols_to_drop_after_join = [col for col in overlap_cols if col in df_scores_display.columns]
-                df_scores_display.drop(columns=cols_to_drop_after_join, errors='ignore', inplace=True)
-
-
-                # Recria o rename_map para incluir os nomes corrigidos
-                rename_map.update({
-                    'ret_LATEST': 'Ret. Diário',
-                    'vol20_LATEST': 'Vol. 20d',
-                    'ma20_LATEST': 'Média 20d',
-                    'z20_LATEST': 'Z-Score 20d',
-                    'trend_LATEST': 'Trend 5d',
-                    'volrel_LATEST': 'Vol. Relativa',
-                    'Preço Fechamento_LATEST': 'Preço Fechamento'
-                })
-                
-                # Filtra colunas para exibição (apenas as que existem após o join)
-                cols_to_display = [col for col in rename_map.keys() if col in df_scores_display.columns]
-
-                df_scores_display = df_scores_display[cols_to_display].copy()
-                df_scores_display.rename(columns=rename_map, inplace=True)
                 
                 # Multiplicando por 100 para percentual (apenas colunas que existem)
                 if 'ROE (%)' in df_scores_display.columns: df_scores_display['ROE (%)'] = df_scores_display['ROE (%)'] * 100
@@ -2852,45 +2885,35 @@ def aba_analise_individual():
     
     st.write("") # Spacer
     
-    # --- NOVO: Seleção de Horizonte ML para Análise Individual ---
+    # --- NOVO: Seleção de Horizonte ML para Análise Individual (USANDO RADIO) ---
     st.markdown("#### Prazos de Predição (Dias Úteis Futuros)")
     
-    col_h_cp, col_h_mp, col_h_lp = st.columns(3)
-    
-    # Mapeia as opções para os lookback days (que serão usados por get_ml_horizons)
+    # Mapeia as opções de rádio para os lookback days (como na lógica de perfil)
     horizon_map_individual = {
-        'Curto Prazo (CP)': 84,
-        'Médio Prazo (MP)': 168,
-        'Longo Prazo (LP)': 252
+        OPTIONS_TIME_HORIZON_DETALHADA[0]: 84,   # Curto Prazo
+        OPTIONS_TIME_HORIZON_DETALHADA[1]: 168,  # Médio Prazo
+        OPTIONS_TIME_HORIZON_DETALHADA[2]: 252   # Longo Prazo
     }
     
-    # Botões de seleção de horizonte (usando st.radio em colunas para simular quadrados)
-    with col_h_cp:
-        if st.button("Curto Prazo (CP)", key='btn_h_cp', use_container_width=True):
-            st.session_state['individual_horizon_selection'] = 'Curto Prazo (CP)'
-    with col_h_mp:
-        if st.button("Médio Prazo (MP)", key='btn_h_mp', use_container_width=True):
-            st.session_state['individual_horizon_selection'] = 'Médio Prazo (MP)'
-    with col_h_lp:
-        if st.button("Longo Prazo (LP)", key='btn_h_lp', use_container_width=True):
-            st.session_state['individual_horizon_selection'] = 'Longo Prazo (LP)'
-            
-    st.session_state.profile['ml_lookback_days'] = horizon_map_individual.get(st.session_state.get('individual_horizon_selection', 'Longo Prazo (LP)'), 252)
+    horizon_selection_desc = st.radio(
+        "Selecione o horizonte de predição:",
+        options=OPTIONS_TIME_HORIZON_DETALHADA,
+        index=2, # Padrão Longo Prazo
+        key='individual_horizon_selection_radio'
+    )
 
-
+    # Armazena o lookback day (numérico) no profile para ser usado pela coleta
+    st.session_state.profile['ml_lookback_days'] = horizon_map_individual.get(
+        horizon_selection_desc, 252
+    )
+    
     st.write("") # Spacer
     
-    # NOVO: Seleção de Modos de GARCH e ML para a Análise Individual (ocupando a lateralidade)
+    # --- REMOÇÃO DA SELEÇÃO DE VOLATILIDADE/GARCH ---
     st.markdown("#### Seleção de Modelos Quantitativos")
-    col_modes = st.columns(2) # Reduzido para 2 colunas para ML e GARCH
+    col_modes = st.columns(2) 
     
     with col_modes[0]:
-        st.markdown("##### Volatilidade (Risco):") # Nome alterado
-        # ALTERAÇÃO: Apenas Volatilidade Histórica (GARCH removido da UI)
-        st.info("Modelo de Risco: Volatilidade Histórica Anualizada")
-        st.session_state['individual_garch_mode'] = 'GARCH(1,1)' # Mantido apenas para fallback de variável, sem efeito real
-        
-    with col_modes[1]:
         st.markdown("##### Modelo ML:")
         # ALTERAÇÃO: Refletindo as simplificações de ML (LogReg e Random Forest)
         ml_mode_select = st.radio(
@@ -2903,6 +2926,11 @@ def aba_analise_individual():
         )
         st.session_state['individual_ml_mode'] = ml_mode_select
     
+    with col_modes[1]:
+        st.markdown("##### Volatilidade (Risco):") 
+        st.info("Modelo de Risco: Volatilidade Histórica Anualizada")
+        st.session_state['individual_garch_mode'] = 'GARCH(1,1)' # Mantido apenas para fallback de variável, sem efeito real
+        
     
     # NOVO: Botões Centralizados (Executar Análise e Limpar Análise)
     col_btn_start, col_btn_center, col_btn_end = st.columns([1, 2, 1])
