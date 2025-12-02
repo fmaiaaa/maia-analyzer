@@ -834,7 +834,8 @@ class ColetorDadosLive(object):
         df_ml_meta = pd.DataFrame()
         
         # FEATURES AGORA SÃO BASEADAS NO MODELO ESTÁVEL (PORTFOLIO_ANALYZER.PY)
-        ML_FEATURES = ML_FEATURES_P_ANALYZER # Mantendo a lista de features do arquivo estável
+        # CORREÇÃO: A lista ML_FEATURES já é globalmente definida
+        current_ml_features = ML_FEATURES
         ALL_FUND_FEATURES = ['pe_ratio', 'pb_ratio', 'div_yield', 'roe', 'pe_rel_sector', 'pb_rel_sector', 'Cluster', 'roic', 'net_margin', 'debt_to_equity', 'current_ratio', 'revenue_growth', 'ev_ebitda', 'operating_margin']
         
         is_price_data_available = 'Close' in df_tec.columns and not df_tec['Close'].isnull().all() and len(df_tec.dropna(subset=['Close'])) > 60
@@ -880,7 +881,7 @@ class ColetorDadosLive(object):
                 )
 
                 # Prepara Features para o ML
-                current_features = [f for f in ML_FEATURES if f in df.columns]
+                current_features = [f for f in current_ml_features if f in df.columns]
 
                 # Adiciona Cluster para o preprocessor
                 X_cols = [f for f in current_features if f not in ML_CATEGORICAL_FEATURES] + ML_CATEGORICAL_FEATURES
@@ -924,7 +925,7 @@ class ColetorDadosLive(object):
                     # Treinamento final para predição
                     model_pipeline.fit(X, y)
                     
-                    # Previsão da última linha
+                    # Predição da última linha
                     last_features = df_tec[X_cols].iloc[[-1]].copy()
                     if 'Cluster' in last_features.columns:
                         last_features['Cluster'] = last_features['Cluster'].astype(str)
