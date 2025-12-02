@@ -78,7 +78,7 @@ from sklearn.linear_model import ElasticNetCV
 try:
     import lightgbm as lgb
 except ImportError:
-    lgb = None 
+    xgb = None 
 try:
     import xgboost as xgb
 except ImportError:
@@ -1615,7 +1615,17 @@ class ConstrutorPortfolioAutoML:
             log_debug(f"Score Mínimo Requerido: {min_score:.3f} ({SCORE_PERCENTILE_THRESHOLD*100:.0f}% do score base).")
             log_debug(f"Ativos eliminados pelo filtro de score: {num_eliminados}")
             
-            self.scores_combinados = ativos_filtrados
+            # *** ALTERAÇÃO CRÍTICA (3.1): Filtra ativos com NaNs críticos ou zero em métricas essenciais ***
+            # Garante que os ativos que passaram no score tem dados de sharpe e retorno válidos,
+            # eliminando casos onde o score foi inflado por NaNs ou dados neutros não detectados.
+            ativos_filtrados_final = ativos_filtrados.dropna(subset=['sharpe', 'retorno_anual'])
+            
+            if len(ativos_filtrados_final) < len(ativos_filtrados):
+                num_extra_eliminados = len(ativos_filtrados) - len(ativos_filtrados_final)
+                log_debug(f"Ativos eliminados por falha crítica de métricas (Sharpe/Retorno): {num_extra_eliminados}")
+            
+            self.scores_combinados = ativos_filtrados_final
+            # *** FIM ALTERAÇÃO CRÍTICA (3.1) ***
             
         # -------------------------------------------------------------
         # 2. SELEÇÃO FINAL POR CLUSTER (Diversificação Forçada)
@@ -1656,23 +1666,31 @@ class ConstrutorPortfolioAutoML:
         available_assets_returns = {}
         ativos_sem_dados = []
         
+        # *** ALTERAÇÃO CRÍTICA (3.2): Filtra aqui também, garantindo que o Markowitz só rode com dados válidos ***
+        ativos_para_otimizacao = []
         for s in self.ativos_selecionados:
-            if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s] and not self.dados_por_ativo[s]['returns'].dropna().empty:
-                available_assets_returns[s] = self.dados_por_ativo[s]['returns']
+            if s in self.dados_por_ativo and 'returns' in self.dados_por_ativo[s]:
+                 returns_series = self.dados_por_ativo[s]['returns'].dropna()
+                 if len(returns_series) >= 50: # Mínimo de 50 pontos para Markowitz ser razoável
+                     available_assets_returns[s] = returns_series
+                     ativos_para_otimizacao.append(s)
+                 else:
+                     ativos_sem_dados.append(s)
             else:
-                # Se o ativo está na seleção final, mas não tem dados de retorno (o que não deve acontecer 
-                # se Alteração 1.1 for bem sucedida), ele deve ser ignorado no Markowitz.
-                ativos_sem_dados.append(s)
+                 ativos_sem_dados.append(s)
         
-        final_returns_df = pd.DataFrame(available_assets_returns).dropna()
-        
+        final_returns_df = pd.DataFrame(available_assets_returns)
+        # *** FIM ALTERAÇÃO CRÍTICA (3.2) ***
+
         # Verifica se há dados suficientes para Markowitz
         if final_returns_df.shape[0] < 50 or len(final_returns_df.columns) < 2:
             log_debug("Otimização de Markowitz ignorada. Recorrendo à PONDERAÇÃO POR SCORE (Modo Estático/Poucos Dados).")
 
             if len(ativos_sem_dados) > 0:
-                st.warning(f"⚠️ Alguns ativos ({', '.join(ativos_sem_dados)}) não possuem histórico de preços. A otimização de variância (Markowitz) será substituída por alocação baseada em Score/Pesos Iguais.")
+                # Alterado para não ser um st.warning para manter o tom de "recomendação firme"
+                log_debug(f"AVISO: {len(ativos_sem_dados)} ativos ({', '.join(ativos_sem_dados)}) não possuem histórico de preços. Usando alocação baseada em Score/Pesos Iguais.")
             
+            # Usa a lista original (embora alguns tenham sido ignorados) para manter a soma de 100%
             valid_selection = [a for a in self.ativos_selecionados if a in self.scores_combinados.index]
             
             # === ALTERAÇÃO 2: Implementando o Fallback para 20% se o Markowitz falhar ===
@@ -1847,7 +1865,7 @@ class ConstrutorPortfolioAutoML:
                 log_debug("AVISO: Coleta inicial falhou parcialmente/totalmente. Prosseguindo com os dados de fallback disponíveis.")
             
             if not self.ativos_sucesso: 
-                 st.error("Falha na aquisição: Nenhum ativo pôde ser processado.")
+                 st.error("Falha na aquisição: Nenhum ativo pôde ser processado. Tente selecionar menos ativos ou um setor menos problemático.")
                  return False
 
             if progress_bar: progress_bar.progress(30, text="Calculando métricas setoriais e volatilidade...")
@@ -1879,6 +1897,7 @@ class ConstrutorPortfolioAutoML:
             self.calcular_metricas_portfolio(); self.gerar_justificativas()
             if progress_bar: progress_bar.progress(100, text="Pipeline concluído!"); time.sleep(1) 
         except Exception as e:
+            # Em caso de falha crítica (fora da coleta), o pipeline deve parar e reportar o erro
             st.error(f"Erro durante a execução do pipeline: {e}"); st.code(traceback.format_exc()); return False
         return True
 
@@ -2109,7 +2128,7 @@ def aba_introducao():
     st.write("""
     A seleção de ativos não é baseada em uma única métrica, mas sim em um **Scorecard Ponderado Multi-Fatorial**. Este Scorecard atribui uma pontuação de 0 a 100 a cada ativo em quatro dimensões críticas: Performance, Fundamentos, Fatores Técnicos e Machine Learning.
     
-    A grande inovação reside na **Adaptação Dinâmica** dos pesos: a importância de cada pilar é ajustada de acordo com o **Perfil de Risco** e o **Horizonte de Investimento** fornecidos pelo usuário, garantindo que a recomendação seja contextualmente otimizada.
+    A grande inovação reside na **Adaptação Dinâmica** dos pesos: a importância de cada pilar é ajustada de acordo com o **Perfil de Risco** e o **Horizonte de Investimento** fornecidos pelo usuário , garantindo que a recomendação seja contextualmente otimizada.
     """)
     
     col_geral_1, col_geral_2 = st.columns(2)
@@ -2145,7 +2164,7 @@ def aba_introducao():
         st.write("""
         A MPT é a espinha dorsal da nossa fase de alocação de capital. Ela se baseia no princípio de que o risco de um portfólio não é a mera soma dos riscos individuais dos ativos, mas sim o risco resultante da **combinação** desses ativos, considerando a correlação entre eles.
         
-        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente** , que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
+        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente** [Image of Efficient Frontier], que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
         """)
         
         col_mpt_1, col_mpt_2 = st.columns(2)
@@ -2175,7 +2194,7 @@ def aba_introducao():
     with st.expander("4. Algoritmos de Machine Learning no Pipeline de Predição"):
         st.subheader("Modelagem Preditiva para Vantagem Direcional")
         st.write("""
-        O Machine Learning é integrado como um filtro prospectivo que complementa a análise histórica e fundamentalista. Sua função é identificar padrões complexos em grandes volumes de dados (features técnicos e fundamentais) para prever a direção do preço (alta ou baixa) em horizontes futuros.
+        O Machine Learning é integrado como um filtro prospectivo que complementa a análise histórica e fundamentalista . Sua função é identificar padrões complexos em grandes volumes de dados (features técnicos e fundamentais) para prever a direção do preço (alta ou baixa) em horizontes futuros.
         """)
         
         st.markdown("##### 4.1. Regressão Logística (Logistic Regression)")
@@ -2191,7 +2210,7 @@ def aba_introducao():
         
         st.markdown("##### 4.2. Random Forest (Floresta Aleatória)")
         st.write("""
-        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão .
+        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão [Image of Random Forest structure].
         
         **Funcionamento:** Cada árvore na floresta é treinada em uma subamostra diferente do conjunto de dados e em um subconjunto aleatório de *features*. A previsão final é determinada pela maioria dos votos das árvores (o que o chamamos de *bagging*).
         
@@ -2487,7 +2506,6 @@ def aba_construtor_portfolio():
                 progress_widget.empty() # Limpa após o sucesso
                     
                 if not success:
-                    st.error("Falha na aquisição ou processamento dos dados. Resultados baseados em Fallback.")
                     st.session_state.builder_complete = True # Mantém True para mostrar a aba, mesmo com falha
                     # st.session_state.builder = None; st.session_state.profile = {}; Removido reset para manter dados de Fallback
                     st.rerun() 
