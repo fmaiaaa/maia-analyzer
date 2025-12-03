@@ -2241,7 +2241,7 @@ def aba_selecao_ativos():
     modo_selecao = st.radio(
         "**Modo de Seleção:**",
         [
-            "📊 Índice de Referência (Todos do Ibovespa)",
+            "📊 Índice de Referência",
             "🏢 Seleção Setorial",
             "✍️ Seleção Individual"
         ],
