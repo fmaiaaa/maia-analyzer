@@ -2189,12 +2189,12 @@ def configurar_pagina():
 def aba_introducao():
     """Aba 1: Introdução Metodológica Didática e Exaustiva (Estilo Profissional e Firme)"""
     
-    st.markdown("## 📚 Metodologia de Portfólios Adaptativos")
+    st.markdown("## Metodologia de Portfólios Adaptativos")
     
     # CORREÇÃO: Corrigindo o negrito na introdução
     st.markdown("""
     <div class="info-box" style="text-align: center;">
-    <h3>📈 Modelo de Alocação de Ativos Preditivo e Dinâmico</h3>
+    <h3>Modelo de Alocação de Ativos Preditivo e Dinâmico</h3>
     <p>Este sistema implementa uma metodologia quantitativa avançada, projetada para a construção e gestão de portfólios de investimento. Nossa abordagem transcende a análise puramente histórica, integrando a fundamentação teórica da <strong>Teoria Moderna de Portfólio (MPT)</strong> com a capacidade preditiva de algoritmos de <strong>Machine Learning (ML)</strong>. Consequentemente, o objetivo primordial é maximizar o retorno ajustado ao risco, garantindo uma alocação de capital que esteja rigorosamente alinhada com o perfil de risco e o horizonte temporal definido pelo investidor.</p>
     </div>
     """, unsafe_allow_html=True)
@@ -2309,7 +2309,7 @@ def aba_introducao():
 def aba_selecao_ativos():
     """Aba 2: Seleção de Ativos (Design Original Restaurado)"""
     
-    st.markdown("## 🎯 Definição do Universo de Análise")
+    st.markdown("## Definição do Universo de Análise")
     
     # NOVO: Centraliza o texto dentro do box de aviso
     st.markdown("""
@@ -2321,9 +2321,9 @@ def aba_selecao_ativos():
     modo_selecao = st.radio(
         "**Modo de Seleção:**",
         [
-            "📊 Índice de Referência",
-            "🏢 Seleção Setorial",
-            "✍️ Seleção Individual"
+            "Índice de Referência",
+            "Seleção Setorial",
+            "Seleção Individual"
         ],
         index=0,
         key='selection_mode_radio_v8'
@@ -2333,10 +2333,10 @@ def aba_selecao_ativos():
     
     if "Índice de Referência" in modo_selecao:
         ativos_selecionados = TODOS_ATIVOS.copy()
-        # REMOVIDO: st.success(f"✔️ **{len(ativos_selecionados)} ativos** (Ibovespa completo) definidos para análise.")
+        # REMOVIDO: st.success(f"**{len(ativos_selecionados)} ativos** (Ibovespa completo) definidos para análise.")
         
         # NOVO: Separação por Porte
-        with st.expander("📋 Visualizar Tickers por Porte (Estimado)", expanded=False):
+        with st.expander("Visualizar Tickers por Porte (Estimado)", expanded=False):
             st.markdown("A diferenciação por porte (Capitalização/Liquidez) é uma estimativa e visa apenas informar sobre a diversificação de risco implícita.")
             for porte, tickers in PORTE_ATIVOS.items():
                 tickers_filtrados = [a for a in tickers if a in ativos_selecionados]
@@ -2345,7 +2345,7 @@ def aba_selecao_ativos():
                      st.write(", ".join([a.replace('.SA', '') for a in tickers_filtrados]))
     
     elif "Seleção Setorial" in modo_selecao:
-        st.markdown("### 🏢 Seleção por Setor")
+        st.markdown("### Seleção por Setor")
         setores_disponiveis = sorted(list(ATIVOS_POR_SETOR.keys()))
         
         # BARRA DE SELEÇÃO SETORIAL
@@ -2373,17 +2373,17 @@ def aba_selecao_ativos():
                  # Placeholder para manter o layout lateralizado (pode ser ajustado se houver mais métricas)
                  st.metric("Tickers/Setor (Visual)", "OK") 
             
-            with st.expander("📋 Visualizar Ativos por Setor"):
+            with st.expander("Visualizar Ativos por Setor"):
                 for setor in setores_selecionados:
                     # CORREÇÃO DO ERRO: ATIVOS_POR_POR_SETOR -> ATIVOS_POR_SETOR
                     ativos_do_setor = ATIVOS_POR_SETOR.get(setor, []) 
                     st.markdown(f"**{setor}** ({len(ativos_do_setor)} ativos)")
                     st.write(", ".join([a.replace('.SA', '') for a in ativos_do_setor]))
         else:
-            st.warning("⚠️ Selecione pelo menos um setor.")
+            st.warning("Selecione pelo menos um setor.")
     
     elif "Seleção Individual" in modo_selecao:
-        st.markdown("### ✍️ Seleção Individual de Tickers")
+        st.markdown("### Seleção Individual de Tickers")
         
         ativos_com_setor = {}
         for setor, ativos in ATIVOS_POR_SETOR.items():
@@ -2392,7 +2392,7 @@ def aba_selecao_ativos():
         todos_tickers_ibov = sorted(list(ativos_com_setor.keys()))
         
         # BARRA DE SELEÇÃO INDIVIDUAL
-        st.markdown("#### 📝 Selecione Tickers (Ibovespa)")
+        st.markdown("#### Selecione Tickers (Ibovespa)")
         ativos_selecionados = st.multiselect(
             "Pesquise e selecione os tickers:",
             options=todos_tickers_ibov,
@@ -2408,7 +2408,7 @@ def aba_selecao_ativos():
             st.metric("Tickers Selecionados", len(ativos_selecionados))
 
         if not ativos_selecionados:
-            st.warning("⚠️ Nenhum ativo definido.")
+            st.warning("Nenhum ativo definido.")
     
     if ativos_selecionados:
         st.session_state.ativos_para_analise = ativos_selecionados
@@ -2420,15 +2420,15 @@ def aba_selecao_ativos():
         col2.metric("Para Ranqueamento", len(ativos_selecionados))
         col3.metric("Carteira Final", NUM_ATIVOS_PORTFOLIO)
         
-        st.success("✔️ Definição concluída. Prossiga para a aba **'Construtor de Portfólio'**.")
+        st.success("Definição concluída. Prossiga para a aba **'Construtor de Portfólio'**.")
     else:
-        st.warning("⚠️ O universo de análise está vazio.")
+        st.warning("O universo de análise está vazio.")
 
 def aba_construtor_portfolio():
     """Aba 3: Construtor de Portfólio (Design Original Restaurado)"""
     
     if 'ativos_para_analise' not in st.session_state or not st.session_state.ativos_para_analise:
-        st.warning("⚠️ Por favor, defina o universo de análise na aba **'Seleção de Ativos'** primeiro.")
+        st.warning("Por favor, defina o universo de análise na aba **'Seleção de Ativos'** primeiro.")
         return
     
     if 'builder' not in st.session_state: st.session_state.builder = None
@@ -2436,7 +2436,7 @@ def aba_construtor_portfolio():
     if 'builder_complete' not in st.session_state: st.session_state.builder_complete = False
 
     if not st.session_state.builder_complete:
-        st.markdown('## 📋 Calibração do Perfil de Risco')
+        st.markdown('## Calibração do Perfil de Risco')
         
         st.info(f"✔️ **{len(st.session_state.ativos_para_analise)} ativos** prontos. Responda o questionário para calibrar a otimização.")
         
@@ -2525,7 +2525,7 @@ def aba_construtor_portfolio():
             st.markdown("---")
             col_btn_start, col_btn_center, col_btn_end = st.columns([1, 2, 1])
             with col_btn_center:
-                submitted = st.form_submit_button("🚀 Gerar Alocação por Score", type="primary", use_container_width=True)
+                submitted = st.form_submit_button("Gerar Alocação por Score", type="primary", use_container_width=True)
             
             progress_bar_placeholder = st.empty() # Placeholder para o loading
             
@@ -2586,7 +2586,7 @@ def aba_construtor_portfolio():
         assets = builder.ativos_selecionados
         allocation = builder.alocacao_portfolio
         
-        st.markdown('## ✅ Relatório de Alocação Otimizada')
+        st.markdown('## Relatório de Alocação Otimizada')
         
         # --- 5 BOXES ALINHADOS EM UMA LINHA ---
         col1, col2, col3, col4, col5 = st.columns(5)
@@ -2623,7 +2623,7 @@ def aba_construtor_portfolio():
         is_garch_redundant = True 
         # --- FIM NOVO ---
         
-        tabs_list = ["📊 Alocação de Capital", "📈 Performance e Retornos", "❓ Justificativas e Ranqueamento"]
+        tabs_list = ["Alocação de Capital", "Performance e Retornos", "Justificativas e Ranqueamento"]
 
         # Mapeia os índices das abas
         tabs_map = st.tabs(tabs_list)
@@ -2887,7 +2887,7 @@ def aba_construtor_portfolio():
         st.markdown("---")
         col_space1, col_btn, col_space2 = st.columns([1, 1, 1])
         with col_btn:
-            if st.button("🔄 Recalibrar Perfil e Otimizar Novamente", type="primary", use_container_width=True):
+            if st.button("Recalibrar Perfil e Otimizar Novamente", type="primary", use_container_width=True):
                 st.session_state.builder_complete = False
                 st.session_state.builder = None
                 st.session_state.profile = {}
@@ -2896,7 +2896,7 @@ def aba_construtor_portfolio():
 def aba_analise_individual():
     """Aba 4: Análise Individual de Ativos (Autônoma e Geral)"""
     
-    st.markdown("## 🔍 Análise de Fatores por Ticker")
+    st.markdown("## Análise de Fatores por Ticker")
     
     # Carrega lista de ativos (se o builder não rodou, usa lista estática)
     if 'ativos_para_analise' in st.session_state and st.session_state.ativos_para_analise:
@@ -2968,15 +2968,15 @@ def aba_analise_individual():
     with col_btn_center:
         col_exec, col_clear = st.columns(2)
         with col_exec:
-            if st.button("🔄 Gerar Resultados", key='analyze_asset_button_v8', type="primary", use_container_width=True):
+            if st.button("Gerar Resultados", key='analyze_asset_button_v8', type="primary", use_container_width=True):
                 st.session_state.analisar_ativo_triggered = True 
         with col_clear:
-            if st.button("🗑️ Limpar Análise", key='clear_asset_analysis_button_v8', type="secondary", use_container_width=True):
+            if st.button("Limpar Análise", key='clear_asset_analysis_button_v8', type="secondary", use_container_width=True):
                  st.session_state.analisar_ativo_triggered = False # Resetar o trigger
                  st.rerun()
     
     if 'analisar_ativo_triggered' not in st.session_state or not st.session_state.analisar_ativo_triggered:
-        st.info("👆 Selecione um ticker, defina o Horizonte e os modelos para gerar os resultados.")
+        st.info("Selecione um ticker, defina o Horizonte e os modelos para gerar os resultados.")
         return
     
     with st.spinner(f"Analisando {ativo_selecionado} (Coleta em Tempo Real)..."):
@@ -2989,7 +2989,7 @@ def aba_analise_individual():
             
             # Verificação Básica (AGORA ROBUSTA PELA ALTERAÇÃO 1.2)
             if df_completo is None:
-                st.error(f"❌ Dados indisponíveis para **{ativo_selecionado.replace('.SA', '')}**. Não foi possível obter dados históricos de preço ou fundamentos.")
+                st.error(f"Dados indisponíveis para **{ativo_selecionado.replace('.SA', '')}**. Não foi possível obter dados históricos de preço ou fundamentos.")
                 return
 
             # Detecta Modo Estático (Sem Preço)
@@ -3002,24 +3002,24 @@ def aba_analise_individual():
             is_ml_trained = 'ML_Proba' in df_completo.columns and not static_mode and df_completo.get('ML_Confidence', 0.0).iloc[-1] > 0.0
 
             if static_mode:
-                st.warning(f"⚠️ **MODO ESTÁTICO:** Preços indisponíveis. Exibindo apenas Análise Fundamentalista.")
+                st.warning(f"**MODO ESTÁTICO:** Preços indisponíveis. Exibindo apenas Análise Fundamentalista.")
                 
             # Define a lista de abas, incluindo ML se foi treinado
-            tabs_list_individual = ["📊 Visão Geral", "💼 Fundamentos", "🔧 Análise Técnica", "🔬 Clusterização Geral"]
+            tabs_list_individual = ["Visão Geral", "Fundamentos", "Análise Técnica", "Clusterização Geral"]
             # ALTERAÇÃO: Mantém a aba ML sempre que houver dados de preço, para consistência da UI
-            if has_price_data and not static_mode: tabs_list_individual.insert(3, "🤖 Machine Learning") 
+            if has_price_data and not static_mode: tabs_list_individual.insert(3, "Machine Learning") 
 
             tabs_map = st.tabs(tabs_list_individual)
             
             tab_map_index = lambda title: tabs_list_individual.index(title)
             
-            tab1 = tabs_map[tab_map_index("📊 Visão Geral")]
-            tab2 = tabs_map[tab_map_index("💼 Fundamentos")]
-            tab3 = tabs_map[tab_map_index("🔧 Análise Técnica")]
-            tab5 = tabs_map[tab_map_index("🔬 Clusterização Geral")]
+            tab1 = tabs_map[tab_map_index("Visão Geral")]
+            tab2 = tabs_map[tab_map_index("Fundamentos")]
+            tab3 = tabs_map[tab_map_index("Análise Técnica")]
+            tab5 = tabs_map[tab_map_index("Clusterização Geral")]
             
             # CORREÇÃO: Define tab_ml condicionalmente para evitar UnboundLocalError
-            tab_ml = tabs_map[tab_map_index("🤖 Machine Learning")] if "🤖 Machine Learning" in tabs_list_individual else None
+            tab_ml = tabs_map[tab_map_index("Machine Learning")] if "Machine Learning" in tabs_list_individual else None
             
             # Abas 1-4: Lógica Padrão de Exibição (igual à versão anterior)
             with tab1:
@@ -3227,11 +3227,11 @@ def aba_analise_individual():
                     if ml_conf > 0.0:
                         col2.metric("Confiança do Modelo (AUC)", f"{ml_conf:.2f}")
                         col3.metric("Score Ponderado (Prob * AUC)", f"{ml_score_weighted_display:.3f}")
-                        st.info(f"ℹ️ **Modelo Supervisionado Ativo:** O score reflete a **MÉDIA** da probabilidade de alta do ativo nos {len(get_ml_horizons(st.session_state.profile.get('ml_lookback_days', 252)))} horizontes, conforme previsto pelo modelo. Confiança validada via AUC de teste.")
+                        st.info(f"**Modelo Supervisionado Ativo:** O score reflete a **MÉDIA** da probabilidade de alta do ativo nos {len(get_ml_horizons(st.session_state.profile.get('ml_lookback_days', 252)))} horizontes, conforme previsto pelo modelo. Confiança validada via AUC de teste.")
                     else:
                          col2.metric("Confiança do Modelo (AUC)", "N/A (Falha de Treinamento)")
                          col3.metric("Score Ponderado (Prob * AUC)", "0.000")
-                         st.warning("⚠️ **Modelo ML Falhou:** Não foi possível treinar o modelo supervisionado (dados insuficientes ou classes desbalanceadas). A predição não está disponível.")
+                         st.warning("**Modelo ML Falhou:** Não foi possível treinar o modelo supervisionado (dados insuficientes ou classes desbalanceadas). A predição não está disponível.")
                         
                     if df_ml_meta is not None and not df_ml_meta.empty:
                         st.markdown("#### Importância dos Fatores na Decisão")
@@ -3365,7 +3365,7 @@ def aba_analise_individual():
 def aba_referencias():
     """Aba 5: Referências Bibliográficas Completas (V8.7 Original)"""
     
-    st.markdown("## 📚 Referências e Bibliografia")
+    st.markdown("## Referências e Bibliografia")
     
     # NOVO: Centraliza o texto
     st.markdown("""
@@ -3457,7 +3457,7 @@ def main():
     st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos</h1>', unsafe_allow_html=True)
     
     # Esta linha foi simplificada no código de produção para uso das abas
-    tabs_list = ["📚 Metodologia", "🎯 Seleção de Ativos", "🏗️ Construtor de Portfólio", "🔍 Análise Individual", "📖 Referências"]
+    tabs_list = ["Metodologia", "Seleção de Ativos", "Construtor de Portfólio", "Análise Individual", "Referências"]
     
     tab1, tab2, tab3, tab4, tab5 = st.tabs(tabs_list)
     
