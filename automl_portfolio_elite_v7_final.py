@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.6 - REVERSÃO MARKOWITZ/DINÂMICO): Pesos Dinâmicos + Otimização Markowitz + Seleção por Score e Diversificação de Cluster.
 - Modelagem (V9.6): ML Restaurado para Estabilidade (Lógica 6.0.9) + GARCH Removido da UI/Lógica de Otimização.
 
-Versão: 9.6.5 (Ajustes de UX, Textos e Priorização de Ranqueamento)
+Versão: 9.6.6 (Ajustes de UX, Remoção de Textos e Correção de Formatação)
 =============================================================================
 """
 
@@ -172,7 +172,7 @@ ATIVOS_IBOVESPA = [
 PORTE_ATIVOS = {
     'Blue Chip (Alta Liquidez/Cap.)': ['VALE3.SA', 'PETR4.SA', 'ITSA4.SA', 'B3SA3.SA', 'WEGE3.SA', 'ABEV3.SA', 'RENT3.SA', 'RADL3.SA', 'EQTL3.SA', 'SUZB3.SA'],
     'Mid Cap (Média Liquidez/Cap.)': ['ELET3.SA', 'ELET6.SA', 'VIVT3.SA', 'TIMS3.SA', 'UGPA3.SA', 'HYPE3.SA', 'TOTS3.SA', 'GGBR4.SA', 'PRIO3.SA', 'RDOR3.SA', 'CSNA3.SA', 'RAIL3.SA', 'SBSP3.SA'],
-    'Small Cap (Menor Liquidez/Cap.)': ['ALOS3.SA', 'ASAI3.SA', 'AESB3.SA', 'AZZA3.SA', 'BRAP4.SA', 'BRKM5.SA', 'BRAV3.SA', 'CEAB3.SA', 'CMIG4.SA', 'COGN3.SA', 'CPLE6.SA', 'CSAN3.SA', 'CPFE3.SA', 'CMIN3.SA', 'CURY3.SA', 'CVCB3.SA', 'CYRE3.SA', 'DIRR3.SA', 'EMBR3.SA', 'ENGI11.SA', 'ENEV3.SA', 'EGIE3.SA', 'FLRY3.SA', 'GOAU4.SA', 'HAPV3.SA', 'ISAE4.SA', 'KLBN11.SA', 'LREN3.SA', 'MGLU3.SA', 'POMO4.SA', 'BEEF3.SA', 'MRVE3.SA', 'NATU3.SA', 'PCAR3.SA', 'PETR3.SA', 'RECV3.SA', 'RAIZ4.SA', 'SLCE3.SA', 'SMFT3.SA', 'TAEE11.SA', 'VAMO3.SA', 'VBBR3.SA', 'VIVA3.SA', 'YDUQ3.SA', 'CXSE3.SA', 'IGTI11.SA', 'MULT3.SA', 'PSSA3.SA', 'USIM5.SA', 'AURE3.SA']
+    'Small Cap (Menor Liquidez/Cap.)': ['ALOS3.SA', 'ABEV3.SA', 'ASAI3.SA', 'AESB3.SA', 'AZZA3.SA', 'BRAP4.SA', 'BRKM5.SA', 'BRAV3.SA', 'CEAB3.SA', 'CMIG4.SA', 'COGN3.SA', 'CPLE6.SA', 'CSAN3.SA', 'CPFE3.SA', 'CMIN3.SA', 'CURY3.SA', 'CVCB3.SA', 'CYRE3.SA', 'DIRR3.SA', 'EMBR3.SA', 'ENGI11.SA', 'ENEV3.SA', 'EGIE3.SA', 'FLRY3.SA', 'GOAU4.SA', 'HAPV3.SA', 'ISAE4.SA', 'KLBN11.SA', 'LREN3.SA', 'MGLU3.SA', 'POMO4.SA', 'BEEF3.SA', 'MRVE3.SA', 'NATU3.SA', 'PCAR3.SA', 'PETR3.SA', 'RECV3.SA', 'RAIZ4.SA', 'SLCE3.SA', 'SMFT3.SA', 'TAEE11.SA', 'VAMO3.SA', 'VBBR3.SA', 'VIVA3.SA', 'YDUQ3.SA', 'CXSE3.SA', 'IGTI11.SA', 'MULT3.SA', 'PSSA3.SA', 'USIM5.SA', 'AURE3.SA']
 }
 
 ATIVOS_POR_SETOR_IBOV = {
@@ -2191,10 +2191,11 @@ def aba_introducao():
     
     st.markdown("## 📚 Metodologia de Portfólios Adaptativos")
     
+    # CORREÇÃO: Corrigindo o negrito na introdução
     st.markdown("""
     <div class="info-box" style="text-align: center;">
     <h3>📈 Modelo de Alocação de Ativos Preditivo e Dinâmico</h3>
-    <p>Este sistema implementa uma metodologia quantitativa avançada, projetada para a construção e gestão de portfólios de investimento. Nossa abordagem transcende a análise puramente histórica, integrando a fundamentação teórica da **Teoria Moderna de Portfólio (MPT)** com a capacidade preditiva de algoritmos de **Machine Learning (ML)**. Consequentemente, o objetivo primordial é maximizar o retorno ajustado ao risco, garantindo uma alocação de capital que esteja rigorosamente alinhada com o perfil de risco e o horizonte temporal definido pelo investidor.</p>
+    <p>Este sistema implementa uma metodologia quantitativa avançada, projetada para a construção e gestão de portfólios de investimento. Nossa abordagem transcende a análise puramente histórica, integrando a fundamentação teórica da <strong>Teoria Moderna de Portfólio (MPT)</strong> com a capacidade preditiva de algoritmos de <strong>Machine Learning (ML)</strong>. Consequentemente, o objetivo primordial é maximizar o retorno ajustado ao risco, garantindo uma alocação de capital que esteja rigorosamente alinhada com o perfil de risco e o horizonte temporal definido pelo investidor.</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -2332,7 +2333,7 @@ def aba_selecao_ativos():
     
     if "Índice de Referência" in modo_selecao:
         ativos_selecionados = TODOS_ATIVOS.copy()
-        st.success(f"✔️ **{len(ativos_selecionados)} ativos** (Ibovespa completo) definidos para análise.")
+        # REMOVIDO: st.success(f"✔️ **{len(ativos_selecionados)} ativos** (Ibovespa completo) definidos para análise.")
         
         # NOVO: Separação por Porte
         with st.expander("📋 Visualizar Tickers por Porte (Estimado)", expanded=False):
@@ -2498,9 +2499,10 @@ def aba_construtor_portfolio():
                 st.markdown("---")
                 st.markdown("#### Modo de Execução do Pipeline")
 
+                # REMOVIDO: O **Modo Fundamentalista** é ativado **automaticamente** apenas como fallback...
                 st.markdown("""
-                <p style="font-size: 0.9em; margin-bottom: 10px;">
-                O **Modo Fundamentalista** é ativado **automaticamente** apenas como fallback em caso de falha crítica na coleta de preços, garantindo que a análise de qualidade (P/L, ROE) ainda seja considerada.
+                <p style="font-size: 0.9em; margin-bottom: 10px; color: #555;">
+                O Modo Fundamentalista (sem ML) é ativado automaticamente apenas em cenários de falha na coleta de dados de preço.
                 </p>
                 """, unsafe_allow_html=True)
                 
@@ -2961,7 +2963,8 @@ def aba_analise_individual():
     
     with col_modes[1]:
         st.markdown("##### Volatilidade (Risco):") 
-        st.info("Modelo de Risco: Volatilidade Histórica Anualizada")
+        # REMOVIDO: Modelo de Risco: Volatilidade Histórica Anualizada
+        st.info("Volatilidade Histórica Anualizada")
         st.session_state['individual_garch_mode'] = 'GARCH(1,1)' # Mantido apenas para fallback de variável, sem efeito real
     
     
