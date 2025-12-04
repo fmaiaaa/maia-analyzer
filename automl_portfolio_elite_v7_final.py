@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 =============================================================================
-SISTEMA DE OTIMIZAÇÃO QUANTITATIVA
+SISTEMA DE PORTFÓLIOS ADAPTATIVOS
 =============================================================================
 
 Modelo de Alocação de Ativos com Métodos Adaptativos.
@@ -10,7 +10,7 @@ Modelo de Alocação de Ativos com Métodos Adaptativos.
 - Lógica de Construção (V9.6 - REVERSÃO MARKOWITZ/DINÂMICO): Pesos Dinâmicos + Otimização Markowitz + Seleção por Score e Diversificação de Cluster.
 - Modelagem (V9.6): ML Restaurado para Estabilidade (Lógica 6.0.9) + GARCH Removido da UI/Lógica de Otimização.
 
-Versão: 9.6.4 (Fix: Consistência do Pipeline ML na Construção e Ajustes na UI)
+Versão: 9.6.5 (Ajustes de UX, Textos e Priorização de Ranqueamento)
 =============================================================================
 """
 
@@ -165,8 +165,15 @@ ATIVOS_IBOVESPA = [
     'CSNA3.SA', 'SLCE3.SA', 'SMFT3.SA', 'SUZB3.SA', 'TAEE11.SA', 'VIVT3.SA',
     'TIMS3.SA', 'TOTS3.SA', 'UGPA3.SA', 'USIM5.SA', 'VALE3.SA', 'VAMO3.SA',
     'VBBR3.SA', 'VIVA3.SA', 'WEGE3.SA', 'YDUQ3.SA',
-    'B3SA3.SA', 'CXSE3.SA', 'HYPE3.SA', 'IGTI11.SA', 'ITSA4.SA', 'MULT3.SA', 'PSSA3.SA', 'RDOR3.SA'
+    'B3SA3.SA', 'CXSE3.SA', 'HYPE3.SA', 'IGTI11.SA', 'ITSA4.SA', 'MULT3.SA', 'PSSA3.SA', 'RDOR3.SA', 'AURE3.SA' # Adicionado AURE3, se faltar
 ]
+
+# Mapeamento estático (simulado, baseado em capitalização/liquidez do IBOV)
+PORTE_ATIVOS = {
+    'Blue Chip (Alta Liquidez/Cap.)': ['VALE3.SA', 'PETR4.SA', 'ITSA4.SA', 'B3SA3.SA', 'WEGE3.SA', 'ABEV3.SA', 'RENT3.SA', 'RADL3.SA', 'EQTL3.SA', 'SUZB3.SA'],
+    'Mid Cap (Média Liquidez/Cap.)': ['ELET3.SA', 'ELET6.SA', 'VIVT3.SA', 'TIMS3.SA', 'UGPA3.SA', 'HYPE3.SA', 'TOTS3.SA', 'GGBR4.SA', 'PRIO3.SA', 'RDOR3.SA', 'CSNA3.SA', 'RAIL3.SA', 'SBSP3.SA'],
+    'Small Cap (Menor Liquidez/Cap.)': ['ALOS3.SA', 'ASAI3.SA', 'AESB3.SA', 'AZZA3.SA', 'BRAP4.SA', 'BRKM5.SA', 'BRAV3.SA', 'CEAB3.SA', 'CMIG4.SA', 'COGN3.SA', 'CPLE6.SA', 'CSAN3.SA', 'CPFE3.SA', 'CMIN3.SA', 'CURY3.SA', 'CVCB3.SA', 'CYRE3.SA', 'DIRR3.SA', 'EMBR3.SA', 'ENGI11.SA', 'ENEV3.SA', 'EGIE3.SA', 'FLRY3.SA', 'GOAU4.SA', 'HAPV3.SA', 'ISAE4.SA', 'KLBN11.SA', 'LREN3.SA', 'MGLU3.SA', 'POMO4.SA', 'BEEF3.SA', 'MRVE3.SA', 'NATU3.SA', 'PCAR3.SA', 'PETR3.SA', 'RECV3.SA', 'RAIZ4.SA', 'SLCE3.SA', 'SMFT3.SA', 'TAEE11.SA', 'VAMO3.SA', 'VBBR3.SA', 'VIVA3.SA', 'YDUQ3.SA', 'CXSE3.SA', 'IGTI11.SA', 'MULT3.SA', 'PSSA3.SA', 'USIM5.SA', 'AURE3.SA']
+}
 
 ATIVOS_POR_SETOR_IBOV = {
     'Bens Industriais': ['EMBR3.SA', 'VAMO3.SA', 'WEGE3.SA', 'VIVA3.SA', 'ASAI3.SA', 'SMFT3.SA', 'CMIN3.SA', 'SLCE3.SA'],
@@ -188,6 +195,19 @@ for setor, tickers in ATIVOS_POR_SETOR_IBOV.items():
         FALLBACK_SETORES[t] = setor
 
 TODOS_ATIVOS = sorted(list(set(ATIVOS_IBOVESPA)))
+
+# Limpeza e garantia de que todos os ativos IBOV estão no mapeamento de Porte
+all_defined = set()
+for category, tickers in PORTE_ATIVOS.items():
+    PORTE_ATIVOS[category] = list(set([t for t in tickers if t in TODOS_ATIVOS]))
+    all_defined.update(PORTE_ATIVOS[category])
+missing_ativos = [t for t in TODOS_ATIVOS if t not in all_defined]
+if missing_ativos:
+    if 'Small Cap (Menor Liquidez/Cap.)' not in PORTE_ATIVOS:
+         PORTE_ATIVOS['Small Cap (Menor Liquidez/Cap.)'] = []
+    PORTE_ATIVOS['Small Cap (Menor Liquidez/Cap.)'].extend(missing_ativos)
+    PORTE_ATIVOS['Small Cap (Menor Liquidez/Cap.)'] = list(set(PORTE_ATIVOS['Small Cap (Menor Liquidez/Cap.)']))
+
 
 ATIVOS_POR_SETOR = {
     setor: [ativo for ativo in ativos if ativo in ATIVOS_IBOVESPA] 
@@ -1164,9 +1184,9 @@ class ConstrutorPortfolioAutoML:
         
     def coletar_e_processar_dados(self, simbolos: list) -> bool:
         # Passa o modo GARCH selecionado para o coletor
-        garch_mode_select = st.session_state.get('ml_model_mode_select', 'fast')
+        ml_mode_select = st.session_state.get('ml_model_mode_select', 'fast')
         # Determina o modo GARCH para o construtor: GARCH(1,1) para fast, Auto-Search para full
-        garch_mode = 'Auto-Search GARCH' if garch_mode_select == 'full' else 'GARCH(1,1)'
+        garch_mode = 'Auto-Search GARCH' if ml_mode_select == 'full' else 'GARCH(1,1)'
         
         # Seta o modo GARCH na sessão para ser usado dentro do coletor
         st.session_state['garch_mode'] = garch_mode
@@ -1605,10 +1625,12 @@ class ConstrutorPortfolioAutoML:
         # 1. CRITÉRIO DE INCLUSÃO: FILTRO DE SCORE MÍNIMO
         # -------------------------------------------------------------
         if len(self.scores_combinados) > NUM_ATIVOS_PORTFOLIO:
+            # Pega o score do ativo na posição 15 (ou o último, se houver menos)
             cutoff_index = min(15, len(self.scores_combinados) - 1)
             base_score = self.scores_combinados['total_score'].iloc[cutoff_index]
             
-            min_score = base_score * SCORE_PERCENTILE_THRESHOLD
+            # Define o limite inferior como 85% do score base
+            min_score = base_score * SCORE_PERCENTILE_THRESHOLD 
             
             ativos_filtrados = self.scores_combinados[self.scores_combinados['total_score'] >= min_score]
             
@@ -1626,37 +1648,85 @@ class ConstrutorPortfolioAutoML:
                 log_debug(f"Ativos eliminados por falha crítica de métricas (Sharpe/Retorno): {num_extra_eliminados}")
             
             self.scores_combinados = ativos_filtrados_final
+            
+            # Se a filtragem resultou em menos de 5 ativos, usamos todos os ativos filtrados
+            if len(self.scores_combinados) < NUM_ATIVOS_PORTFOLIO:
+                 log_debug(f"AVISO: Apenas {len(self.scores_combinados)} ativos sobreviveram ao filtro de score. Usando todos eles.")
             # *** FIM ALTERAÇÃO CRÍTICA (3.1) ***
             
         # -------------------------------------------------------------
-        # 2. SELEÇÃO FINAL POR CLUSTER (Diversificação Forçada)
+        # 2. SELEÇÃO FINAL POR CLUSTER E SETOR (Diversificação Forçada)
         # -------------------------------------------------------------
         self.realizar_clusterizacao_final()
         final_selection = []
-        
+        justification_selection = {}
+
         if not self.scores_combinados.empty and 'Final_Cluster' in self.scores_combinados.columns:
             clusters_present = self.scores_combinados['Final_Cluster'].unique()
             
-            # Ordena os clusters pelo score médio para priorizar a seleção nos melhores clusters
+            # 1. Seleção por CLUSTER (Prioridade) - Tenta selecionar o melhor ativo de cada cluster
             cluster_mean_scores = self.scores_combinados.groupby('Final_Cluster')['total_score'].mean().sort_values(ascending=False)
             
-            # Seleciona o melhor ativo de cada cluster, começando pelos clusters com melhor score médio
+            ativos_por_cluster = {}
             for c in cluster_mean_scores.index:
-                best_in_cluster = self.scores_combinados[self.scores_combinados['Final_Cluster'] == c].sort_values('total_score', ascending=False).head(1).index[0]
-                if best_in_cluster not in final_selection:
-                     final_selection.append(best_in_cluster)
+                best_in_cluster = self.scores_combinados[self.scores_combinados['Final_Cluster'] == c].sort_values('total_score', ascending=False)
+                if not best_in_cluster.empty:
+                    ativos_por_cluster[c] = best_in_cluster.index.tolist()
             
-            # Se ainda não atingiu o número, adiciona os próximos melhores do ranking geral
-            if len(final_selection) < NUM_ATIVOS_PORTFOLIO:
-                 others = [x for x in self.scores_combinados.index if x not in final_selection]
-                 remaining_to_add = NUM_ATIVOS_PORTFOLIO - len(final_selection)
-                 
-                 if remaining_to_add > 0:
-                      others_df = self.scores_combinados.loc[others].sort_values('total_score', ascending=False)
-                      final_selection.extend(others_df.index[:remaining_to_add].tolist())
+            # Seleciona o top 1 de cada cluster (máximo de 4)
+            for c in cluster_mean_scores.index:
+                ativo = ativos_por_cluster[c][0]
+                if ativo not in final_selection:
+                     final_selection.append(ativo)
+                     justification_selection[ativo] = f"Seleção Prioritária (Cluster {c})"
 
-        self.ativos_selecionados = final_selection[:NUM_ATIVOS_PORTFOLIO]
-        log_debug(f"Seleção final concluída. {len(self.ativos_selecionados)} ativos selecionados: {self.ativos_selecionados}")
+            # 2. Preenchimento Remanescente: Diversificação por SETOR (Secundária)
+            remaining_needed = NUM_ATIVOS_PORTFOLIO - len(final_selection)
+            
+            if remaining_needed > 0:
+                 
+                 # Cria uma lista de ativos restantes, ordenados pelo score total
+                 others_df = self.scores_combinados[~self.scores_combinados.index.isin(final_selection)].sort_values('total_score', ascending=False)
+                 
+                 # Atribui setor a todos os ativos restantes
+                 others_df['Setor'] = others_df.index.map(lambda t: FALLBACK_SETORES.get(t, 'Outros'))
+                 
+                 sectors_used = set()
+                 # Adiciona os setores dos ativos já selecionados (do passo 1)
+                 for a in final_selection:
+                     sectors_used.add(FALLBACK_SETORES.get(a, 'Outros'))
+
+                 # Itera sobre os melhores ativos restantes, priorizando setores não utilizados
+                 for ativo, row in others_df.iterrows():
+                     if remaining_needed <= 0: break
+                     
+                     current_sector = row['Setor']
+                     
+                     # Condição 1: Prioriza setor não utilizado
+                     if current_sector not in sectors_used:
+                         final_selection.append(ativo)
+                         sectors_used.add(current_sector)
+                         justification_selection[ativo] = f"Seleção de Preenchimento (Setor Diversificado: {current_sector})"
+                         remaining_needed -= 1
+                     
+                 # Condição 2 (Exceção): Se ainda precisar de ativos, pega os próximos melhores (pode repetir setor/cluster)
+                 if remaining_needed > 0:
+                      log_debug(f"Preenchimento final: {remaining_needed} ativos restantes. Pode haver duplicação de setor/cluster.")
+                      
+                      # Pega os N melhores que ainda não foram selecionados
+                      last_chance_assets = others_df[~others_df.index.isin(final_selection)].head(remaining_needed).index.tolist()
+                      
+                      for ativo in last_chance_assets:
+                           if ativo not in final_selection:
+                               final_selection.append(ativo)
+                               justification_selection[ativo] = f"Seleção de Preenchimento Final (Melhor Score Geral)"
+
+            self.ativos_selecionados = final_selection[:NUM_ATIVOS_PORTFOLIO]
+            log_debug(f"Seleção final concluída. {len(self.ativos_selecionados)} ativos selecionados: {self.ativos_selecionados}")
+            self.justificativas_selecao.update(justification_selection) # Atualiza as justificativas
+        # -------------------------------------------------------------
+        # FIM DA LÓGICA DE SELEÇÃO
+        # -------------------------------------------------------------
 
         return self.ativos_selecionados
     
@@ -1916,7 +1986,7 @@ class AnalisadorIndividualAtivos:
         
         # Usa um subset menor de ativos (os da lista do Ibovespa) para não demorar muito
         # Mas compara com todos eles, independente de setor
-        ativos_comparacao = ATIVOS_IBOVESPA 
+        ativos_comparacao = TODOS_ATIVOS 
         
         # Coleta dados de TODOS os ativos (apenas fundamentos)
         df_fund_geral = coletor.coletar_fundamentos_em_lote(ativos_comparacao)
@@ -1928,7 +1998,7 @@ class AnalisadorIndividualAtivos:
         cols_interesse = [
             'pe_ratio', 'pb_ratio', 'roe', 'roic', 'net_margin', 
             'div_yield', 'debt_to_equity', 'current_ratio', 
-            'revenue_growth', 'ev_ebitda', 'operating_margin'
+            'revenue_growth', 'ev_ebitda', 'operating_margin', 'p_ebit' # Adicionado P/EBIT para consistência
         ]
         
         # Garante que as colunas existem
@@ -1996,7 +2066,7 @@ def safe_format(value):
 # =============================================================================
 
 def configurar_pagina():
-    st.set_page_config(page_title="Sistema de Otimização Quantitativa", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title="Sistema de Portfólios Adaptativos", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
     st.markdown("""
         <style>
         :root { --primary-color: #000000; --secondary-color: #6c757d; --background-light: #f8f9fa; --background-dark: #ffffff; --text-color: #212529; --text-color-light: #ffffff; --border-color: #dee2e6; }
@@ -2036,6 +2106,11 @@ def configurar_pagina():
         [data-testid="stMetric"] {
             text-align: center;
             margin: auto;
+            /* NOVO: Força altura mínima para acomodar o valor e o indicador de variação do Preço */
+            min-height: 100px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center; /* Centraliza verticalmente o conteúdo interno */
         }
         [data-testid="stMetricLabel"] {
             justify-content: center;
@@ -2114,12 +2189,12 @@ def configurar_pagina():
 def aba_introducao():
     """Aba 1: Introdução Metodológica Didática e Exaustiva (Estilo Profissional e Firme)"""
     
-    st.markdown("## 📚 Metodologia de Otimização Quantitativa do Portfólio")
+    st.markdown("## 📚 Metodologia de Portfólios Adaptativos")
     
     st.markdown("""
     <div class="info-box" style="text-align: center;">
-    <h3>📈 Modelo de Alocação de Ativos Adaptativo e Otimizado</h3>
-    <p>Este sistema emprega uma metodologia de última geração para a construção de portfólios, integrando a robustez da Teoria de Portfólio Moderna (Markowitz) com técnicas avançadas de Machine Learning e ranqueamento dinâmico. O objetivo é maximizar o retorno ajustado ao risco, alinhado estritamente com o perfil do investidor.</p>
+    <h3>📈 Modelo de Alocação de Ativos Preditivo e Dinâmico</h3>
+    <p>Este sistema implementa uma metodologia quantitativa avançada, projetada para a construção e gestão de portfólios de investimento. Nossa abordagem transcende a análise puramente histórica, integrando a fundamentação teórica da **Teoria Moderna de Portfólio (MPT)** com a capacidade preditiva de algoritmos de **Machine Learning (ML)**. Consequentemente, o objetivo primordial é maximizar o retorno ajustado ao risco, garantindo uma alocação de capital que esteja rigorosamente alinhada com o perfil de risco e o horizonte temporal definido pelo investidor.</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -2127,31 +2202,37 @@ def aba_introducao():
 
     st.subheader("Arquitetura do Motor de Decisão: O Scorecard Dinâmico")
     st.write("""
-    A seleção de ativos não é baseada em uma única métrica, mas sim em um **Scorecard Ponderado Multi-Fatorial**. Este Scorecard atribui uma pontuação de 0 a 100 a cada ativo em quatro dimensões críticas: Performance, Fundamentos, Fatores Técnicos e Machine Learning.
+    A seleção de ativos é uma etapa crítica e, por isso, não se baseia em um único indicador, mas sim em um **Scorecard Ponderado Multi-Fatorial**. Este mecanismo atribui a cada ativo uma pontuação normalizada (de 0 a 100) em quatro dimensões analíticas essenciais: **Performance Histórica**, **Fundamentos de Qualidade**, **Fatores Técnicos de Momento**, e **Predição via Machine Learning**.
     
-    A grande inovação reside na **Adaptação Dinâmica** dos pesos: a importância de cada pilar é ajustada de acordo com o **Perfil de Risco** e o **Horizonte de Investimento** fornecidos pelo usuário , garantindo que a recomendação seja contextualmente otimizada.
-    """)
+    O diferencial fundamental reside na **Adaptação Dinâmica** dos pesos: a relevância de cada pilar analítico é ajustada automaticamente com base no **Perfil de Risco** e, principalmente, no **Horizonte de Investimento** selecionado, assegurando que a recomendação final seja contextual e otimizada.
+    
+        """)
     
     col_geral_1, col_geral_2 = st.columns(2)
     
     with col_geral_1:
          st.markdown("##### Fatores Primários e Calibração de Pesos")
          st.markdown(r"""
-         O peso total é dividido em uma base fixa (Performance e ML) e uma parte variável (Fundamentos e Técnicos), onde o horizonte de tempo ajusta a proporção:
+         O peso total alocado aos ativos é distribuído em uma parcela fixa (desempenho e ML) e uma parcela flexível (Fundamentos e Técnicos). O horizonte de tempo escolhido pelo investidor calibra essa proporção:
          
-         * **Curto Prazo:** Pondera mais os fatores **Técnicos/Momentum**.
-         * **Longo Prazo:** Pondera mais os **Fundamentos/Qualidade**.
+         * **Curto Prazo:** Aumenta-se a ponderação dos fatores **Técnicos/Momentum** (indicadores de curta duração).
+         * **Longo Prazo:** Prioriza-se a solidez dos **Fundamentos/Qualidade** (Valuation e Solvência).
          
-         $$Score_{Total} = W_{Perf} + W_{ML} + W_{Fund} \times (\text{Fator Longo}) + W_{Tec} \times (\text{Fator Curto})$$
+         O Score Total ($\text{S}_{Total}$) é uma combinação linear desses fatores ponderados:
+         
+         $$S_{Total} = W_{Perf} \cdot S_{Perf} + W_{ML} \cdot S_{ML} + W_{Fund} \cdot S_{Fund} + W_{Tec} \cdot S_{Tec}$$
+         
+         Onde $W_{Fund}$ e $W_{Tec}$ são adaptativos.
          """)
          
     with col_geral_2:
-        st.markdown("##### Tabela de Contribuição Base (Exemplo Neutro)")
+        st.markdown("##### Estrutura de Ponderação Adaptativa (Exemplo)")
         # Tabela simulada de contribuição de peso
         st.dataframe(pd.DataFrame({
             'Pilar': ['Performance', 'Machine Learning', 'Fundamentos', 'Técnicos'],
-            'Peso Base': ['20%', '20%', 'Varia (30%-50%)', 'Varia (30%-50%)'],
-            'Foco': ['Risco/Retorno Histórico', 'Predição Direcional', 'Qualidade/Valuation', 'Momento/Tendência']
+            'Peso Fixo Base': ['20%', '20%', '—', '—'],
+            'Ajuste Adaptativo': ['—', 'Ponderado pela Confiança (AUC)', 'Ajuste de Longo Prazo (30%-50%)', 'Ajuste de Curto Prazo (30%-50%)'],
+            'Foco Analítico': ['Risco/Retorno Histórico', 'Predição Direcional', 'Qualidade/Valuation', 'Momento/Tendência']
         }, index=['1', '2', '3', '4']).rename_axis('ID'), use_container_width=True, hide_index=False)
     
     st.markdown("---")
@@ -2161,81 +2242,77 @@ def aba_introducao():
     # -----------------------------------------------------
     
     with st.expander("3. Análise Exaustiva da Teoria de Portfólio Moderna (MPT)"):
-        st.subheader("A Otimização de Markowitz para Alocação de Capital")
+        st.subheader("A Otimização de Markowitz para Alocação Eficiente de Capital")
         st.write("""
-        A MPT é a espinha dorsal da nossa fase de alocação de capital. Ela se baseia no princípio de que o risco de um portfólio não é a mera soma dos riscos individuais dos ativos, mas sim o risco resultante da **combinação** desses ativos, considerando a correlação entre eles.
+        A MPT constitui o arcabouço teórico de nossa fase de alocação de capital. Este modelo, fundamental em finanças quantitativas, baseia-se no princípio de que o risco total de um portfólio não é a simples agregação dos riscos individuais, mas sim o risco resultante da **combinação** dos ativos, considerando a correlação ($\rho$) entre eles.
         
-        Nosso sistema utiliza a otimização de Markowitz para identificar a **Fronteira Eficiente** [Image of Efficient Frontier], que é o conjunto de portfólios que oferecem o maior retorno esperado para um dado nível de risco, ou o menor risco para um dado retorno esperado.
+        Nosso sistema utiliza a otimização para traçar a **Fronteira Eficiente** . Esta fronteira representa o conjunto ideal de portfólios que maximizam o retorno esperado para cada nível de risco aceitável.
         """)
         
         col_mpt_1, col_mpt_2 = st.columns(2)
         
         with col_mpt_1:
-             st.markdown("##### Processo de Otimização")
+             st.markdown("##### Processo de Otimização e Escolha da Estratégia")
              st.write("""
-             O processo se resume em encontrar um portfólio que minimize a variância (risco) para um determinado retorno esperado, ou maximize o retorno para um determinado risco. Matematicamente, isso é feito através de métodos de programação quadrática sob restrições (a soma dos pesos deve ser 100%).
+             O processo matemático envolve a minimização da variância ($\sigma_p^2$) do portfólio, sujeito à restrição de que a soma dos pesos ($w_i$) deve ser 100%. A estratégia de otimização é adaptada ao risco do usuário:
              """)
-             st.markdown("###### Objetivos da Otimização")
-             st.write("""
-             1.  **Maximização do Sharpe Ratio:** Para perfis moderados a avançados, o sistema busca o portfólio na Fronteira Eficiente com o maior retorno excedente por unidade de risco (Sharpe Ratio).
-             2.  **Minimização da Volatilidade:** Para perfis conservadores, o sistema prioriza a carteira com a menor volatilidade absoluta, sacrificando parte do retorno esperado em prol da segurança.
+             st.markdown("###### Estratégias de Alocação")
+             st.markdown(r"""
+             * **Maximização do Sharpe Ratio:** Priorizada para perfis Moderados a Avançados, busca-se o portfólio com o maior retorno excedente por unidade de risco assumida.
+             * **Minimização da Volatilidade:** Aplicada a perfis Conservadores e Intermediários, com o foco em localizar o portfólio de menor risco absoluto na Fronteira Eficiente.
              """)
         
         with col_mpt_2:
-             st.markdown("##### Cálculo da Variância e Covariância")
-             st.write("O risco total ($\sigma_p^2$) é fortemente influenciado pelas covariâncias entre os ativos. Ativos com baixa correlação ($\sigma_{ij}$ próxima de zero) ou correlação negativa (onde $\sigma_{ij}$ é negativo) são cruciais para a diversificação, reduzindo o risco não sistemático do portfólio.")
-             st.markdown(r"$$\sigma_p^2 = \sum_{i=1}^{N}\sum_{j=1}^{N} w_i w_j \sigma_{ij}$$")
+             st.markdown("##### O Risco do Portfólio (Variância)")
+             st.write("A variância do portfólio é a métrica fundamental do risco, sendo fortemente mitigada pela diversificação, ou seja, pela inclusão de ativos com baixa ou negativa covariância ($\sigma_{ij}$).")
+             st.markdown(r"$$\sigma_p^2 = \sum_{i=1}^{N} w_i^2 \sigma_i^2 + \sum_{i=1}^{N}\sum_{j=1, j\neq i}^{N} w_i w_j \sigma_{ij}$$")
              
              # Exemplo de matriz de covariância (simulado)
-             st.markdown("###### Matriz de Covariância (Simulada)")
+             st.markdown("###### Exemplo: Matriz de Covariância")
              st.dataframe(pd.DataFrame({
                  'Ativo A': [0.04, -0.01, 0.02], 'Ativo B': [-0.01, 0.09, 0.00], 'Ativo C': [0.02, 0.00, 0.03]
              }, index=['Ativo A', 'Ativo B', 'Ativo C']).style.format('{:.4f}'))
+             st.write("_Correlações negativas (como entre A e B) são valorizadas para reduzir a volatilidade total do portfólio._")
     
     with st.expander("4. Algoritmos de Machine Learning no Pipeline de Predição"):
-        st.subheader("Modelagem Preditiva para Vantagem Direcional")
+        st.subheader("Integração do ML: Um Filtro Prospectivo de Alto Valor")
         st.write("""
-        O Machine Learning é integrado como um filtro prospectivo que complementa a análise histórica e fundamentalista . Sua função é identificar padrões complexos em grandes volumes de dados (features técnicos e fundamentais) para prever a direção do preço (alta ou baixa) em horizontes futuros.
+        O componente de Machine Learning atua como um poderoso filtro prospectivo, complementando o ranqueamento baseado em dados históricos. Sua principal função é identificar padrões complexos (não-lineares) em uma vasta gama de *features* (técnicos, fundamentais e até dados macro) para prever a probabilidade direcional do preço (alta ou baixa) em horizontes futuros definidos.
+        
+        A calibração do modelo é essencial para a performance. Por isso, oferecemos dois modos de construção do ML, que variam em complexidade computacional e robustez:
         """)
         
-        st.markdown("##### 4.1. Regressão Logística (Logistic Regression)")
-        st.write("""
-        **Natureza:** Algoritmo linear fundamental, utilizado principalmente para classificação binária. Embora seja "Regressão", ele estima a probabilidade de um evento, o que o torna ideal para prever a probabilidade de alta.
-        
-        **Funcionamento:** Utiliza a função logística (sigmoide) para mapear qualquer valor real entre 0 e 1.
-        
-        $$P(Y=1|X) = \frac{1}{1 + e^{-(\beta_0 + \beta_1 x_1 + \dots + \beta_n x_n)}}$$
-        
-        **Vantagens na Bolsa:** Extremamente rápido para treinar e prever (ideal para o modo 'fast'). Sua linearidade facilita a interpretação da influência de cada *feature* (peso $\beta_n$). É a base do nosso modo rápido de ML.
+        st.markdown("##### Modo Rápido (Regressão Logística - LogReg)")
+        st.markdown(r"""
+        * **Natureza:** Modelo linear fundamental, focado em alta velocidade de treinamento e interpretação direta dos coeficientes ($\beta$). É a escolha padrão para análises que exigem agilidade.
+        * **Vantagens:** Extremamente eficiente e ideal para a análise de grandes universos de ativos, onde o tempo de resposta é crucial. Ele estima a probabilidade de alta ($P$) através da função logística:
+        $$P(\text{Alta}|X) = \frac{1}{1 + e^{-(\beta_0 + \mathbf{X}\cdot \mathbf{\beta})}}$$
         """)
         
-        st.markdown("##### 4.2. Random Forest (Floresta Aleatória)")
-        st.write("""
-        **Natureza:** Algoritmo de *ensemble* (conjunto) baseado em múltiplas árvores de decisão [Image of Random Forest structure].
-        
-        **Funcionamento:** Cada árvore na floresta é treinada em uma subamostra diferente do conjunto de dados e em um subconjunto aleatório de *features*. A previsão final é determinada pela maioria dos votos das árvores (o que o chamamos de *bagging*).
-        
-        **Vantagens na Bolsa:** Reduz drasticamente o *overfitting* e lida bem com dados ruidosos e não-lineares, capturando interações de mercado que modelos lineares não conseguem. É mais robusto e é a escolha para o modo 'full'.
+        st.markdown("##### Modo Complexo (Random Forest / Ensemble)")
+        st.markdown(r"""
+        * **Natureza:** Algoritmo de *ensemble* (floresta aleatória) baseado em centenas de árvores de decisão. É um método não-linear e robusto.         * **Vantagens:** Capaz de capturar interações e padrões não-lineares nos dados de mercado, minimizando o risco de *overfitting* inerente a modelos mais simples. É a escolha para uma análise mais profunda e com maior custo computacional.
         """)
 
     with st.expander("5. Métrica de Confiança: AUC-ROC (Area Under the Receiver Operating Characteristic Curve)"):
         st.subheader("Validação da Qualidade da Predição")
         st.write("""
-        O AUC é a métrica chave para validar a **confiança** de nossos modelos de ML. Ele mede a capacidade do modelo de distinguir entre as classes (alta vs. baixa).
+        O AUC (Área Sob a Curva ROC) é a métrica essencial para quantificar a **confiança** e a capacidade discriminatória de nossos modelos de ML. Ele mede a precisão com que o modelo consegue distinguir entre um evento positivo (subida de preço) e um evento negativo (queda).
         
-        * **AUC = 0.5:** O modelo é tão bom quanto um chute aleatório.
-        * **AUC = 1.0:** O modelo é perfeito.
+        * **AUC = 0.5:** Indica que o modelo não possui poder preditivo, sendo equivalente a um chute aleatório.
+        * **AUC = 1.0:** Representa um modelo com predição perfeita.
         
-        Ao ponderar a probabilidade de alta ($Probabilidade_{Alta}$) pelo AUC do modelo ($AUC$), garantimos que a força do Score ML seja proporcional à qualidade comprovada da previsão. Se o modelo não for confiável (AUC próximo de 0.5), sua contribuição para o Score Total será minimizada (próximo de zero).
+        A contribuição do ML para o Score Total é dada pelo **Score ML Ponderado** ($S_{ML}^*$), que é o produto da probabilidade média de alta pela sua AUC de teste. Se o modelo não for validado (AUC próximo de 0.5), sua influência no score final será correspondentemente atenuada (próxima de zero), garantindo prudência na alocação.
         """)
-        
+
 def aba_selecao_ativos():
     """Aba 2: Seleção de Ativos (Design Original Restaurado)"""
     
     st.markdown("## 🎯 Definição do Universo de Análise")
     
+    # NOVO: Centraliza o texto dentro do box de aviso
     st.markdown("""
-    <div class="info-box">
+    <div class="info-box" style="text-align: center;"> 
     <p>O universo de análise está restrito ao <b>Índice Ibovespa</b>. O sistema utiliza todos os ativos selecionados para realizar o ranqueamento multi-fatorial e otimizar a carteira.</p>
     </div>
     """, unsafe_allow_html=True)
@@ -2257,8 +2334,14 @@ def aba_selecao_ativos():
         ativos_selecionados = TODOS_ATIVOS.copy()
         st.success(f"✔️ **{len(ativos_selecionados)} ativos** (Ibovespa completo) definidos para análise.")
         
-        with st.expander("📋 Visualizar Tickers"):
-            st.write(", ".join([a.replace('.SA', '') for a in ativos_selecionados]))
+        # NOVO: Separação por Porte
+        with st.expander("📋 Visualizar Tickers por Porte (Estimado)", expanded=False):
+            st.markdown("A diferenciação por porte (Capitalização/Liquidez) é uma estimativa e visa apenas informar sobre a diversificação de risco implícita.")
+            for porte, tickers in PORTE_ATIVOS.items():
+                tickers_filtrados = [a for a in tickers if a in ativos_selecionados]
+                if tickers_filtrados:
+                     st.markdown(f"**{porte}** ({len(tickers_filtrados)} ativos)")
+                     st.write(", ".join([a.replace('.SA', '') for a in tickers_filtrados]))
     
     elif "Seleção Setorial" in modo_selecao:
         st.markdown("### 🏢 Seleção por Setor")
@@ -2350,28 +2433,6 @@ def aba_construtor_portfolio():
     if 'builder' not in st.session_state: st.session_state.builder = None
     if 'profile' not in st.session_state: st.session_state.profile = {}
     if 'builder_complete' not in st.session_state: st.session_state.builder_complete = False
-    
-    # *** ALTERAÇÃO SOLICITADA: Remoção do Log de Debug ***
-    # if st.session_state.builder_complete:
-    #     builder = st.session_state.builder
-    #     with st.expander("🐛 LOG DE DEBUG AVANÇADO (Entradas, Scores e Pesos)", expanded=False):
-    #         st.markdown("##### 1. Inputs do Perfil")
-    #         st.json(st.session_state.profile)
-    #         st.markdown("##### 2. Pesos Finais Utilizados na Pontuação")
-    #         st.json(builder.pesos_atuais)
-    #         st.markdown("##### 3. Ranqueamento e Scores Combinados (Head)")
-    #         debug_cols = ['total_score', 'fundamental_score', 'technical_score', 'ml_score_weighted', 'sharpe', 'retorno_anual']
-    #         debug_df = builder.scores_combinados[[c for c in debug_cols if c in builder.scores_combinados.columns]]
-    #         st.dataframe(debug_df.head(10).style.format('{:.4f}'), use_container_width=True)
-    #         st.markdown("##### 4. Resultados da Otimização Markowitz/Alocação")
-    #         st.json({
-    #             "Método": builder.metodo_alocacao_atual,
-    #             "Métricas Portfólio": builder.metricas_portfolio,
-    #             "Alocação Final": {k: f"{v['weight']:.4f}" for k, v in builder.alocacao_portfolio.items()}
-    #         })
-    #         st.markdown("##### 5. Predições ML por Ativo")
-    #         st.dataframe(pd.DataFrame(builder.predicoes_ml).T.reset_index().rename(columns={'index': 'Ticker'}), use_container_width=True)
-    # *** FIM DA ALTERAÇÃO SOLICITADA ***
 
     if not st.session_state.builder_complete:
         st.markdown('## 📋 Calibração do Perfil de Risco')
@@ -2437,25 +2498,26 @@ def aba_construtor_portfolio():
                 st.markdown("---")
                 st.markdown("#### Modo de Execução do Pipeline")
 
-                pipeline_mode = st.radio(
-                    "**1. Modo de Construção:**",
-                    ["Modo Geral (Scorecard Completo)", "Modo Fundamentalista (Cluster/Anomalias)"],
+                st.markdown("""
+                <p style="font-size: 0.9em; margin-bottom: 10px;">
+                O **Modo Fundamentalista** é ativado **automaticamente** apenas como fallback em caso de falha crítica na coleta de preços, garantindo que a análise de qualidade (P/L, ROE) ainda seja considerada.
+                </p>
+                """, unsafe_allow_html=True)
+                
+                # NOVO: Usa radio com os bullets pedidos, definindo ml_mode diretamente
+                construction_mode = st.radio(
+                    "**1. Seleção do Modelo Preditivo (ML):**",
+                    ["Rápido", "Complexo"],
                     index=0,
-                    key='pipeline_mode_radio'
+                    key='ml_model_mode_select_radio_v9'
                 )
-
-                ml_mode = 'fast'
-                if 'Modo Geral' in pipeline_mode:
-                    ml_mode = st.selectbox(
-                        "**2. Seleção de Modelo ML:**",
-                        [
-                            'fast', 
-                            'full'
-                        ],
-                        format_func=lambda x: "Rápido (LogReg)" if x == 'fast' else "Lento (Análise Completa RF/XGB)",
-                        index=0,
-                        key='ml_model_mode_select'
-                    )
+                
+                # Mapeia a seleção para as variáveis internas
+                ml_mode = 'fast' if construction_mode == 'Rápido' else 'full'
+                pipeline_mode = 'general' # Força o modo 'general', o fallback é interno
+                
+                # Armazena o ml_mode na session state (necessário para o construtor)
+                st.session_state['ml_model_mode_select'] = ml_mode 
             
             # NOVO: Centralização do botão e barra de loading
             st.markdown("---")
@@ -2499,8 +2561,8 @@ def aba_construtor_portfolio():
                 success = builder_local.executar_pipeline(
                     simbolos_customizados=st.session_state.ativos_para_analise,
                     perfil_inputs=st.session_state.profile,
-                    ml_mode=ml_mode,
-                    pipeline_mode=pipeline_mode.split('(')[1].lower().split('/')[0].strip().replace('+', ' ').replace(' ', '_'), # Extrai 'ml' ou 'fundamentalista'
+                    ml_mode=ml_mode, # Usando o valor local 'fast' ou 'full'
+                    pipeline_mode='general', # Forçando 'general'
                     progress_bar=progress_widget
                 )
                 
@@ -2559,9 +2621,7 @@ def aba_construtor_portfolio():
         is_garch_redundant = True 
         # --- FIM NOVO ---
         
-        # *** ALTERAÇÃO SOLICITADA: Remoção da aba "Análise de Fatores e Clusterização" ***
         tabs_list = ["📊 Alocação de Capital", "📈 Performance e Retornos", "❓ Justificativas e Ranqueamento"]
-        # *** FIM ALTERAÇÃO SOLICITADA ***
 
         # Mapeia os índices das abas
         tabs_map = st.tabs(tabs_list)
@@ -2724,32 +2784,6 @@ def aba_construtor_portfolio():
                 
                 df_last_data_clean = pd.DataFrame.from_dict(data_at_last_idx, orient='index')
 
-                # **********************************************
-                # CORREÇÃO DO KEYERROR (FINAL): Remove as colunas duplicadas antes do rename final.
-                # **********************************************
-                
-                # 1. Lista de colunas duplicadas que DEVEM ser removidas (versão não-_LATEST)
-                cols_to_remove = [col for col in LGBM_FEATURES if col in df_full_data.columns]
-                
-                # 2. Faz o JOIN com sufixo na DIREITA, mantendo a versão 'LATEST' para ser exibida.
-                data_at_last_idx = {}
-                for ticker in df_full_data.index:
-                    df_tec = builder.dados_por_ativo.get(ticker)
-                    if df_tec is not None and not df_tec.empty:
-                        last_row = df_tec.iloc[-1]
-                        data_at_last_idx[ticker] = {
-                            'Preço Fechamento': last_row.get('Close'),
-                            'rsi_14_raw': last_row.get('rsi_14'), 
-                            'macd_diff_raw': last_row.get('macd_diff'), 
-                            'ret': last_row.get('ret'),
-                            'vol20': last_row.get('vol20'),
-                            'ma20': last_row.get('ma20'),
-                            'z20': last_row.get('z20'),
-                            'trend': last_row.get('trend'),
-                            'volrel': last_row.get('volrel'),
-                        }
-                df_last_data_clean = pd.DataFrame.from_dict(data_at_last_idx, orient='index')
-
                 # Juntando. O sufixo '_LATEST' é adicionado automaticamente às colunas sobrepostas do DataFrame da direita.
                 df_scores_display = df_full_data.join(df_last_data_clean, how='left', rsuffix='_LATEST')
                 
@@ -2771,13 +2805,14 @@ def aba_construtor_portfolio():
                 
                 
                 # Remove colunas antigas que se sobrepõem e não queremos exibir
+                cols_to_remove = [col for col in LGBM_FEATURES if col in df_full_data.columns]
                 for col in cols_to_remove:
                     if col in df_scores_display.columns:
                         df_scores_display.drop(columns=[col], inplace=True)
                 
                 # Adiciona as colunas do rename_map original que não estavam em cols_to_remove
                 for original, final in rename_map.items():
-                    if original in df_scores_display.columns and original not in cols_to_remove:
+                    if original in df_scores_display.columns and original not in cols_to_remove and final not in rename_dict_final.values():
                          rename_dict_final[original] = final
 
                 # Aplica o renomeio final
@@ -2791,7 +2826,7 @@ def aba_construtor_portfolio():
                     final_display_names.remove('Score ML')
                 # *** FIM ALTERAÇÃO SOLICITADA ***
 
-                df_scores_display = df_scores_display[final_display_names].copy()
+                df_scores_display = df_scores_display[[c for c in final_display_names if c in df_scores_display.columns]].copy()
                 
                 # **********************************************
                 # FIM DA CORREÇÃO
@@ -2919,17 +2954,15 @@ def aba_analise_individual():
             ['fast', 'full'],
             key='individual_ml_mode_radio',
             index=0,
-            format_func=lambda x: "Rápido (Regressão Logística)" if x == 'fast' else "Lento (Random Forest)",
+            format_func=lambda x: "Rápido (Regressão Logística)" if x == 'fast' else "Complexo (Random Forest)",
             label_visibility="collapsed"
         )
         st.session_state['individual_ml_mode'] = ml_mode_select
     
-    # *** ALTERAÇÃO SOLICITADA: Remoção da seção de Volatilidade da Análise Individual ***
-    # with col_modes[1]:
-    #     st.markdown("##### Volatilidade (Risco):") 
-    #     st.info("Modelo de Risco: Volatilidade Histórica Anualizada")
-    #     st.session_state['individual_garch_mode'] = 'GARCH(1,1)' # Mantido apenas para fallback de variável, sem efeito real
-    # *** FIM DA ALTERAÇÃO SOLICITADA ***
+    with col_modes[1]:
+        st.markdown("##### Volatilidade (Risco):") 
+        st.info("Modelo de Risco: Volatilidade Histórica Anualizada")
+        st.session_state['individual_garch_mode'] = 'GARCH(1,1)' # Mantido apenas para fallback de variável, sem efeito real
     
     
     # NOVO: Botões Centralizados (Executar Análise e Limpar Análise)
@@ -3003,7 +3036,6 @@ def aba_analise_individual():
                     variacao_dia = df_completo['returns'].iloc[-1] * 100 if 'returns' in df_completo.columns else 0.0
                     volume_medio = df_completo['Volume'].mean() if 'Volume' in df_completo.columns else 0.0
                     vol_anual = features_fund.get('annual_volatility', 0) * 100
-                    garch_model_name = features_fund.get('garch_model', "Vol. Histórica") # Nome Hardcoded
                     
                     # Exibição de Métricas (Ajuste para usar colunas 1, 2, 3, 4, 5)
                     col1.metric("Preço", f"R$ {preco_atual:.2f}", f"{variacao_dia:+.2f}%")
@@ -3040,11 +3072,17 @@ def aba_analise_individual():
                 # --- TROCA DE ORDEM: PRIMEIRO INDICADORES PRINCIPAIS, DEPOIS TABELA GERAL ---
                 st.markdown("### Principais Métricas")
                 
-                # Helper para troca de indicadores caso NaN
-                def get_valid_metric(data, primary_key, primary_label, secondary_key, secondary_label):
+                # Helper para troca de indicadores caso NaN (COM LÓGICA DE FALLBACK SOLICITADA)
+                def get_valid_metric(data, primary_key, primary_label, secondary_key=None, secondary_label=None):
+                     """Retorna a métrica primária ou, se for NaN, tenta a secundária."""
                      val = data.get(primary_key)
-                     if pd.isna(val):
-                         return secondary_label, data.get(secondary_key)
+                     if pd.isna(val) or val is None:
+                         if secondary_key and secondary_label:
+                              val_sec = data.get(secondary_key)
+                              if not (pd.isna(val_sec) or val_sec is None):
+                                  return secondary_label, val_sec
+                         # Se a secundária também for NaN ou não existir, retorna a primária com valor N/A
+                         return primary_label, val
                      return primary_label, val
                 
                 # Obtem Beta de Fallback se necessário (Yahoo Finance)
@@ -3058,26 +3096,44 @@ def aba_analise_individual():
                 # Linha 1
                 col1, col2, col3, col4, col5 = st.columns(5)
                 
-                # Se P/L for NaN, tenta mostrar EV/EBITDA no lugar
+                # 1. P/L (pe_ratio) -> EV/EBITDA (ev_ebitda)
                 l1, v1 = get_valid_metric(features_fund, 'pe_ratio', 'P/L', 'ev_ebitda', 'EV/EBITDA')
                 col1.metric(l1, safe_format(v1))
                 
-                col2.metric("P/VP", safe_format(features_fund.get('pb_ratio', np.nan)))
-                col3.metric("ROE", safe_format(features_fund.get('roe', np.nan)))
-                col4.metric("Margem Líq.", safe_format(features_fund.get('net_margin', np.nan)))
-                col5.metric("Div. Yield", safe_format(features_fund.get('div_yield', np.nan)))
+                # 2. P/VP (pb_ratio) -> P/EBIT (p_ebit)
+                l2, v2 = get_valid_metric(features_fund, 'pb_ratio', 'P/VP', 'p_ebit', 'P/EBIT')
+                col2.metric(l2, safe_format(v2))
+
+                # 3. ROE (roe) -> ROIC (roic)
+                l3, v3 = get_valid_metric(features_fund, 'roe', 'ROE (%)', 'roic', 'ROIC (%)')
+                col3.metric(l3, safe_format(v3))
+
+                # 4. Margem Líq. (net_margin) -> Margem Op. (operating_margin)
+                l4, v4 = get_valid_metric(features_fund, 'net_margin', 'Margem Líq. (%)', 'operating_margin', 'Margem Op. (%)')
+                col4.metric(l4, safe_format(v4))
+                
+                # 5. Div. Yield (div_yield)
+                col5.metric("Div. Yield (%)", safe_format(features_fund.get('div_yield', np.nan)))
                 
                 st.write("") # Spacer
                 
                 # Linha 2
                 col1, col2, col3, col4, col5 = st.columns(5)
+                
+                # 6. Dívida Bruta/PL
                 col1.metric("Dívida Bruta/PL", safe_format(features_fund.get('debt_to_equity', np.nan)))
+                
+                # 7. Liq. Corrente
                 col2.metric("Liq. Corrente", safe_format(features_fund.get('current_ratio', np.nan)))
+                
+                # 8. EV/EBITDA (Sem fallback, já usado como primário/secundário)
                 col3.metric("EV/EBITDA", safe_format(features_fund.get('ev_ebitda', np.nan)))
                 
-                # FIX 5: Substitui 'Cresc. Receita (5a)' que estava dando N/A por ROIC (Return on Invested Capital)
-                col4.metric("ROIC", safe_format(features_fund.get('roic', np.nan))) 
+                # 9. ROIC (ou seu fallback) -> Cresc. Rec. (revenue_growth)
+                l4_2, v4_2 = get_valid_metric(features_fund, 'roic', 'ROIC (%)', 'revenue_growth', 'Cresc. Rec. (5a) (%)')
+                col4.metric(l4_2, safe_format(v4_2)) 
                 
+                # 10. Beta (Yahoo)
                 col5.metric("Beta (Yahoo)", safe_format(beta_val))
 
                 st.markdown("---")
@@ -3313,7 +3369,13 @@ def aba_referencias():
     """Aba 5: Referências Bibliográficas Completas (V8.7 Original)"""
     
     st.markdown("## 📚 Referências e Bibliografia")
-    st.markdown("Esta seção consolida as referências bibliográficas indicadas nas ementas das disciplinas relacionadas (GRDECO222 e GRDECO203).")
+    
+    # NOVO: Centraliza o texto
+    st.markdown("""
+    <div style='text-align: center; font-size: 1.1em; color: #555;'>
+    Esta seção consolida as referências bibliográficas indicadas nas ementas das disciplinas relacionadas (GRDECO222 e GRDECO203).
+    </div>
+    """, unsafe_allow_html=True)
 
     st.markdown("---")
     
@@ -3395,7 +3457,7 @@ def main():
         st.session_state.debug_logs = []
     # REMOVIDO: A chamada mostrar_debug_panel() foi removida conforme solicitado.
 
-    st.markdown('<h1 class="main-header">Sistema de Otimização Quantitativa</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">Sistema de Portfólios Adaptativos</h1>', unsafe_allow_html=True)
     
     # Esta linha foi simplificada no código de produção para uso das abas
     tabs_list = ["📚 Metodologia", "🎯 Seleção de Ativos", "🏗️ Construtor de Portfólio", "🔍 Análise Individual", "📖 Referências"]
