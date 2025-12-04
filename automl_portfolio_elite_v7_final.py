@@ -2961,12 +2961,6 @@ def aba_analise_individual():
         )
         st.session_state['individual_ml_mode'] = ml_mode_select
     
-    with col_modes[1]:
-        st.markdown("##### Volatilidade (Risco):") 
-        # REMOVIDO: Modelo de Risco: Volatilidade Histórica Anualizada
-        st.info("Volatilidade Histórica Anualizada")
-        st.session_state['individual_garch_mode'] = 'GARCH(1,1)' # Mantido apenas para fallback de variável, sem efeito real
-    
     
     # NOVO: Botões Centralizados (Executar Análise e Limpar Análise)
     st.markdown("---")
